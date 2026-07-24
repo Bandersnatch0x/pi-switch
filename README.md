@@ -2,173 +2,265 @@
 
 [![CI](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/pi-switch?style=flat-square)](https://www.npmjs.com/package/pi-switch)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-**Pi package** that lets you switch any [cc-switch](https://github.com/farion1231/cc-switch) provider + model from inside [Pi](https://github.com/badlogic/pi-mono).
+English | [中文](./README-zh.md)
 
-| | |
-|---|---|
-| Type | Pi extension (`pi-package`) |
-| Command | `/pi-switch` (alias `/ccs`) |
-| Data source | `~/.cc-switch/cc-switch.db` (**read-only**) |
-| Platform | Windows 10/11 x64 (macOS theoretically compatible) |
+pi-switch is a Pi extension package built on top of [cc-switch](https://github.com/farion1231/cc-switch). It uses cc-switch as the source of provider and model configuration, then exposes a fast provider/model switcher directly inside Pi.
 
-Full product contract: **[SPEC.md](./SPEC.md)** (locked v0.1).
+pi-switch does not replace cc-switch and does not modify the cc-switch database. It reads the local cc-switch SQLite database in read-only mode, registers the selected provider in Pi, and stores the active model in Pi settings.
 
----
+## Preview
 
-## Install
+The screenshots below are examples that demonstrate the interaction flow. Actual providers, models, and paths depend on your local cc-switch data.
 
-### From npm (recommended)
+![Provider type picker](./docs/images/sample-provider-picker.svg)
 
-```bash
+![Model picker](./docs/images/sample-model-picker.svg)
+
+![Switch success](./docs/images/sample-switch-success.svg)
+
+## Features
+
+- Open the interactive switcher in Pi with /pi-switch or /ccs.
+- Load provider configuration from the local cc-switch SQLite database in read-only mode.
+- Use a progressive three-level picker: provider type, provider name, then model.
+- Search, paginate, manually enter model IDs, and refresh remote model lists.
+- Parse and map common API protocols: Anthropic Messages, OpenAI Responses, OpenAI Chat Completions, and Google Generative AI.
+- Merge allowlisted header rules such as anthropic-version and anthropic-beta.
+- Persist the latest selection so the next switcher session can highlight and reuse it.
+
+See [SPEC.md](./SPEC.md) for the full product contract.
+
+## Built on cc-switch
+
+cc-switch is the upstream configuration manager. pi-switch depends on the local cc-switch data model and treats cc-switch as the source of truth for providers.
+
+pi-switch is intentionally scoped as a Pi-side bridge:
+
+- cc-switch owns provider creation, editing, deletion, and storage.
+- pi-switch reads cc-switch providers from ~/.cc-switch/cc-switch.db.
+- pi-switch normalizes provider settings into Pi-compatible provider registrations.
+- pi-switch switches the active Pi model without changing cc-switch state.
+
+This means you should configure providers in cc-switch first, then use pi-switch to select and activate them inside Pi.
+
+## Architecture
+
+~~~text
+┌──────────────────────┐
+│      cc-switch       │
+│ provider management  │
+└──────────┬───────────┘
+           │ read-only SQLite
+           ▼
+┌──────────────────────┐
+│      pi-switch       │
+│ DB read + normalize  │
+└──────────┬───────────┘
+           │ parsed providers
+           ▼
+┌──────────────────────┐
+│   interactive picker │
+│ type → name → model  │
+└──────────┬───────────┘
+           │ selected provider/model
+           ▼
+┌──────────────────────┐
+│          Pi          │
+│ register + setModel  │
+└──────────────────────┘
+~~~
+
+Main modules:
+
+~~~text
+pi-switch/
+├─ extensions/
+│  └─ index.ts              # Pi extension entry; registers /pi-switch and /ccs
+├─ src/
+│  ├─ db.ts                 # Read the cc-switch SQLite database
+│  ├─ register.ts           # Build and register Pi providers
+│  ├─ settings.ts           # Pi settings I/O and migration
+│  ├─ sqlite-path.ts        # sqlite3 executable resolution
+│  ├─ models-fetch.ts       # Remote model discovery and merging
+│  ├─ headers/              # Header rule loading and merging
+│  ├─ parse/                # cc-switch provider config parsers
+│  └─ ui/                   # Picker, pagination, labels, and tabs
+├─ defaults/
+│  └─ headers.json          # Default header rules
+├─ docs/
+│  └─ images/               # README sample screenshots
+├─ tests/                   # Bun tests
+├─ SPEC.md                  # Product spec
+├─ DESIGN.md                # UI and interaction design notes
+└─ package.json
+~~~
+
+## Installation
+
+Install from npm:
+
+~~~bash
 pi install npm:pi-switch
-```
+~~~
 
-### From git
+Or install from GitHub:
 
-```bash
+~~~bash
 pi install git:github.com/Bandersnatch0x/pi-switch
-```
+~~~
 
-### Update / configure
+Update and enable the extension:
 
-```bash
+~~~bash
 pi update npm:pi-switch
-pi config   # enable/disable the extension
-```
+pi config
+~~~
 
-Packages land under `~/.pi/agent/npm/` (global) or `.pi/npm/` (project-local with `-l`).
-
-> **Security:** Pi packages run with full system access. Review source before installing third-party packages.
-
----
-
-## Requirements
-
-| Dependency | Notes |
-|------------|--------|
-| [Pi](https://github.com/badlogic/pi-mono) (`@earendil-works/pi-coding-agent`) | Host |
-| [cc-switch](https://github.com/farion1231/cc-switch) desktop app | Owns the provider DB |
-| System `sqlite3` CLI | On `PATH`, or set `SQLITE3_PATH` / config |
-
-```powershell
-# optional overrides
-$env:SQLITE3_PATH = "D:\platform-tools\sqlite3.exe"
-$env:CC_SWITCH_DB = "$env:USERPROFILE\.cc-switch\cc-switch.db"
-```
-
-If you previously used the local `~/.pi/agent/extensions/cc-switch` extension, **remove it** after installing `pi-switch` (this package replaces it).
-
----
+Pi packages usually land under ~/.pi/agent/npm/. With project-local installation, they are placed under .pi/npm/ in the current project.
 
 ## Usage
 
-```text
+In a Pi session, run:
+
+~~~text
 /pi-switch
-```
+~~~
 
-Optional alias (default on): `/ccs`
+Or use the alias:
 
-1. Pick `app_type` tab (dynamic from DB)
-2. Pick provider (search / pagination)
-3. Pick model from config list, enter manually, or **获取远端模型**
+~~~text
+/ccs
+~~~
 
-### Features
+Typical flow:
 
-- Dynamic tabs for every `app_type` in cc-switch
-- Protocol mapping → Pi `api` (Anthropic / OpenAI responses & chat / Gemini)
-- Allowlisted client fingerprint headers on `registerProvider`
-- Stable identity via `dbId`; registration name `ps-<appType>-<dbId>`
-- Re-reads DB each time you open the command (snapshot during the picker)
+1. Choose a provider type, such as Claude Code, Codex, Gemini, or OpenCode.
+2. Choose a specific provider.
+3. Choose a model, or manually enter a model ID.
+4. pi-switch registers the provider and switches the current Pi model.
 
----
+After selection, Pi uses the selected provider baseUrl, apiKey, protocol type, and model ID for subsequent requests.
+
+## Requirements
+
+- Pi is installed and extension packages are enabled.
+- cc-switch is installed and configured.
+- The local cc-switch database exists.
+- sqlite3 is available on the system.
+
+Default database path:
+
+~~~text
+~/.cc-switch/cc-switch.db
+~~~
+
+sqlite3 resolution order:
+
+~~~text
+SQLITE3_PATH → ~/.pi/agent/pi-switch.json sqlitePath → sqlite3 from PATH
+~~~
+
+Windows users should explicitly configure SQLITE3_PATH if sqlite3.exe is not globally available.
 
 ## Configuration
 
-`~/.pi/agent/pi-switch.json`:
+Optional configuration file:
 
-```jsonc
+~~~text
+~/.pi/agent/pi-switch.json
+~~~
+
+Example:
+
+~~~json
 {
-  "pageSize": 12,
-  "tabs": ["claude", "codex", "gemini", "grokbuild", "opencode", "hermes"],
-  "aliasCcs": true,
-  "sqlitePath": null,
-  "providerOverrides": {
-    "<dbId>": {
-      "label": "sbai",
-      "headers": {
-        "User-Agent": "codex_cli_rs/0.144.0 (Windows 10.0; x64) Terminal"
-      }
-    }
-  },
+  "dbPath": "C:/Users/you/.cc-switch/cc-switch.db",
+  "sqlitePath": "C:/tools/sqlite3.exe",
+  "preferredOrder": ["claude-code", "codex", "gemini", "opencode"],
   "debug": false
 }
-```
+~~~
 
-**Header allowlist only:** `User-Agent`, `originator`, `anthropic-version`, `anthropic-beta`.  
-Auth headers are never taken from rules or overrides.
+| Field | Description |
+| --- | --- |
+| dbPath | Overrides the cc-switch database path |
+| sqlitePath | Overrides the sqlite3 executable path |
+| preferredOrder | Preferred provider type ordering in the UI |
+| debug | Enables debug output |
 
-Shared header rules may also live in `~/.pi/agent/provider-headers.json` (same file as `pi-provider-headers`).
+The latest selection is stored as piSwitchSelection in Pi settings, so it can be highlighted the next time the switcher opens.
 
-Selection is stored in `~/.pi/agent/settings.json` as `piSwitchSelection` (`dbId` is the identity). Legacy `ccSwitchSelection` migrates once when the name uniquely matches.
+## Header Rules
 
----
+Default header rules are stored at:
 
-## Package layout
+~~~text
+defaults/headers.json
+~~~
 
-This is a standard **Pi package** (`keywords` includes `pi-package`):
+Optional user override file:
 
-```json
-{
-  "name": "pi-switch",
-  "keywords": ["pi-package", "pi", "pi-coding-agent"],
-  "pi": {
-    "extensions": ["./extensions/index.ts"]
-  }
-}
-```
+~~~text
+~/.pi/agent/provider-headers.json
+~~~
 
-| Path | Role |
-|------|------|
-| `extensions/index.ts` | Extension entry (commands, session restore) |
-| `src/` | Pure logic (parse, db, headers, UI helpers) |
-| `defaults/headers.json` | Default fingerprint rules |
-| `SPEC.md` | Locked product specification |
+pi-switch only merges allowlisted headers to avoid injecting arbitrary sensitive fields into provider configuration. The current allowlist includes:
 
----
+- anthropic-version
+- anthropic-beta
 
-## Develop
+Rule precedence follows the project spec: user rules override default rules, and explicit selection-time overrides have the highest priority.
 
-```bash
-bun install   # optional; tests use bun built-ins
+## Development
+
+Install dependencies:
+
+~~~bash
+bun install
+~~~
+
+Run tests:
+
+~~~bash
 bun test
-```
+~~~
 
----
+Typecheck:
 
-## Release
+~~~bash
+bun run typecheck
+~~~
 
-CI runs on every push/PR. Publishing to npm happens when a version tag is pushed **and** tests pass:
+Pre-publish check:
 
-```bash
-# bump version in package.json, then:
-git tag v0.1.0
-git push origin v0.1.0
-```
+~~~bash
+bun run prepublishOnly
+~~~
 
-Requires repository secret **`NPM_TOKEN`** (Automation token with publish rights).
+## Supported Configuration Sources
 
----
+pi-switch parses provider configuration from the cc-switch providers table and normalizes it into Pi-registerable providers where possible.
 
-## Out of scope (v0.1)
+- Claude / Claude Code config parsing
+- Codex config parsing
+- Gemini config parsing
+- Grok Build config parsing
+- OpenCode config parsing
+- Hermes config parsing
+- Generic / OpenAI-compatible config parsing
 
-- Quota / `usage_script` / rollups UI  
-- Bundled sqlite binary  
-- Writing back to the cc-switch DB  
-- Dual-install coexistence with the old local `cc-switch` extension  
+If a provider protocol cannot be mapped to a Pi-supported API type, it is shown as non-switchable in the UI instead of being force-registered.
 
----
+## Out of Scope
+
+- Does not edit the cc-switch database.
+- Does not add, delete, reorder, or migrate providers.
+- Does not include an API key manager.
+- Does not track quota or cost.
+- Does not replace cc-switch; it only acts as a switcher entry inside Pi.
 
 ## License
 
-MIT © Bandersnatch0x
+[MIT](./LICENSE)

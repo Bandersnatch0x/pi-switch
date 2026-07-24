@@ -42,7 +42,8 @@
     "prepublishOnly": "bun test"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "0.81.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

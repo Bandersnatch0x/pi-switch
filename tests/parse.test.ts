@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { parseProviderRow, makePiName, trimModelId, isSwitchable } from "../src/parse/index.ts";
+import { parseGemini } from "../src/parse/gemini.ts";
 import type { ProviderRow } from "../src/types.ts";
 
 function row(partial: Partial<ProviderRow> & Pick<ProviderRow, "id" | "app_type" | "name" | "settings_config">): ProviderRow {
@@ -146,5 +147,25 @@ describe("generic unknown type", () => {
     );
     expect(p.appType).toBe("openclaw");
     expect(isSwitchable(p)).toBe(true);
+  });
+});
+
+describe("parse gemini authHeader", () => {
+  function gemini(baseUrl: string) {
+    return parseGemini({
+      env: { GOOGLE_GEMINI_BASE_URL: baseUrl, GEMINI_API_KEY: "k", GEMINI_MODEL: "gemini-2.5" },
+    });
+  }
+
+  test("native googleapis host → authHeader false (x-goog-api-key)", () => {
+    expect(gemini("https://generativelanguage.googleapis.com").authHeader).toBe(false);
+  });
+
+  test("third-party gateway host → authHeader true (Bearer)", () => {
+    expect(gemini("https://api.siliconflow.cn").authHeader).toBe(true);
+  });
+
+  test("missing baseUrl defaults to Bearer", () => {
+    expect(parseGemini({ env: { GEMINI_API_KEY: "k" } }).authHeader).toBe(true);
   });
 });

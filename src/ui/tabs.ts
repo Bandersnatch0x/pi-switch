@@ -38,7 +38,7 @@ export function buildTabs(
   return tabs;
 }
 
-export function formatTabLabel(tab: TabInfo, active: boolean): string {
-  const mark = active ? "● " : "";
-  return `${mark}${tab.appType} ${tab.count}`;
+/** Single-tab label — plain text, no ★/● markers. */
+export function formatTabLabel(tab: TabInfo, _active?: boolean): string {
+  return `${tab.appType} ${tab.count}`;
 }

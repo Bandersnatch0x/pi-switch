@@ -3,7 +3,26 @@
  * (commit a377d793…, see research/cc-switch-model-discovery.md).
  */
 
-const COMPAT_SUFFIXES = ["/api/coding", "/anthropic", "/coding"];
+/**
+ * Known Anthropic-compatible subpath suffixes — ported verbatim from
+ * cc-switch `model_fetch.rs` KNOWN_COMPAT_SUFFIXES.
+ *
+ * Ordered by length DESCENDING so the longest matching suffix wins when a
+ * shorter one is a tail of a longer one (e.g. `/api/anthropic` must strip
+ * the whole thing, not just `/anthropic`, otherwise the derived root is a
+ * broken `…/api`). MUST stay sorted; `stripCompatSuffix` relies on this.
+ */
+const COMPAT_SUFFIXES = [
+  "/api/claudecode",
+  "/api/anthropic",
+  "/apps/anthropic",
+  "/api/coding",
+  "/claudecode",
+  "/anthropic",
+  "/step_plan",
+  "/coding",
+  "/claude",
+];
 
 export interface ModelFetchInput {
   baseUrl: string;
@@ -47,13 +66,13 @@ export function buildModelUrlCandidates(input: {
     push(`${base}/v1/models`);
   }
 
-  for (const suffix of COMPAT_SUFFIXES) {
-    if (base.toLowerCase().endsWith(suffix)) {
-      const root = base.slice(0, -suffix.length).replace(/\/+$/, "");
-      if (root) {
-        push(`${root}/v1/models`);
-        push(`${root}/models`);
-      }
+  // ponytail: first (longest) matching suffix wins — array is length-desc sorted.
+  const suffix = stripCompatSuffix(base);
+  if (suffix) {
+    const root = base.slice(0, -suffix.length).replace(/\/+$/, "");
+    if (root) {
+      push(`${root}/v1/models`);
+      push(`${root}/models`);
     }
   }
 
@@ -62,6 +81,27 @@ export function buildModelUrlCandidates(input: {
 
 function trimBase(url: string): string {
   return url.trim().replace(/\/+$/, "");
+}
+
+/** Longest matching compat suffix (case-insensitive) or undefined. Array order gives longest-first. */
+function stripCompatSuffix(base: string): string | undefined {
+  const lower = base.toLowerCase();
+  return COMPAT_SUFFIXES.find((s) => lower.endsWith(s));
+}
+
+/** Strip any `?...`/`#...` and basic auth from a URL for safe error reporting. */
+function redactUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.search = "";
+    u.hash = "";
+    u.username = "";
+    u.password = "";
+    return u.toString();
+  } catch {
+    // not a parseable URL — return truncated tail only
+    return raw.length > 64 ? `${raw.slice(0, 64)}…` : raw;
+  }
 }
 
 /** From a full request URL, derive a /v1/models endpoint. */
@@ -113,17 +153,19 @@ export async function fetchRemoteModels(
 
       const res = await fetchImpl(url, { headers, signal: controller.signal });
       if (res.status === 404 || res.status === 405) {
-        lastError = `HTTP ${res.status} at ${url}`;
+        lastError = `HTTP ${res.status} at ${redactUrl(url)}`;
         continue;
       }
       if (!res.ok) {
-        return { models: [], error: `HTTP ${res.status} at ${url}`, urlUsed: url };
+        return { models: [], error: `HTTP ${res.status} at ${redactUrl(url)}`, urlUsed: url };
       }
       const json: unknown = await res.json();
       const ids = extractModelIds(json).sort((a, b) => a.localeCompare(b));
       return { models: ids, urlUsed: url };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      // err.message may embed the URL (with query/auth) on network failure; redact before surfacing.
+      const raw = err instanceof Error ? err.message : String(err);
+      const msg = raw.includes(url) ? raw.replaceAll(url, redactUrl(url)) : raw;
       return { models: [], error: msg, urlUsed: url };
     } finally {
       clearTimeout(timer);

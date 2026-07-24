@@ -1,20 +1,5 @@
-import type { CcProvider, PiApi } from "../types.ts";
+import type { CcProvider } from "../types.ts";
 import { isSwitchable } from "../parse/index.ts";
-
-export function apiShort(api: PiApi | null | undefined): string {
-  switch (api) {
-    case "anthropic-messages":
-      return "anth";
-    case "openai-responses":
-      return "resp";
-    case "openai-completions":
-      return "chat";
-    case "google-generative-ai":
-      return "gem";
-    default:
-      return "?";
-  }
-}
 
 export function extractHostname(url: string): string {
   try {
@@ -24,25 +9,12 @@ export function extractHostname(url: string): string {
   }
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
-}
+/** ANSI yellow for current session model.provider (no ★/● markers). */
+export const ANSI_YELLOW = "\x1b[33m";
+export const ANSI_RESET = "\x1b[0m";
 
-/**
- * ★ name · host · apiShort · status ●
- */
-export function formatProviderLabel(
-  provider: CcProvider,
-  opts: { piActive: boolean; isLastUsed: boolean },
-): string {
-  const host = truncate(extractHostname(provider.baseUrl), 24);
-  const short = apiShort(provider.api);
-  const status = isSwitchable(provider)
-    ? "可切换"
-    : `不可切换: ${provider.parseError ?? "unknown"}`;
-  const star = opts.isLastUsed ? "★ " : "";
-  const dot = opts.piActive ? " ●" : "";
-  return `${star}${provider.displayName} · ${host} · ${short} · ${status}${dot}`;
+export function yellowHighlight(text: string): string {
+  return `${ANSI_YELLOW}${text}${ANSI_RESET}`;
 }
 
 export function sortProviders(
@@ -72,11 +44,14 @@ export function filterProviders(
   return providers.filter((p) => {
     const host = extractHostname(p.baseUrl).toLowerCase();
     const notes = (p.notes ?? "").toLowerCase();
+    const api = (p.api ?? "").toLowerCase();
     return (
       p.displayName.toLowerCase().includes(q) ||
       host.includes(q) ||
       notes.includes(q) ||
-      p.appType.toLowerCase().includes(q)
+      p.appType.toLowerCase().includes(q) ||
+      api.includes(q) ||
+      p.id.toLowerCase().includes(q)
     );
   });
 }

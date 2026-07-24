@@ -83,6 +83,46 @@ export const DEFAULT_MODEL_META = {
   maxTokens: 32_000,
 } as const;
 
+export interface ApiModelMeta {
+  contextWindow: number;
+  maxTokens: number;
+  input: ("text" | "image")[];
+  reasoning: boolean;
+}
+
+/**
+ * Per-api conservative meta defaults (SPEC review #4).
+ * cc-switch DB carries no per-model context/cost, so we tier by protocol
+ * instead of one hardcoded value. Values are safe lower-bounds; users can
+ * override via pi modelOverrides if a specific model differs.
+ */
+export const API_MODEL_META: Record<PiApi, ApiModelMeta> = {
+  "anthropic-messages": {
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+    input: ["text", "image"],
+    reasoning: true,
+  },
+  "openai-responses": {
+    contextWindow: 400_000,
+    maxTokens: 128_000,
+    input: ["text", "image"],
+    reasoning: true,
+  },
+  "openai-completions": {
+    contextWindow: 128_000,
+    maxTokens: 32_000,
+    input: ["text"],
+    reasoning: false,
+  },
+  "google-generative-ai": {
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+    input: ["text", "image"],
+    reasoning: true,
+  },
+};
+
 export const HEADER_ALLOWLIST = new Set(
   ["user-agent", "originator", "anthropic-version", "anthropic-beta"].map((s) =>
     s.toLowerCase(),

@@ -1,0 +1,14 @@
+<svg width="1200" height="680" viewBox="0 0 1200 680" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="680" rx="28" fill="#0B1020"/>
+  <rect x="116" y="84" width="968" height="512" rx="24" fill="#111827" stroke="#374151" stroke-width="2"/>
+  <circle cx="600" cy="194" r="56" fill="#064E3B" stroke="#34D399" stroke-width="5"/>
+  <path d="M570 194L592 216L634 168" stroke="#D1FAE5" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="600" y="292" text-anchor="middle" font-family="Consolas, Monaco, monospace" font-size="34" font-weight="700" fill="#E5E7EB">切换完成</text>
+  <text x="600" y="338" text-anchor="middle" font-family="Consolas, Monaco, monospace" font-size="21" fill="#9CA3AF">已注册 Provider 并设置 Pi 当前模型</text>
+  <rect x="198" y="388" width="804" height="104" rx="16" fill="#0F172A" stroke="#334155" stroke-width="2"/>
+  <text x="232" y="432" font-family="Consolas, Monaco, monospace" font-size="22" fill="#93C5FD">Provider</text>
+  <text x="420" y="432" font-family="Consolas, Monaco, monospace" font-size="22" fill="#E5E7EB">Claude Code · Kimi API</text>
+  <text x="232" y="470" font-family="Consolas, Monaco, monospace" font-size="22" fill="#93C5FD">Model</text>
+  <text x="420" y="470" font-family="Consolas, Monaco, monospace" font-size="22" fill="#FDE68A">kimi-k3</text>
+  <text x="600" y="546" text-anchor="middle" font-family="Consolas, Monaco, monospace" font-size="18" fill="#6B7280">下次打开 /pi-switch 时会自动高亮最近一次选择</text>
+</svg>

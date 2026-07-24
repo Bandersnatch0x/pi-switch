@@ -1,5 +1,5 @@
-import type { CcProvider } from "./types.ts";
-import { DEFAULT_MODEL_META } from "./types.ts";
+import type { CcProvider, PiApi } from "./types.ts";
+import { API_MODEL_META, DEFAULT_MODEL_META } from "./types.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
@@ -12,13 +12,17 @@ export interface PiRegisterApi {
   setModel: (model: unknown) => boolean | Promise<boolean>;
 }
 
-export function toModelConfig(modelId: string) {
+/** Model config with per-api tiered meta (SPEC review #4). */
+export function toModelConfig(modelId: string, api?: PiApi | null) {
+  const tier = api ? API_MODEL_META[api] : undefined;
   return {
     id: modelId,
     name: modelId,
-    reasoning: true,
-    input: ["text"] as ("text" | "image")[],
-    ...DEFAULT_MODEL_META,
+    reasoning: tier?.reasoning ?? true,
+    input: (tier?.input ?? ["text"]) as ("text" | "image")[],
+    cost: DEFAULT_MODEL_META.cost,
+    contextWindow: tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
+    maxTokens: tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
   };
 }
 
@@ -34,7 +38,7 @@ export function buildProviderConfig(
 ): Record<string, unknown> | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
-  const models = ids.filter(Boolean).map((id) => toModelConfig(id.trim()));
+  const models = ids.filter(Boolean).map((id) => toModelConfig(id.trim(), provider.api));
   if (!models.length) return undefined;
 
   const headers = mergeHeaders({

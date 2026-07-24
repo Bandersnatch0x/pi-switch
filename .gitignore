@@ -1,5 +1,36 @@
+# Dependencies
 node_modules/
-.scratch/
-*.log
-.DS_Store
+
+# Build output
 dist/
+build/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Atomic-write temp files (settings.ts writes settings.json.tmp-<pid>)
+*.tmp-*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scratch
+.scratch/

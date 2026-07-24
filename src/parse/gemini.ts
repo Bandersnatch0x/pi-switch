@@ -24,7 +24,7 @@ export function parseGemini(config: unknown, apiFormat?: string): ParsedCore {
   ]);
 
   if (!baseUrl) return err("missing GOOGLE_GEMINI_BASE_URL", models);
-  if (!apiKey) return err("missing GEMINI_API_KEY / GOOGLE_API_KEY", models);
+  if (!apiKey) return err("missing GEMINI_API_KEY / GOOGLE_API_KEY", models, baseUrl);
 
   const resolved = resolveApi({
     apiFormat,
@@ -35,7 +35,7 @@ export function parseGemini(config: unknown, apiFormat?: string): ParsedCore {
       api: null,
       baseUrl,
       apiKey,
-      authHeader: true,
+      authHeader: authHeaderForGemini(baseUrl),
       configModels: models,
       parseError: resolved.reason,
     };
@@ -45,17 +45,32 @@ export function parseGemini(config: unknown, apiFormat?: string): ParsedCore {
     api: resolved.api,
     baseUrl,
     apiKey,
-    authHeader: true,
+    authHeader: authHeaderForGemini(baseUrl),
     configModels: models,
   };
 }
 
-function err(reason: string, models: string[]): ParsedCore {
+/**
+ * Native Google endpoints expect `x-goog-api-key` (the Pi google-generative-ai
+ * protocol's default when authHeader is false). Third-party OpenAI-style gateways
+ * that expose a gemini-compatible surface typically only accept `Authorization: Bearer`.
+ * Default to Bearer (true) unless the host is unambiguously Google.
+ */
+function authHeaderForGemini(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return !host.endsWith("googleapis.com") && !host.endsWith("google.com");
+  } catch {
+    return true;
+  }
+}
+
+function err(reason: string, models: string[], baseUrl = ""): ParsedCore {
   return {
     api: null,
-    baseUrl: "",
+    baseUrl,
     apiKey: "",
-    authHeader: true,
+    authHeader: authHeaderForGemini(baseUrl),
     configModels: models,
     parseError: reason,
   };

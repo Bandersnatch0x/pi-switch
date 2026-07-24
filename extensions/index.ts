@@ -8,7 +8,6 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
-import { DEFAULT_PAGE_SIZE } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { resolveSqlitePath } from "../src/sqlite-path.ts";
 import { isSwitchable } from "../src/parse/index.ts";
@@ -24,21 +23,8 @@ import {
   type FsLike,
 } from "../src/settings.ts";
 import { registerProvider, switchToProvider } from "../src/register.ts";
-import { fetchRemoteModels, mergeModelLists } from "../src/models-fetch.ts";
-import { buildTabs, formatTabLabel } from "../src/ui/tabs.ts";
-import {
-  buildPageOptions,
-  NAV_JUMP,
-  NAV_NEXT,
-  NAV_PREV,
-  paginate,
-  SEARCH_LABEL,
-} from "../src/ui/paginate.ts";
-import {
-  filterProviders,
-  formatProviderLabel,
-  sortProviders,
-} from "../src/ui/labels.ts";
+import { fetchRemoteModels } from "../src/models-fetch.ts";
+import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 
 // Populated by async factory
 let execFileSync: typeof import("node:child_process").execFileSync;
@@ -46,11 +32,8 @@ let existsSync: typeof import("node:fs").existsSync;
 let readFileSync: typeof import("node:fs").readFileSync;
 let writeFileSync: typeof import("node:fs").writeFileSync;
 let renameSync: typeof import("node:fs").renameSync;
+let os: typeof import("node:os");
 let HOME = "";
-
-const MANUAL_ENTRY = "✎ 手动输入 model id…";
-const FETCH_REMOTE = "📡 获取远端模型";
-const REFETCH = "↻ 重新拉取远端模型";
 
 const fsLike = (): FsLike => ({
   existsSync,
@@ -120,11 +103,24 @@ function refreshSnapshot(): { providers: CcProvider[]; error?: string } {
 }
 
 function headerVars(): Record<string, string> {
+  // Match the codex/claude CLI UA shape: "Windows 10.0; x64" / "macOS 14.5; arm64".
+  // A bare "Windows" mismatches real CLI output and trips UA-fingerprinting gateways
+  // (root cause of "Connection error 502" after switching). Versions kept current as
+  // of the codex/claude CLI baseline that emits the bundled anthropic-beta flags.
+  const osInfo = (() => {
+    const arch = process.arch === "x64" ? "x64" : process.arch;
+    if (process.platform === "win32") {
+      const rel = os.release().split(".")[0] ?? "10";
+      return `Windows ${rel}; ${arch}`;
+    }
+    if (process.platform === "darwin") return `macOS ${os.release()}; ${arch}`;
+    return `${process.platform}; ${arch}`;
+  })();
   return {
     codexVersion: "0.144.0",
     claudeCodeVersion: "1.0.0",
     geminiVersion: "0.1.0",
-    osInfo: process.platform === "win32" ? "Windows" : process.platform,
+    osInfo,
   };
 }
 
@@ -132,152 +128,7 @@ function overridesFor(dbId: string): Record<string, string> | undefined {
   return config.providerOverrides?.[dbId]?.headers;
 }
 
-// ── Interactive UI ───────────────────────────────────────────────────────────
-
-async function pickTab(
-  providers: CcProvider[],
-  ctx: any,
-  preferred?: string,
-): Promise<string | undefined> {
-  const tabs = buildTabs(providers, config.tabs);
-  if (!tabs.length) return undefined;
-  if (tabs.length === 1) return tabs[0].appType;
-
-  const labels = tabs.map((t) => formatTabLabel(t, t.appType === preferred));
-  const picked = await ctx.ui.select("选择 app_type", labels);
-  if (!picked) return undefined;
-  const idx = labels.indexOf(picked);
-  return tabs[idx]?.appType;
-}
-
-async function pickProvider(
-  providers: CcProvider[],
-  ctx: any,
-  lastDbId?: string,
-  activePiName?: string,
-): Promise<CcProvider | undefined> {
-  const pageSize = config.pageSize ?? DEFAULT_PAGE_SIZE;
-  let list = sortProviders(providers, lastDbId);
-  let page = 1;
-  let query = "";
-
-  while (true) {
-    const filtered = filterProviders(list, query);
-    const { items, totalPages } = paginate(filtered, page, pageSize);
-    const labels = items.map((p) =>
-      formatProviderLabel(p, {
-        piActive: activePiName === p.piName,
-        isLastUsed: lastDbId === p.id,
-      }),
-    );
-    const nav = buildPageOptions(labels, page, totalPages, filtered.length, {
-      includeSearch: true,
-      includeJump: true,
-    });
-    const title =
-      (query ? `搜索 "${query}" · ` : "") + nav.title + ` · ${providers[0]?.appType ?? ""}`;
-    const picked = await ctx.ui.select(title, nav.options);
-    if (!picked) return undefined;
-    if (picked === SEARCH_LABEL) {
-      const q = await ctx.ui.input("搜索 name / host / notes", query);
-      query = q?.trim() ?? "";
-      page = 1;
-      continue;
-    }
-    if (picked === NAV_PREV) {
-      page--;
-      continue;
-    }
-    if (picked === NAV_NEXT) {
-      page++;
-      continue;
-    }
-    if (picked === NAV_JUMP) {
-      const raw = await ctx.ui.input(`跳到页码 (1-${totalPages})`, String(page));
-      const n = parseInt(raw ?? "", 10);
-      if (Number.isFinite(n)) page = n;
-      continue;
-    }
-    const idx = labels.indexOf(picked);
-    const provider = items[idx];
-    if (!provider) return undefined;
-    if (!isSwitchable(provider)) {
-      ctx.ui.notify(`不可切换: ${provider.parseError ?? "unknown"}`, "warning");
-      continue;
-    }
-    return provider;
-  }
-}
-
-async function pickModel(provider: CcProvider, ctx: any): Promise<string | undefined> {
-  let remote: string[] = [];
-  let remoteLoaded = false;
-
-  while (true) {
-    const all = mergeModelLists(provider.configModels, remote);
-    let page = 1;
-    const pageSize = config.pageSize ?? DEFAULT_PAGE_SIZE;
-
-    while (true) {
-      const { items, totalPages } = paginate(all, page, pageSize);
-      const tools = [MANUAL_ENTRY, remoteLoaded ? REFETCH : FETCH_REMOTE];
-      const nav = buildPageOptions([...items, ...tools], page, Math.max(totalPages, 1), all.length, {
-        includeSearch: false,
-        includeJump: totalPages > 1,
-      });
-      const title = `选择 model（${provider.displayName}） · 第 ${page}/${Math.max(totalPages, 1)} 页 · 共 ${all.length} 个`;
-      const picked = await ctx.ui.select(title, nav.options);
-      if (!picked) return undefined;
-      if (picked === NAV_PREV) {
-        page--;
-        continue;
-      }
-      if (picked === NAV_NEXT) {
-        page++;
-        continue;
-      }
-      if (picked === NAV_JUMP) {
-        const raw = await ctx.ui.input(`跳到页码`, String(page));
-        const n = parseInt(raw ?? "", 10);
-        if (Number.isFinite(n)) page = n;
-        continue;
-      }
-      if (picked === MANUAL_ENTRY) {
-        const manual = await ctx.ui.input(
-          "输入 model id",
-          provider.configModels[0] ?? "",
-        );
-        if (manual?.trim()) return manual.trim();
-        break;
-      }
-      if (picked === FETCH_REMOTE || picked === REFETCH) {
-        ctx.ui.setStatus?.("pi-switch", "拉取远端模型…");
-        const ua = overridesFor(provider.id)?.["User-Agent"];
-        const result = await fetchRemoteModels({
-          baseUrl: provider.baseUrl,
-          apiKey: provider.apiKey,
-          modelsUrl: provider.modelsUrl,
-          isFullUrl: provider.isFullUrl,
-          userAgent: ua,
-        });
-        ctx.ui.setStatus?.("pi-switch", undefined);
-        remoteLoaded = true;
-        if (result.error || !result.models.length) {
-          ctx.ui.notify(
-            `远端模型获取失败${result.error ? `: ${result.error}` : "（空列表）"}，可手动输入`,
-            "warning",
-          );
-          remote = [];
-        } else {
-          remote = result.models;
-          ctx.ui.notify(`已获取 ${remote.length} 个远端模型`, "info");
-        }
-        break; // rebuild outer
-      }
-      return picked.trim();
-    }
-  }
-}
+// ── Interactive UI：三列同屏 类型 | 名称 | 模型 ─────────────────────────────
 
 async function runCommand(pi: ExtensionAPI, ctx: any): Promise<void> {
   config = loadConfig();
@@ -298,20 +149,28 @@ async function runCommand(pi: ExtensionAPI, ctx: any): Promise<void> {
     readSelection(fsLike(), settingsPath) ??
     migrateLegacySelection(fsLike(), settingsPath, providers, process.pid);
 
-  const tab = await pickTab(providers, ctx, sel?.tab ?? sel?.appType);
-  if (!tab) return;
-
-  const inTab = providers.filter((p) => p.appType === tab);
-  const provider = await pickProvider(
-    inTab,
-    ctx,
-    sel?.dbId,
-    (ctx.model as any)?.provider as string | undefined,
-  );
-  if (!provider) return;
-
-  const modelId = await pickModel(provider, ctx);
-  if (!modelId) return;
+  const picked = await threeLevelPick(ctx, {
+    providers,
+    preferredTab: sel?.tab ?? sel?.appType,
+    lastDbId: sel?.dbId,
+    lastModel: sel?.model,
+    activePiName: (ctx.model as any)?.provider as string | undefined,
+    tabOrder: config.tabs,
+    fetchRemote: async (provider) => {
+      const ua = overridesFor(provider.id)?.["User-Agent"];
+      const r = await fetchRemoteModels({
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        modelsUrl: provider.modelsUrl,
+        isFullUrl: provider.isFullUrl,
+        userAgent: ua,
+      });
+      if (r.error) throw new Error(r.error);
+      return r.models;
+    },
+  });
+  if (picked.kind !== "ok") return;
+  const { provider, modelId } = picked;
 
   const result = await switchToProvider({
     pi: pi as any,
@@ -334,7 +193,7 @@ async function runCommand(pi: ExtensionAPI, ctx: any): Promise<void> {
   const newSel: PiSwitchSelection = {
     dbId: provider.id,
     model: modelId,
-    tab,
+    tab: provider.appType,
     appType: provider.appType,
     provider: provider.piName,
   };
@@ -346,14 +205,14 @@ async function runCommand(pi: ExtensionAPI, ctx: any): Promise<void> {
   }
   ctx.ui.setStatus?.(
     "pi-switch",
-    `● ${modelId} @ ${provider.appType}/${provider.displayName}`,
+    `${modelId} @ ${provider.appType}/${provider.displayName}`,
   );
 }
 
 // ── Entry ────────────────────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, fs, os] = await Promise.all([
+  const [cp, fs, osMod] = await Promise.all([
     import("node:child_process"),
     import("node:fs"),
     import("node:os"),
@@ -363,6 +222,7 @@ export default async function (pi: ExtensionAPI) {
   readFileSync = fs.readFileSync;
   writeFileSync = fs.writeFileSync;
   renameSync = fs.renameSync;
+  os = osMod;
   HOME = os.homedir();
 
   config = loadConfig();
@@ -441,7 +301,7 @@ export default async function (pi: ExtensionAPI) {
       if (ok) {
         ctx.ui?.setStatus?.(
           "pi-switch",
-          `● ${current.model} @ ${match.appType}/${match.displayName}`,
+          `${current.model} @ ${match.appType}/${match.displayName}`,
         );
       }
     }

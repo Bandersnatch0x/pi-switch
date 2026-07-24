@@ -336,27 +336,30 @@ v0.1 **不包含**：
 | `/pi-switch` | 主流程：重读 DB → 快照 → tab → provider → model |
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
 
-### 8.2 Tab
+### 8.2 渐进三级选择（类型 → 名称 → 模型）
 
-- 来源：当前快照中 `app_type` 去重且 count>0
-- 排序：`pi-switch.json.tabs` 强制序 > 含 `is_current=1` 优先 > 字母序
-- 切换 tab：过滤列表，页码归 1，记忆 `tab`
+自定义 TUI（`ctx.ui.custom`），**逐级展开**：
 
-### 8.3 Provider 列表
+1. **初始化只显示「类型」**
+2. `enter` / `→` 进入后显示「名称」
+3. 再 `enter` / `→` 进入后显示「模型」
+4. 在模型列 `enter` 确认切换
 
-- pageSize：默认 12，可配
-- 排序：last-used（dbId）★ → 可切换优先于 parseError → name
-- 工具行：`🔍 搜索…`；导航：`↑ 上一页` `↓ 下一页` `↗ 跳页…`
-- 搜索：name / host / notes 子串，case-insensitive
-- 行格式：`★ name · host · apiShort · 状态 ●`
-  - `apiShort`：`anth` / `resp` / `chat` / `gem` / `?`
-  - 不可切换时显示 `不可切换: {原因}`
+| 列 | 内容 |
+|----|------|
+| **类型** | `app_type` + count |
+| **名称** | 显示名 · host；当前 `model.provider` **黄色高亮** |
+| **模型** | `configModels` + 远端缓存 + `✎ 手动输入` / `↻ 刷新模型` |
+
+快捷键：`↑↓` 导航 · `enter` 下一级/确认 · `←→` 列切换 · `/` 搜索 · `m` 手动 · `f` 刷新 · `esc` 取消。
+
+改类型（在类型列 ↑↓）会收起名称/模型列，需重新 enter 展开。
 
 ### 8.4 Model 列表（grilling Q7 + research）
 
 1. **立即**显示 `configModels`（仅 trim 去重）。
 2. 始终提供 `✎ 手动输入`。
-3. **不**自动请求远端。仅当用户选择 **`📡 获取远端模型`** 时，按 cc-switch 逻辑请求（见 `research/cc-switch-model-discovery.md`）：
+3. **不**自动请求远端。仅当用户选择 **`↻ 刷新模型`** 时，按 cc-switch 逻辑请求（见 `research/cc-switch-model-discovery.md`）：
    - 支持 `modelsUrl` 覆写、`isFullUrl` 推导
    - `/vN` 规则与兼容后缀剥离候选
    - Bearer + 可选 User-Agent；超时 15s
@@ -367,7 +370,7 @@ v0.1 **不包含**：
 ### 8.5 状态栏
 
 - 启动：`pi-switch: N providers`
-- 恢复成功：`● {model} @ {appType}/{name}`
+- 恢复成功：`{model} @ {appType}/{name}`
 - 恢复失败（dbId 失效）：`⚠ 已保存的 Provider 不可用`
 
 ### 8.6 注册与切换提交顺序（grilling Q5）
