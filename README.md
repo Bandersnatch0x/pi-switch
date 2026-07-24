@@ -333,6 +333,11 @@ pi-switch only merges allowlisted headers to avoid injecting arbitrary sensitive
 
 Rule precedence: `defaults/headers.json` < `~/.pi/agent/provider-headers.json` < `providerOverrides[dbId].headers`.
 
+
+## Branch protection
+
+Branch and release-tag protection is documented in [.github/branch-protection.md](./.github/branch-protection.md).
+
 ## Development
 
 Install dependencies:

@@ -331,6 +331,11 @@ pi-switch 只合并白名单内 Header，避免把任意敏感字段注入 Provi
 
 优先级：`defaults/headers.json` < `~/.pi/agent/provider-headers.json` < `providerOverrides[dbId].headers`。
 
+
+## 分支保护
+
+仓库启用了 GitHub 分支/标签保护策略，详见 [.github/branch-protection.md](./.github/branch-protection.md)。
+
 ## 开发
 
 安装依赖：
