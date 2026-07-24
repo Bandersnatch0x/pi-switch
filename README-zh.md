@@ -14,11 +14,11 @@ pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会�
 
 以下为样例截图，用于展示交互形态；实际 Provider、模型和路径以你的本机 cc-switch 数据为准。
 
-![类型选择](./docs/images/sample-provider-picker.svg)
+![类型选择](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-provider-picker.svg)
 
-![模型选择](./docs/images/sample-model-picker.svg)
+![模型选择](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-model-picker.svg)
 
-![切换完成](./docs/images/sample-switch-success.svg)
+![切换完成](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-switch-success.svg)
 
 ## 功能特性
 

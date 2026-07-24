@@ -14,11 +14,11 @@ pi-switch does not replace cc-switch and does not modify the cc-switch database.
 
 The screenshots below are sample illustrations of the interaction flow. Actual providers, models, and paths depend on your local cc-switch data.
 
-![Provider type picker](./docs/images/sample-provider-picker.svg)
+![Provider type picker](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-provider-picker.svg)
 
-![Model picker](./docs/images/sample-model-picker.svg)
+![Model picker](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-model-picker.svg)
 
-![Switch success](./docs/images/sample-switch-success.svg)
+![Switch success](https://cdn.jsdelivr.net/npm/pi-ccs@latest/docs/images/sample-switch-success.svg)
 
 ## Features
 
