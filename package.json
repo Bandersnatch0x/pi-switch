@@ -1,15 +1,45 @@
 {
   "name": "pi-switch",
   "version": "0.1.0",
-  "description": "Pi extension: switch providers/models from cc-switch database",
+  "description": "Pi package: switch providers and models from the local cc-switch database",
   "type": "module",
-  "private": true,
-  "pi": {
-    "extensions": ["./extensions/index.ts"]
+  "license": "MIT",
+  "author": "Bandersnatch0x",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bandersnatch0x/pi-switch.git"
   },
+  "bugs": {
+    "url": "https://github.com/Bandersnatch0x/pi-switch/issues"
+  },
+  "homepage": "https://github.com/Bandersnatch0x/pi-switch#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "cc-switch",
+    "provider",
+    "model",
+    "switch"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "defaults",
+    "README.md",
+    "LICENSE",
+    "SPEC.md"
+  ],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun test"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
@@ -19,7 +49,10 @@
     "typescript": "^5.8.0"
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.0.0",
+    "node": ">=20"
   },
-  "license": "MIT"
+  "publishConfig": {
+    "access": "public"
+  }
 }
