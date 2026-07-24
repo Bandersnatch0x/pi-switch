@@ -1,0 +1,263 @@
+/**
+ * /ps-doctor — structured health checks (inspired by CallmeLins doctor UX).
+ * Pure functions: no node imports; caller injects IO results.
+ */
+
+import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEntry } from "./types.ts";
+import { isSwitchable } from "./parse/index.ts";
+import { summarizeModelMeta, resolveEffectiveModelMeta } from "./model-meta.ts";
+
+export type DoctorStatus = "pass" | "warn" | "fail";
+
+export interface DoctorCheck {
+  id: string;
+  title: string;
+  status: DoctorStatus;
+  detail: string;
+  fix?: string;
+}
+
+export interface DoctorInput {
+  home: string;
+  dbPath: string;
+  dbExists: boolean;
+  sqlite3Path: string | null;
+  sqlite3Tried?: string[];
+  providers: CcProvider[];
+  providersError?: string;
+  selection?: PiSwitchSelection;
+  config: PiSwitchConfig;
+  headerRuleCount: number;
+  varsSummary?: {
+    codexVersion: string;
+    codexVersionSource: string;
+    claudeCodeVersion: string;
+    claudeCodeVersionSource: string;
+    geminiVersion: string;
+    geminiVersionSource: string;
+    anthropicBeta: string;
+    codexOriginator: string;
+  };
+  pins?: PinEntry[];
+  recent?: RecentEntry[];
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[];
+  summary: { pass: number; warn: number; fail: number };
+  lines: string[];
+}
+
+function countBy(checks: DoctorCheck[]): DoctorReport["summary"] {
+  return {
+    pass: checks.filter((c) => c.status === "pass").length,
+    warn: checks.filter((c) => c.status === "warn").length,
+    fail: checks.filter((c) => c.status === "fail").length,
+  };
+}
+
+export function runDoctor(input: DoctorInput): DoctorReport {
+  const checks: DoctorCheck[] = [];
+
+  // 1. sqlite3
+  if (input.sqlite3Path) {
+    checks.push({
+      id: "sqlite3",
+      title: "sqlite3 可执行文件",
+      status: "pass",
+      detail: input.sqlite3Path,
+    });
+  } else {
+    checks.push({
+      id: "sqlite3",
+      title: "sqlite3 可执行文件",
+      status: "fail",
+      detail: `未找到 sqlite3。tried: ${(input.sqlite3Tried ?? []).join(", ") || "(none)"}`,
+      fix: "安装 sqlite3 并加入 PATH，或设置 SQLITE3_PATH / pi-switch.json.sqlitePath",
+    });
+  }
+
+  // 2. DB file
+  if (input.dbExists) {
+    checks.push({
+      id: "db-file",
+      title: "cc-switch 数据库",
+      status: "pass",
+      detail: input.dbPath,
+    });
+  } else {
+    checks.push({
+      id: "db-file",
+      title: "cc-switch 数据库",
+      status: "fail",
+      detail: `不存在: ${input.dbPath}`,
+      fix: "先用 cc-switch 创建 Provider，或设置 CC_SWITCH_DB 指向正确路径",
+    });
+  }
+
+  // 3. providers snapshot
+  if (input.providersError && !input.providers.length) {
+    checks.push({
+      id: "providers",
+      title: "读取 providers",
+      status: "fail",
+      detail: input.providersError,
+      fix: "检查 sqlite3 与 DB 路径；确认 providers 表可查询",
+    });
+  } else {
+    const switchable = input.providers.filter(isSwitchable).length;
+    const blocked = input.providers.length - switchable;
+    checks.push({
+      id: "providers",
+      title: "providers 快照",
+      status: input.providers.length ? "pass" : "warn",
+      detail: input.providers.length
+        ? `共 ${input.providers.length} 条（可切换 ${switchable}，不可切换 ${blocked}）`
+        : "数据库为空",
+      fix: input.providers.length ? undefined : "在 cc-switch 中添加至少一个 Provider",
+    });
+    if (input.providersError) {
+      checks.push({
+        id: "providers-stale",
+        title: "providers 读取警告",
+        status: "warn",
+        detail: input.providersError,
+      });
+    }
+  }
+
+  // 4. selection
+  const sel = input.selection;
+  if (!sel) {
+    checks.push({
+      id: "selection",
+      title: "已保存选择",
+      status: "warn",
+      detail: "尚无 piSwitchSelection",
+      fix: "运行 /ps-config 选择一次 Provider/Model",
+    });
+  } else {
+    const match = input.providers.find((p) => p.id === sel.dbId);
+    if (!match) {
+      checks.push({
+        id: "selection",
+        title: "已保存选择",
+        status: "fail",
+        detail: `dbId=${sel.dbId} model=${sel.model} 在当前 DB 中不存在`,
+        fix: "运行 /ps-config 重新选择；旧选择会在成功后覆盖",
+      });
+    } else if (!isSwitchable(match)) {
+      checks.push({
+        id: "selection",
+        title: "已保存选择",
+        status: "fail",
+        detail: `${match.appType}/${match.displayName} 不可切换: ${match.parseError ?? "unknown"}`,
+        fix: "在 cc-switch 补全 baseUrl/apiKey，或换一个可切换 Provider",
+      });
+    } else {
+      checks.push({
+        id: "selection",
+        title: "已保存选择",
+        status: "pass",
+        detail: `${match.appType}/${match.displayName} · ${sel.model}`,
+      });
+    }
+  }
+
+  // 5. headers
+  checks.push({
+    id: "headers",
+    title: "Header 规则",
+    status: input.headerRuleCount > 0 ? "pass" : "warn",
+    detail: `已加载 ${input.headerRuleCount} 条规则（defaults + provider-headers.json）`,
+    fix: input.headerRuleCount ? undefined : "检查包内 defaults/headers.json 是否随安装发布",
+  });
+
+  // 6. fingerprint vars
+  if (input.varsSummary) {
+    const v = input.varsSummary;
+    const fallbacks = [
+      v.codexVersionSource === "fallback" ? "codex" : null,
+      v.claudeCodeVersionSource === "fallback" ? "claude" : null,
+      v.geminiVersionSource === "fallback" ? "gemini" : null,
+    ].filter(Boolean);
+    checks.push({
+      id: "fingerprint",
+      title: "客户端伪装指纹",
+      status: fallbacks.length ? "warn" : "pass",
+      detail:
+        `codex=${v.codexVersion}(${v.codexVersionSource}) · ` +
+        `claude=${v.claudeCodeVersion}(${v.claudeCodeVersionSource}) · ` +
+        `gemini=${v.geminiVersion}(${v.geminiVersionSource}) · ` +
+        `originator=${v.codexOriginator} · beta=${v.anthropicBeta}`,
+      fix: fallbacks.length
+        ? `未探测到本机 CLI（${fallbacks.join(", ")}），使用兜底版本；可安装 CLI 或在 pi-switch.json.vars 显式指定`
+        : undefined,
+    });
+  }
+
+  // 7. effective modelMeta for current selection
+  if (sel) {
+    const match = input.providers.find((p) => p.id === sel.dbId);
+    if (match) {
+      const meta = resolveEffectiveModelMeta(input.config, match);
+      checks.push({
+        id: "model-meta",
+        title: "当前 modelMeta 策略",
+        status: "pass",
+        detail: summarizeModelMeta(meta),
+        fix:
+          meta?.reasoning === false
+            ? undefined
+            : "若中转报 400 reasoning/thinking，用 /ps-override 选「中转兼容」或设 defaultModelMeta.reasoning=false",
+      });
+    }
+  }
+
+  // 8. pins
+  const pins = input.pins ?? input.config.pins ?? [];
+  if (pins.length) {
+    const broken = pins.filter((p) => !input.providers.some((x) => x.id === p.dbId));
+    checks.push({
+      id: "pins",
+      title: "常用 pin",
+      status: broken.length ? "warn" : "pass",
+      detail: `${pins.length} 条 pin` + (broken.length ? `（${broken.length} 条 dbId 失效）` : ""),
+      fix: broken.length ? "在 /ps-config 用 p 重新 pin，或编辑 pi-switch.json.pins" : undefined,
+    });
+  } else {
+    checks.push({
+      id: "pins",
+      title: "常用 pin",
+      status: "pass",
+      detail: "无 pin（在 /ps-config 选中模型后按 p 添加）",
+    });
+  }
+
+  // 9. recent
+  const recent = input.recent ?? input.config.recent ?? [];
+  checks.push({
+    id: "recent",
+    title: "最近切换",
+    status: "pass",
+    detail: recent.length ? `保留 ${recent.length} 条 last-N` : "尚无 recent 记录",
+  });
+
+  const summary = countBy(checks);
+  const icon = (s: DoctorStatus) => (s === "pass" ? "PASS" : s === "warn" ? "WARN" : "FAIL");
+  const lines: string[] = [
+    `pi-switch doctor · pass=${summary.pass} warn=${summary.warn} fail=${summary.fail}`,
+    "",
+  ];
+  for (const c of checks) {
+    lines.push(`[${icon(c.status)}] ${c.title}`);
+    lines.push(`  ${c.detail}`);
+    if (c.fix) lines.push(`  fix: ${c.fix}`);
+  }
+  return { checks, summary, lines };
+}
+
+/** Render report as a single notify-friendly string. */
+export function formatDoctorReport(report: DoctorReport): string {
+  return report.lines.join("\n");
+}

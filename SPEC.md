@@ -23,7 +23,7 @@
 2. **全量 app_type 可见**：DB 里出现什么类型就出什么 tab；未知类型 generic 尽力解析，失败仍列出并诊断。
 3. 协议自适应：映射到 pi 的 `api`（不自建 HTTP 代理）。
 4. 注册时注入客户端伪装 headers（白名单字段）。
-5. UI：按 app_type **动态 tab** + 分页 + 搜索。
+5. UI：按 app_type **动态 tab** + 渐进三级选择 + 搜索（**不做**列表分页/跳页）。
 6. 启动恢复上次选择（以 `dbId` 为权威身份）。
 
 ### 1.2 非目标（v0.1）
@@ -38,6 +38,7 @@
 | 旧 `extensions/cc-switch` 共存检测 | 发布后直接替换，不设计双扩展保护 |
 | 捆绑 `sqlite3` 二进制 | 系统前置依赖 |
 | 文件监听 DB 变化 | v0.1 简单：打开命令时重读 |
+| 列表分页 / 跳页 UI | 三级选择 + 搜索已覆盖导航；废弃 `pageSize` |
 
 ### 1.3 成功标准
 
@@ -46,7 +47,7 @@
 - [ ] 可解析记录可完成：选 model → `registerProvider` → `setModel` → 发消息。
 - [ ] headers 仅注入白名单伪装字段（可 debug 日志验证）。
 - [ ] 旧 `ccSwitchSelection` 可一次性迁移到 `piSwitchSelection`（名称唯一命中时）。
-- [ ] 单元测试：parse + api-format + paginate + headers 全绿。
+- [ ] 单元测试：parse + api-format + tabs/labels + headers 全绿。
 
 ---
 
@@ -83,7 +84,7 @@
 
 ```
                     ┌──────────────────────┐
-                    │  /pi-switch  command │
+                    │  /ps-config  command       │
                     └──────────┬───────────┘
                                ▼
 ┌────────────┐   rows    ┌─────────────┐   CcProvider[]   ┌──────────┐
@@ -109,13 +110,22 @@ pi-switch/
   SPEC.md
   DESIGN.md
   research/
+  scripts/
+    smoke.mjs             # doctor + 可选 models probe
   extensions/
-    index.ts              # 唯一 extension 入口
+    index.ts              # 唯一 extension 入口（薄壳）
+    bootstrap.ts          # 启动恢复
+    commands.ts           # /ps-config · /ps-override · /ps-doctor
+    runtime.ts            # 运行时依赖装配
   src/
     types.ts
+    pi-context.ts         # Pi ExtensionAPI 窄类型
     db.ts
     sqlite-path.ts
     models-fetch.ts       # 对齐 cc-switch model_fetch 候选逻辑
+    doctor.ts             # /ps-doctor 结构化体检
+    model-meta.ts         # register-time modelMeta 清洗
+    provider-override.ts
     parse/
       index.ts
       claude.ts
@@ -130,16 +140,18 @@ pi-switch/
     headers/
       rules.ts
       merge.ts
+      fingerprints.ts     # Claude / Codex / Gemini UA 预设
+      vars.ts             # CLI 版本变量展开
     ui/
       tabs.ts
-      paginate.ts
       labels.ts
-      provider-picker.ts
-      model-picker.ts
+      three-level-pick.ts # 类型 → 名称 → 模型（搜索；无分页）
+      model-meta-dialog.ts
     register.ts
     settings.ts
   defaults/
     headers.json
+  skills/
   tests/
 ```
 
@@ -148,6 +160,7 @@ pi-switch/
 | 依赖 | 用途 |
 |------|------|
 | `@earendil-works/pi-coding-agent` | peer：ExtensionAPI |
+| `@earendil-works/pi-tui` | peer：三级选择器自定义 TUI（`0.81.1`） |
 | 系统 `sqlite3` CLI | 读 DB（**不用 bun:sqlite**） |
 | 无强制 runtime dep | headers / 解析自实现 |
 
@@ -180,7 +193,7 @@ type PiApi =
 interface CcProvider {
   /** DB id，权威身份 */
   id: string;
-  /** pi 注册名：ps-<slug(appType)>-<完整 dbId>，跨重命名稳定 */
+  /** pi 注册名：优先 displayName slug；空名时回退 ps-<slug(appType)>-<完整 dbId> */
   piName: string;
   /** UI 名（用户可读） */
   displayName: string;
@@ -212,7 +225,7 @@ interface CcProvider {
     "model": "grok-4.5",
     "tab": "codex",
     "appType": "codex",
-    "provider": "ps-codex-448d0e64-..."
+    "provider": "elysiver-claude"
   }
 }
 ```
@@ -262,13 +275,15 @@ interface CcProvider {
 ### 5.9 命名（grilling Q18）
 
 ```
-piName = "ps-" + slug(appType) + "-" + id
-// 例：ps-codex-448d0e64-aaaa-bbbb-cccc-ddddeeeeffff
+piName = slug(displayName)                // 优先：人类可读，出现在 Pi 状态栏
+       | "ps-" + slug(appType) + "-" + id // 回退：displayName 为空/无法 slug
+// 例：elysiver-claude
+// 例（回退）：ps-codex-448d0e64-aaaa-bbbb-cccc-ddddeeeeffff
 ```
 
-- `slug(appType)`：小写，非 `[a-z0-9]` 替换为 `-`。
-- `id` 为完整 dbId，**不截断**。
-- Provider 重命名 **不改变** `piName`。
+- `slug(...)`：小写，非 `[a-z0-9]` 替换为 `-`。
+- 持久身份仍是 `dbId`；`piName` 可随 displayName 再生，不用于身份匹配。
+- 同名冲突时：首个保留 base，后续追加短 dbId 后缀。
 - `displayName` = 用户可读名称（通常即 DB `name`）。
 
 ### 5.10 Model ID（grilling Q19，最优解）
@@ -292,7 +307,7 @@ piName = "ps-" + slug(appType) + "-" + id
 
 ### 6.1 规则源（优先级高→低）
 
-1. `~/.pi/agent/pi-switch.json` → `providerOverrides[dbId].headers`
+1. `~/.pi/agent/pi-switch.json` → `providerOverrides[dbId].headers`（及可选 `fingerprint` 预设展开；`fingerprint: "none"` 跳过默认规则注入）
 2. `~/.pi/agent/provider-headers.json` → 按 `api` 匹配 rules（与 pi-provider-headers **同文件**）
 3. 包内 `defaults/headers.json`
 
@@ -301,6 +316,7 @@ piName = "ps-" + slug(appType) + "-" + id
 v0.1 **仅允许**以下名称（大小写不敏感）：
 
 - `User-Agent`
+- `x-goog-api-client`
 - `originator`
 - `anthropic-version`
 - `anthropic-beta`
@@ -333,8 +349,10 @@ v0.1 **不包含**：
 
 | 命令 | 行为 |
 |------|------|
-| `/pi-switch` | 主流程：重读 DB → 快照 → tab → provider → model |
+| `/ps-config` | 主流程：重读 DB → 快照 → tab → provider → model（pin/recent） |
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
+| `/ps-override` | 为 Provider 设置 modelMeta 覆写（预设：中转兼容 / 完整推理） |
+| `/ps-doctor` | 结构化体检：PASS/WARN/FAIL + 修复建议 |
 
 ### 8.2 渐进三级选择（类型 → 名称 → 模型）
 
@@ -351,7 +369,7 @@ v0.1 **不包含**：
 | **名称** | 显示名 · host；当前 `model.provider` **黄色高亮** |
 | **模型** | `configModels` + 远端缓存 + `✎ 手动输入` / `↻ 刷新模型` |
 
-快捷键：`↑↓` 导航 · `enter` 下一级/确认 · `←→` 列切换 · `/` 搜索 · `m` 手动 · `f` 刷新 · `esc` 取消。
+快捷键：`↑↓` 导航 · `enter` 下一级/确认 · `←→` 列切换 · `/` 搜索 · `m` 手动 · `f` 刷新 · `p` pin · `o` 参数覆写（名称列） · `esc` 取消。
 
 改类型（在类型列 ↑↓）会收起名称/模型列，需重新 enter 展开。
 
@@ -378,7 +396,7 @@ v0.1 **不包含**：
 1. 保留旧 Provider 与当前模型。
 2. 注册候选 Provider（含 headers + 至少所选 model）。
 3. 调用 `setModel` — **成功即运行时切换成功**。
-4. 成功后注销其他 `ps-*` 旧 Provider（防列表膨胀）。
+4. 成功后注销其他已跟踪的旧 Provider 注册名（防列表膨胀；兼容旧 `ps-*` 与可读名）。
 5. 持久化新选择；持久化失败 → 保持已切换模型，明确提示「已切换，本次选择未保存」。
 6. `setModel` 失败 → notify error，不写 selection，不注销旧注册。
 
@@ -395,7 +413,7 @@ extension load
 session_start(startup)
   → applyModel(selection) if still valid
   → setStatus
-/pi-switch
+/ps-config
   → 重新读 DB + 解析（刷新快照）
   → Picker 交互期间使用固定快照（不中途重读）
   → interactive UI
@@ -419,24 +437,36 @@ session_start(startup)
 
 ```jsonc
 {
-  "pageSize": 12,
   "tabs": ["claude", "codex", "gemini", "grokbuild", "opencode", "hermes"],
   "aliasCcs": true,
   "sqlitePath": null,
+  "vars": {
+    "codexVersion": "0.144.0",
+    "claudeCodeVersion": "1.0.0"
+  },
+  "defaultModelMeta": { "reasoning": false },
   "providerOverrides": {
     "448d0e64-...": {
       "label": "sbai",
+      "fingerprint": "codex",
       "headers": {
         "User-Agent": "codex_cli_rs/0.144.0 (Windows 10.0; x64) Terminal"
-      }
+      },
+      "modelMeta": { "reasoning": false }
     }
   },
+  "pins": [{ "dbId": "448d0e64-...", "model": "gpt-5" }],
+  "recent": [],
+  "recentLimit": 8,
   "debug": false
 }
 ```
 
 - `providerOverrides` 以 **dbId** 为键；`label` 仅人读，不参与匹配。
 - `tabs` 只影响排序；DB 多出的类型仍显示在末尾。
+- **无 `pageSize`**：三级选择器用可滚动列表 + `/` 搜索，**不**做分页/跳页（旧配置中的 `pageSize` 忽略）。
+- `pins` / `recent` / `recentLimit`：仅本地快捷，不引入 expose 配置中心。
+- `vars` / `defaultModelMeta` / per-provider `fingerprint` · `modelMeta`：注册时指纹与上游拒收字段策略。
 
 ### 10.2 共享 `~/.pi/agent/provider-headers.json`
 
@@ -473,13 +503,13 @@ session_start(startup)
 |------|------|
 | unit: api-format | 全部 apiFormat / wire / npm 映射；未知显式格式禁止回退 |
 | unit: parse-* | 各 app_type fixture（脱敏） |
-| unit: paginate / tabs / labels | 边界页、空 tab、搜索 |
+| unit: tabs / labels / three-level | 空 tab、搜索过滤、列宽/快捷键 |
 | unit: headers | 白名单过滤、大小写合并、认证字段拒绝 |
 | unit: models-fetch candidates | 候选 URL 构建与 404/405 回退策略（可 mock） |
 | unit: piName / model trim | 稳定 id；仅 trim |
 | integration（可选） | 真实 DB 只读统计可切换比例 |
 
-最低：`parse` + `api-format` + `paginate` + `headers` 在 `bun test` 全绿。
+最低：`parse` + `api-format` + `tabs/labels` + `headers` 在 `bun test` 全绿。
 
 ---
 
@@ -487,10 +517,10 @@ session_start(startup)
 
 | 里程碑 | 交付 | 验收 |
 |--------|------|------|
-| **M0** | package 可 install；读全表；tab 动态；claude+codex 可切换 | `/pi-switch` 切真实供应商 |
+| **M0** | package 可 install；读全表；tab 动态；claude+codex 可切换 | `/ps-config` 切真实供应商 |
 | **M1** | gemini / grokbuild / opencode / hermes + generic | 每类型有端点者可切换 |
 | **M2** | headers 注入 + providerOverrides(dbId) | debug 见 UA；认证字段不覆盖 |
-| **M3** | 模型按需拉取（cc-switch 逻辑）+ 搜索/跳页/迁移 | 手动获取远端模型可用 |
+| **M3** | 模型按需拉取（cc-switch 逻辑）+ 三级选择搜索/pin/recent + 迁移 | 手动获取远端模型可用 |
 | **M4** | README + Windows 验收清单 | 发布就绪 |
 
 （原 M3 余量里程碑已删除。）
@@ -513,13 +543,13 @@ session_start(startup)
 - [ ] 六种已知类型均有 parser；未知走 generic
 - [ ] 显式未知 apiFormat → 不可切换，不静默回退
 - [ ] headers 白名单注入；认证字段不可覆盖
-- [ ] 打开 `/pi-switch` 重读 DB；picker 内固定快照
+- [ ] 打开 `/ps-config` 重读 DB；picker 内固定快照
 - [ ] 恢复以 dbId 为准；失效安全失败
-- [ ] 分页/搜索/跳页可用
+- [ ] 三级选择 + `/` 搜索可用（无分页/跳页）
 - [ ] 只注册当前 provider；切换提交顺序符合 §8.6
 - [ ] 模型列表默认 config；远端按需
 - [ ] 密钥不进日志
-- [ ] 单元测试覆盖映射、分页、headers
+- [ ] 单元测试覆盖映射、tabs/labels、headers
 - [ ] 无 quota / usage_script 代码路径
 
 ---
@@ -529,10 +559,10 @@ session_start(startup)
 | # | 决策 | 来源 |
 |---|------|------|
 | 1 | 全类型可见、已支持类型可切换；未知 generic 失败不挡发布 | grilling Q1 |
-| 2 | 每次打开 `/pi-switch` 重读 DB；picker 固定快照；无文件监听 | grilling Q2 |
+| 2 | 每次打开 `/ps-config` 重读 DB；picker 固定快照；无文件监听 | grilling Q2 |
 | 3 | `dbId` 是持久身份；`piName` 可再生 | grilling Q3 |
 | 4 | dbId 失效：不自动回退、不 setModel、保留 selection、会话警告一次 | grilling Q4 |
-| 5 | setModel 成功=运行时成功；随后清理旧 ps-* 并持久化；持久化失败只告警 | grilling Q5 |
+| 5 | setModel 成功=运行时成功；随后清理旧注册名并持久化；持久化失败只告警 | grilling Q5 |
 | 6 | **取消**全部余量展示与查询 | grilling 用户指令 |
 | 7 | Model 列表先 configModels；用户点击才拉远端 | grilling Q7 |
 | 8 | 显式未知协议禁止切换；缺省才用类型默认 | grilling Q8 |
@@ -545,7 +575,7 @@ session_start(startup)
 | 15 | SQLite 只读 + busy_timeout 3s + 最后有效快照 | grilling Q15 |
 | 16 | 不捆绑 sqlite3；`SQLITE3_PATH` → 配置 → PATH | grilling Q16 |
 | 17 | per-provider 配置键 = dbId（`providerOverrides`） | grilling Q17 |
-| 18 | `piName = ps-<slug(appType)>-<完整 dbId>` | grilling Q18 |
+| 18 | `piName` 优先 `slug(displayName)`，回退 `ps-<slug(appType)>-<dbId>` | 状态栏可读名 |
 | 19 | Model ID 仅 trim，不做其他清洗 | grilling Q19 最优解 |
 | 20 | 可选 `/ccs` alias 默认开启 | 最优解 |
 | 21 | 不显示 rollups / 本地花费 | 随余量取消 |

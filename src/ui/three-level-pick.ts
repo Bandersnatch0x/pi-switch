@@ -13,13 +13,16 @@
  *   /     search in focused column
  *   m     manual model id
  *   f     refresh models (remote)
+ *   o     parameter override (when name/model revealed)
+ *   p     toggle pin on current provider+model
  *   esc   cancel
  *
  * Lines truncated via pi-tui visibleWidth / truncateToWidth.
  */
 
-import type { CcProvider } from "../types.ts";
+import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
 import { isSwitchable } from "../parse/index.ts";
+import { isPinned } from "../settings.ts";
 import { buildTabs, type TabInfo } from "./tabs.ts";
 import {
   filterProviders,
@@ -27,9 +30,12 @@ import {
   yellowHighlight,
 } from "./labels.ts";
 import { mergeModelLists } from "../models-fetch.ts";
+import type { PiSwitchCtx } from "../pi-context.ts";
 
 export type ThreeLevelResult =
   | { kind: "ok"; provider: CcProvider; modelId: string }
+  /** Exit custom TUI first; caller opens override dialog outside (no nested UI). */
+  | { kind: "override"; provider: CcProvider }
   | { kind: "cancel" };
 
 export interface ThreeLevelPickOpts {
@@ -39,6 +45,12 @@ export interface ThreeLevelPickOpts {
   lastModel?: string;
   activePiName?: string;
   tabOrder?: string[];
+  /** Local pins (provider+model). Updated in-place via onTogglePin. */
+  pins?: PinEntry[];
+  /** Last-N successful switches for soft prioritization. */
+  recent?: RecentEntry[];
+  /** Persist pin toggle; return the new pins array (picker stays open). */
+  onTogglePin?: (entry: PinEntry) => PinEntry[] | Promise<PinEntry[]>;
   fetchRemote?: (provider: CcProvider) => Promise<string[]>;
 }
 
@@ -131,13 +143,21 @@ export function formatFooterHints(
     formatKeyHint(theme, "/", "search"),
     formatKeyHint(theme, "m", "manual"),
     formatKeyHint(theme, "f", "refresh"),
-    formatKeyHint(theme, "esc", "cancel"),
   );
+  // o closes custom TUI then opens override dialog outside (no nested UI).
+  if (revealed > 0) {
+    parts.push(formatKeyHint(theme, "o", "override"));
+  }
+  // p toggles pin for current provider+model without closing the picker.
+  if (revealed >= 2) {
+    parts.push(formatKeyHint(theme, "p", "pin"));
+  }
+  parts.push(formatKeyHint(theme, "esc", "cancel"));
   return parts.join(sep);
 }
 
 export async function threeLevelPick(
-  ctx: any,
+  ctx: PiSwitchCtx,
   opts: ThreeLevelPickOpts,
 ): Promise<ThreeLevelResult> {
   if (typeof ctx.ui?.custom === "function") {
@@ -151,14 +171,14 @@ export async function threeLevelPick(
 }
 
 async function threeLevelCustom(
-  ctx: any,
+  ctx: PiSwitchCtx,
   opts: ThreeLevelPickOpts,
 ): Promise<ThreeLevelResult> {
   const tuiMod = await import("@earendil-works/pi-tui");
   const { matchesKey, Key, visibleWidth, truncateToWidth } = tuiMod;
   const wf: WidthFns = { visibleWidth, truncateToWidth };
 
-  return ctx.ui.custom((tui: any, theme: any, _kb: any, done: (r: ThreeLevelResult) => void) => {
+  return ctx.ui.custom!<ThreeLevelResult>((tui: any, theme: any, _kb: any, done) => {
     const allTabs = buildTabs(opts.providers, opts.tabOrder);
     if (!allTabs.length) {
       queueMicrotask(() => done({ kind: "cancel" }));
@@ -180,6 +200,8 @@ async function threeLevelCustom(
     let modelScroll = 0;
     let query = "";
     const remoteById = new Map<string, string[]>();
+    /** Live pin list; refreshed by onTogglePin without closing TUI. */
+    let livePins: PinEntry[] = [...(opts.pins ?? [])];
     let disposed = false;
     let cache: string[] | undefined;
     let cacheWidth = -1;
@@ -212,9 +234,13 @@ async function threeLevelCustom(
       return allTabs;
     }
 
+    function pinnedDbIds(): string[] {
+      return [...new Set(livePins.map((p) => p.dbId))];
+    }
+
     function listNames(appType: string): CcProvider[] {
       let list = opts.providers.filter((p) => p.appType === appType);
-      list = sortProviders(list, opts.lastDbId);
+      list = sortProviders(list, opts.lastDbId, pinnedDbIds());
       if (query && col === 1) list = filterProviders(list, query);
       return list;
     }
@@ -227,13 +253,39 @@ async function threeLevelCustom(
         const q = query.toLowerCase();
         list = list.filter((id) => id.toLowerCase().includes(q));
       }
+      // Soft priority: recent for this provider, then pinned, then rest.
+      const recentOrder = (opts.recent ?? [])
+        .filter((r) => r.dbId === provider.id)
+        .map((r) => r.model);
+      const pinOrder = livePins
+        .filter((p) => p.dbId === provider.id)
+        .map((p) => p.model);
+      const rank = (id: string): number => {
+        const ri = recentOrder.indexOf(id);
+        if (ri >= 0) return ri;
+        const pi = pinOrder.indexOf(id);
+        if (pi >= 0) return 1000 + pi;
+        return 10000;
+      };
+      list = [...list].sort((a, b) => {
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) return ra - rb;
+        return 0;
+      });
       return [...list, MANUAL, FETCH];
     }
 
-    function modelLabel(id: string): string {
+    function modelLabel(id: string, provider?: CcProvider): string {
       if (id === MANUAL) return "✎ 手动输入";
       if (id === FETCH) return "↻ 刷新模型";
+      if (provider && isPinned(livePins, provider.id, id)) return `★ ${id}`;
       return id;
+    }
+
+    function providerHasPin(provider: CcProvider | undefined): boolean {
+      if (!provider) return false;
+      return livePins.some((p) => p.dbId === provider.id);
     }
 
     /** Open next level if possible; returns true if UI advanced. */
@@ -398,18 +450,20 @@ async function threeLevelCustom(
           if (ni < names.length) {
             const p = names[ni];
             const nameBudget = Math.max(4, c1 - 6);
-            const name = truncatePlain(p.displayName, nameBudget);
+            const pinMark = providerHasPin(p) ? "★ " : "";
+            const name = truncatePlain(p.displayName, Math.max(2, nameBudget - (pinMark ? 2 : 0)));
+            const labeled = `${pinMark}${name}`;
             const ok = isSwitchable(p);
             const core = ok
-              ? name
-              : `${name} ${fg("dim", "·")} ${fg("warning", "不可切换")}`;
+              ? labeled
+              : `${labeled} ${fg("dim", "·")} ${fg("warning", "不可切换")}`;
             const sel = ni === nameIdx;
             const active = opts.activePiName === p.piName;
             if (sel && col === 1) {
-              nCell = fg("accent", `› ${name}${ok ? "" : " · 不可切换"}`);
-            } else if (sel && active) nCell = `› ${yellowHighlight(name)}`;
-            else if (sel) nCell = `› ${ok ? name : `${name} · 不可切换`}`;
-            else if (active) nCell = `  ${yellowHighlight(name)}`;
+              nCell = fg("accent", `› ${labeled}${ok ? "" : " · 不可切换"}`);
+            } else if (sel && active) nCell = `› ${yellowHighlight(labeled)}`;
+            else if (sel) nCell = `› ${ok ? labeled : `${labeled} · 不可切换`}`;
+            else if (active) nCell = `  ${yellowHighlight(labeled)}`;
             else nCell = `  ${core}`;
           } else if (row === 0 && names.length === 0) {
             nCell = fg("dim", "  (无匹配)");
@@ -422,7 +476,7 @@ async function threeLevelCustom(
           if (mi < models.length) {
             const mid = models[mi];
             const isAction = mid === MANUAL || mid === FETCH;
-            const text = truncatePlain(modelLabel(mid), Math.max(4, c2 - 2));
+            const text = truncatePlain(modelLabel(mid, provider), Math.max(4, c2 - 2));
             const sel = mi === modelIdx;
             if (sel && col === 2) mCell = fg("accent", `› ${text}`);
             else if (sel) mCell = `› ${text}`;
@@ -489,7 +543,7 @@ async function threeLevelCustom(
         const modelPart =
           mid && mid !== MANUAL && mid !== FETCH
             ? truncatePlain(mid, 40)
-            : modelLabel(mid ?? "—");
+            : modelLabel(mid ?? "—", provider);
         parts.push(fg("accent", modelPart));
       }
       let pos = `  ${tIdx + 1}/${Math.max(tabs.length, 1)}`;
@@ -634,6 +688,68 @@ async function threeLevelCustom(
         return;
       }
 
+      // Toggle pin for current provider + focused model (stays open).
+      if (data === "p" || data === "P") {
+        if (revealed < 2) {
+          ctx.ui.notify("请先进入模型列再 pin", "warning");
+          return;
+        }
+        const { provider, models } = current();
+        if (!provider || !isSwitchable(provider)) {
+          ctx.ui.notify("当前名称不可切换", "warning");
+          return;
+        }
+        const mid = models[modelIdx];
+        if (!mid || mid === MANUAL || mid === FETCH) {
+          ctx.ui.notify("请选中具体模型再 pin", "warning");
+          return;
+        }
+        if (!opts.onTogglePin) {
+          ctx.ui.notify("未配置 pin 持久化", "warning");
+          return;
+        }
+        void (async () => {
+          try {
+            const next = await opts.onTogglePin!({
+              dbId: provider.id,
+              model: mid,
+              label: `${provider.displayName} · ${mid}`,
+            });
+            livePins = [...(next ?? [])];
+            const nowPinned = isPinned(livePins, provider.id, mid);
+            ctx.ui.notify(
+              nowPinned
+                ? `已 pin · ${provider.displayName} · ${mid}`
+                : `已取消 pin · ${provider.displayName} · ${mid}`,
+              "info",
+            );
+            invalidate();
+            tui.requestRender();
+          } catch (e) {
+            ctx.ui.notify(
+              `pin 失败: ${e instanceof Error ? e.message : String(e)}`,
+              "error",
+            );
+          }
+        })();
+        return;
+      }
+
+      // Close custom TUI first; caller opens override dialog outside (H1: no nested UI).
+      if (data === "o" || data === "O") {
+        if (revealed < 1) {
+          ctx.ui.notify("请先进入名称列再设置参数覆写", "warning");
+          return;
+        }
+        const { provider } = current();
+        if (!provider || !isSwitchable(provider)) {
+          ctx.ui.notify("当前名称不可切换", "warning");
+          return;
+        }
+        finish({ kind: "override", provider });
+        return;
+      }
+
       if (matchesKey(data, Key.enter)) {
         // Progressive: enter opens next column until model level
         if (col < 2) {
@@ -685,7 +801,7 @@ async function threeLevelCustom(
 }
 
 async function threeLevelFallback(
-  ctx: any,
+  ctx: PiSwitchCtx,
   opts: ThreeLevelPickOpts,
 ): Promise<ThreeLevelResult> {
   const tabs = buildTabs(opts.providers, opts.tabOrder);
@@ -700,6 +816,7 @@ async function threeLevelFallback(
   const names = sortProviders(
     opts.providers.filter((p) => p.appType === tab.appType),
     opts.lastDbId,
+    (opts.pins ?? []).map((p) => p.dbId),
   );
   const nameLabels = names.map((p) =>
     isSwitchable(p) ? p.displayName : `${p.displayName} · 不可切换`,

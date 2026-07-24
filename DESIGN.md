@@ -1,7 +1,18 @@
 # pi-switch 设计脑暴
 
+## 当前实现（相对脑暴的收敛）
+
+> **权威契约以 [SPEC.md](./SPEC.md) 为准。** 下文保留早期脑暴痕迹；下列项已正式收敛：
+>
+> - UI：渐进三级选择（类型 → 名称 → 模型）+ `/` 搜索 + 可滚动列表；**不做**分页/跳页，**无** `pageSize`。
+> - 命令：`/ps-config`（可选 `/ccs`）、`/ps-override`、`/ps-doctor`。
+> - 入口：`extensions/{index,bootstrap,commands,runtime}.ts`；选择器：`src/ui/three-level-pick.ts`。
+> - 本地 pin / recent 快捷；无 expose 配置中心。
+> - 余量 / usage_script：**已取消**。
+
+
 > 目标：在 `D:\code_space\pi-switch` 做完整 pi package，接 cc-switch DB，
-> 融合 provider headers 伪装 + 协议自适应 + tab/翻页。
+> 融合 provider headers 伪装 + 协议自适应 + 三级选择/搜索。
 >
 > **状态：** grilling 完成，**[SPEC.md](./SPEC.md) 已锁定 v0.1.0**（余量功能已取消）。
 > 本文仅保留脑暴过程；冲突以 SPEC 为准。
@@ -30,7 +41,7 @@
 ### 做
 
 - 从 `~/.cc-switch/cc-switch.db` 读 provider（类型动态）
-- `/pi-switch`（或 `/ccs`）交互：tab → 列表 → model
+- `/ps-config`（或 `/ccs`）交互：tab → 列表 → model
 - 按 `meta.apiFormat` + settings 解析 `api` / `baseUrl` / `apiKey`
 - 注册时注入 **伪装 headers**（规则可配置）
 - 列表展示：**余量 / 今日花费 / 请求数 / api 形态 / 当前★**
@@ -56,7 +67,7 @@
 │  parse/       claude env / codex toml / meta.apiFormat  │
 │  headers/     规则引擎（可复用 pi-provider-headers 思路）│
 │  quota/       usage_script 执行 + 缓存 + 展示格式化     │
-│  ui/          tab + 分页 + 搜索 + 行渲染                │
+│  ui/          三级选择 + 搜索 + 行渲染（无分页）         │
 │  register/    registerProvider + setModel + 持久化      │
 │  cmd/         /pi-switch, /pi-switch refresh-quota      │
 └────────────┬────────────────────────────┬───────────────┘
@@ -145,7 +156,7 @@ pi.registerProvider(piName, { baseUrl, apiKey, authHeader, api, headers, models 
     "ccs-100xlabs": { "anthropic-beta": "context-1m-2025-08-07" }
   },
   "tabs": ["claude", "codex"],   // 强制顺序；省略则 DB 动态
-  "pageSize": 12
+  // pageSize removed — scrollable three-level list + search
 }
 ```
 
@@ -205,7 +216,7 @@ cc-switch 形态（已验证）：
 
 ---
 
-## 5. UI：Tab + 翻页（对齐 cc-switch 心智）
+## 5. UI：三级选择 + 搜索（对齐 cc-switch 心智；已收敛）
 
 ### 约束
 
@@ -221,7 +232,7 @@ pi `ctx.ui.select` = **单层字符串列表**，无原生 tab 控件。
 ★ 100xlabs · sub.100xlabs.space · anthropic · $12.4 · 14req ●
   …
 ── 导航 ──
-↑ 上一页   ↓ 下一页   ↗ 跳页…
+↑↓ 导航   / 搜索   （无分页/跳页）
 ```
 
 ### Tab 动态规则
@@ -237,21 +248,21 @@ FROM providers GROUP BY app_type
 - tab 顺序：配置 `tabs` > 有 is_current 的优先 > 名称字典序
 - 记忆：上次 tab 写入 `piSwitchSelection.tab`
 
-### 分页优化（相对现 extension）
+### 列表导航（相对现 extension；**已废弃分页**）
 
 | 点 | 现 cc-switch ext | pi-switch |
 |----|------------------|-----------|
 | page size | 固定 10 | 可配 8–15，宽终端可 15 |
-| 跳页 | 无 | `↗ 跳页` + 数字 input |
-| 搜索 | 无 | 名称/host 子串过滤，过滤后重分页 |
+| 跳页 | 无 | **不做**（搜索 + 滚动） |
+| 搜索 | 无 | 名称/host 子串过滤（`/`） |
 | 排序 | 用量 desc + last | tab 内：★last → 有余量 → 用量 → 名 |
 | 翻页选项污染 | prev/next 混在列表 | 固定底栏，选项前缀 `·` 区分 |
 | 余量加载 | 无 | 当前页并发 ≤ 4 拉取，status 条显示进度 |
 
 ### 两级流程
 
-1. **Provider 屏**（tab + 分页列表）  
-2. **Model 屏**（fetch `/models` ∪ configModels，同样分页 + 手动输入 + 重新拉取）
+1. **类型/名称列**（动态 app_type + 名称列表）  
+2. **模型列**（configModels ∪ 按需远端 + 手动输入 + 刷新；可滚动，无分页）
 
 选中后：`registerProvider`（带 headers）→ `setModel` → 写 settings → status `● model @ provider`。
 
@@ -282,17 +293,17 @@ D:\code_space\pi-switch\
       format.ts
     ui/
       tabs.ts
-      paginate.ts
+      three-level-pick.ts
       labels.ts
-      provider-picker.ts
-      model-picker.ts
+      model-meta-dialog.ts
     register.ts
     settings.ts
   defaults/
     headers.json
   tests/
     api-format.test.ts
-    paginate.test.ts
+    tabs-labels.test.ts
+    three-level.test.ts
     labels.test.ts
     parse-*.test.ts
 ```
@@ -319,7 +330,7 @@ D:\code_space\pi-switch\
 | `~/.pi/agent/extensions/cc-switch` | pi-switch 稳定后 **移除/改名禁用**，避免双 `/cc-switch` |
 | `settings.ccSwitchSelection` | 启动时若无 `piSwitchSelection` 则迁移读旧 key |
 | `pi-provider-headers` | **保留**；文档写明静态 vs 动态分工 |
-| 命令名 | `/pi-switch` 主命令；alias `/ccs` 可选 |
+| 命令名 | `/ps-config` 主命令；可选 alias `/ccs`（可关） |
 
 ---
 
@@ -350,9 +361,9 @@ D:\code_space\pi-switch\
 - 注册带 headers（默认 codex/claude 伪装）
 - 共享 `provider-headers.json`
 
-### M2 — UI tab + 分页（1d）
+### M2 — UI 三级选择 + 搜索（1d）
 
-- 动态 tab、搜索、跳页
+- 动态类型列、搜索、pin/recent
 - 行：host / api / today usage / ★●
 
 ### M3 — 余量（1–1.5d）
@@ -381,5 +392,5 @@ D:\code_space\pi-switch\
 
 ## 11. 一句话决策
 
-> **pi-switch = 只读 cc-switch DB 的 pi 侧切换器 + 正确协议映射 + 注册时 headers 伪装 + tab/分页/余量 UI。**  
+> **pi-switch = 只读 cc-switch DB 的 pi 侧桥 + 正确协议映射 + 注册时 headers 伪装 + 三级选择/搜索 UI（无分页、无余量）。**  
 > **不做** 完整本地 API 网关；**协议** 靠 pi `api`；**headers** 复制 headers 包规则并挂到动态 provider；**余量** 跑 `meta.usage_script` + rollups。

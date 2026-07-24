@@ -1,5 +1,5 @@
 import type { CcProvider, ProviderRow } from "./types.ts";
-import { parseProviderRow } from "./parse/index.ts";
+import { parseProviderRow, uniquifyPiNames } from "./parse/index.ts";
 
 export const PROVIDERS_SQL = `
 SELECT id, app_type, name, settings_config, is_current,
@@ -67,7 +67,7 @@ export function readProviders(deps: DbReaderDeps): ReadResult {
     return { providers: [], ok: false, error: "unexpected sqlite3 json shape" };
   }
 
-  const providers = rows.map((row) => parseProviderRow(normalizeRow(row)));
+  const providers = uniquifyPiNames(rows.map((row) => parseProviderRow(normalizeRow(row))));
   return { providers, ok: true };
 }
 

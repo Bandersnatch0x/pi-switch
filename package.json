@@ -1,7 +1,7 @@
 {
   "name": "pi-switch",
   "version": "0.1.0",
-  "description": "Pi package: switch providers and models from the local cc-switch database",
+  "description": "Pi package: switch providers/models from local cc-switch, with parameter overrides and short display labels",
   "type": "module",
   "license": "MIT",
   "author": "Bandersnatch0x",
@@ -26,20 +26,29 @@
   "pi": {
     "extensions": [
       "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills/diagnose-upstream"
     ]
   },
   "files": [
     "extensions",
     "src",
     "defaults",
+    "skills",
+    "docs",
     "README.md",
+    "README-zh.md",
     "LICENSE",
     "SPEC.md"
   ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun test"
+    "prepublishOnly": "bun test",
+    "release": "bun scripts/release.mjs",
+    "release:apply": "bun scripts/release.mjs --apply",
+    "smoke": "bun scripts/smoke.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

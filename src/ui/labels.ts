@@ -17,11 +17,20 @@ export function yellowHighlight(text: string): string {
   return `${ANSI_YELLOW}${text}${ANSI_RESET}`;
 }
 
+/**
+ * Sort providers for the name column.
+ * Order: lastUsed (if any) → pinned → switchable → displayName.
+ */
 export function sortProviders(
   providers: CcProvider[],
   lastUsedDbId?: string,
+  pinnedDbIds?: Iterable<string>,
 ): CcProvider[] {
+  const pinSet = new Set(pinnedDbIds ?? []);
   const sorted = [...providers].sort((a, b) => {
+    const aPin = pinSet.has(a.id) ? 0 : 1;
+    const bPin = pinSet.has(b.id) ? 0 : 1;
+    if (aPin !== bPin) return aPin - bPin;
     const aOk = isSwitchable(a) ? 0 : 1;
     const bOk = isSwitchable(b) ? 0 : 1;
     if (aOk !== bOk) return aOk - bOk;

@@ -19,7 +19,7 @@ export { parseOpencode } from "./opencode.ts";
 export { parseHermes } from "./hermes.ts";
 export { parseGeneric } from "./generic.ts";
 
-/** Convert one DB row into a CcProvider (never returns null — failures become parseError). */
+/** Convert one DB row into a CcProvider (never returns null 鈥?failures become parseError). */
 export function parseProviderRow(row: ProviderRow): CcProvider {
   const meta = parseMeta(row.meta ?? undefined);
   const apiFormat = asString(meta.apiFormat) ?? asString(meta.api_format);
@@ -78,7 +78,7 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
 
   return {
     id: row.id,
-    piName: makePiName(row.app_type, row.id),
+    piName: makePiName(row.name, row.app_type, row.id),
     displayName: row.name,
     appType: row.app_type,
     api: parseError ? null : core.api,

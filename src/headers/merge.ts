@@ -11,6 +11,11 @@ export interface MergeHeadersInput {
   rules: HeaderRule[];
   /** Per-dbId overrides (already extracted) */
   overrideHeaders?: Record<string, string>;
+  /**
+   * When true, skip api-matched default/user rules entirely.
+   * Used by fingerprint:"none" so only explicit overrideHeaders apply.
+   */
+  skipRules?: boolean;
   /** Variable substitutions e.g. {codexVersion} */
   vars?: Record<string, string>;
   debug?: boolean;
@@ -34,8 +39,8 @@ export function mergeHeaders(input: MergeHeadersInput): Record<string, string> {
     }
   };
 
-  // 1. rules matching api (package defaults + shared file already merged by caller order)
-  if (input.api) {
+  // 1. rules matching api (unless fingerprint:none / skipRules)
+  if (input.api && !input.skipRules) {
     for (const rule of input.rules) {
       if (rule.apis.map((a) => a.toLowerCase()).includes(input.api.toLowerCase())) {
         apply(rule.headers, `rule:${rule.name}`);

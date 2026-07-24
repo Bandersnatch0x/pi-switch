@@ -97,10 +97,50 @@ describe("buildProviderConfig", () => {
     expect(cm.input).toEqual(["text"]);
     expect(cm.reasoning).toBe(false);
   });
+
+  test("modelMeta override disables reasoning (GLM-via-claude fix)", () => {
+    // A claude-protocol provider whose upstream is actually GLM (dooongai-style
+    // relay) rejects the `reasoning` request param. Per-provider modelMeta lets
+    // the user turn it off without disabling thinking globally.
+    const cfg = buildProviderConfig(
+      mk({ id: "glm", appType: "claude", api: "anthropic-messages" }),
+      ["glm-5.2"],
+      { rules: [], modelMeta: { reasoning: false } },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.reasoning).toBe(false);
+    // other tier defaults are preserved
+    expect(m.contextWindow).toBe(200_000);
+    expect(m.input).toEqual(["text", "image"]);
+  });
+
+  test("modelMeta override can raise contextWindow / maxTokens", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "big", appType: "claude", api: "anthropic-messages" }),
+      ["m"],
+      { rules: [], modelMeta: { contextWindow: 1_000_000, maxTokens: 128_000 } },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.contextWindow).toBe(1_000_000);
+    expect(m.maxTokens).toBe(128_000);
+    // reasoning still follows api tier when not overridden
+    expect(m.reasoning).toBe(true);
+  });
+
+  test("no modelMeta keeps api-tier defaults", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "def", appType: "claude", api: "anthropic-messages" }),
+      ["m"],
+      { rules: [] },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.reasoning).toBe(true);
+    expect(m.contextWindow).toBe(200_000);
+  });
 });
 
 describe("switchToProvider commit order (SPEC §8.6)", () => {
-  test("success: register → setModel → cleanup other ps-*", async () => {
+  test("success: register → setModel → cleanup previous names", async () => {
     const { pi, calls } = fakePi({ setModelResult: true });
     const provider = mk({ id: "new", appType: "codex" });
     const r = await switchToProvider({
@@ -119,6 +159,30 @@ describe("switchToProvider commit order (SPEC §8.6)", () => {
     // only the stale ps-* is unregistered, not the newly registered one
     const unregistered = calls.filter((c) => c.op === "unregister").map((c) => c.arg);
     expect(unregistered).toEqual(["ps-claude-old"]);
+  });
+
+  test("success: also unregisters human-readable previous names", async () => {
+    const { pi, calls } = fakePi({ setModelResult: true });
+    const provider = mk({
+      id: "new",
+      appType: "claude",
+      piName: "elysiver-claude",
+      displayName: "elysiver-claude",
+    });
+    const r = await switchToProvider({
+      pi,
+      provider,
+      modelId: "glm-5.2",
+      findModel: () => ({ id: "glm-5.2" }),
+      previousPsNames: ["ps-claude-dooongai-1775180253543", "other-friendly", provider.piName],
+      rules: [],
+    });
+    expect(r.ok).toBe(true);
+    const unregistered = calls.filter((c) => c.op === "unregister").map((c) => c.arg);
+    expect(unregistered).toEqual([
+      "ps-claude-dooongai-1775180253543",
+      "other-friendly",
+    ]);
   });
 
   test("setModel fails: no cleanup, returns error", async () => {

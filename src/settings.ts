@@ -1,6 +1,27 @@
-import type { PiSwitchConfig, PiSwitchSelection } from "./types.ts";
-import { LEGACY_SETTINGS_KEY, SETTINGS_KEY } from "./types.ts";
+import type {
+  FingerprintPreset,
+  ModelMetaOverride,
+  PinEntry,
+  PiSwitchConfig,
+  PiSwitchSelection,
+  RecentEntry,
+} from "./types.ts";
+import {
+  DEFAULT_RECENT_LIMIT,
+  isThinkingFormat,
+  LEGACY_SETTINGS_KEY,
+  SETTINGS_KEY,
+} from "./types.ts";
 import type { CcProvider } from "./types.ts";
+import { cleanModelMeta } from "./model-meta.ts";
+import {
+  providerOverrideKeys,
+  resolveProviderOverride,
+  type ProviderOverrideEntry,
+} from "./provider-override.ts";
+
+export { providerOverrideKeys, resolveProviderOverride };
+export type { ProviderOverrideEntry };
 
 export interface FsLike {
   existsSync: (path: string) => boolean;
@@ -129,17 +150,228 @@ export function migrateLegacySelection(
   return sel;
 }
 
+function parseModelMeta(raw: unknown): ModelMetaOverride | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  return cleanModelMeta(raw as ModelMetaOverride);
+}
+
+function parsePins(raw: unknown): PinEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PinEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const dbId = typeof rec.dbId === "string" ? rec.dbId.trim() : "";
+    const model = typeof rec.model === "string" ? rec.model.trim() : "";
+    if (!dbId || !model) continue;
+    const label =
+      typeof rec.label === "string" && rec.label.trim() ? rec.label.trim() : undefined;
+    out.push({ dbId, model, label });
+  }
+  return out;
+}
+
+function parseRecent(raw: unknown): RecentEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: RecentEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const dbId = typeof rec.dbId === "string" ? rec.dbId.trim() : "";
+    const model = typeof rec.model === "string" ? rec.model.trim() : "";
+    const at =
+      typeof rec.at === "number" && Number.isFinite(rec.at) ? Math.floor(rec.at) : 0;
+    if (!dbId || !model) continue;
+    out.push({ dbId, model, at });
+  }
+  return out;
+}
+
 export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
   const raw = readJsonFile(fs, path);
+  const varsRaw =
+    raw.vars && typeof raw.vars === "object" && !Array.isArray(raw.vars)
+      ? (raw.vars as Record<string, unknown>)
+      : undefined;
   return {
-    pageSize: typeof raw.pageSize === "number" ? raw.pageSize : undefined,
     tabs: Array.isArray(raw.tabs) ? raw.tabs.filter((t): t is string => typeof t === "string") : undefined,
     aliasCcs: typeof raw.aliasCcs === "boolean" ? raw.aliasCcs : undefined,
     sqlitePath: typeof raw.sqlitePath === "string" ? raw.sqlitePath : raw.sqlitePath === null ? null : undefined,
+    vars: varsRaw
+      ? {
+          codexVersion: typeof varsRaw.codexVersion === "string" ? varsRaw.codexVersion : undefined,
+          claudeCodeVersion:
+            typeof varsRaw.claudeCodeVersion === "string" ? varsRaw.claudeCodeVersion : undefined,
+          geminiVersion: typeof varsRaw.geminiVersion === "string" ? varsRaw.geminiVersion : undefined,
+          anthropicVersion:
+            typeof varsRaw.anthropicVersion === "string" ? varsRaw.anthropicVersion : undefined,
+          anthropicBeta: typeof varsRaw.anthropicBeta === "string" ? varsRaw.anthropicBeta : undefined,
+          codexOriginator:
+            typeof varsRaw.codexOriginator === "string" ? varsRaw.codexOriginator : undefined,
+        }
+      : undefined,
+    defaultModelMeta: parseModelMeta(raw.defaultModelMeta),
     providerOverrides:
       raw.providerOverrides && typeof raw.providerOverrides === "object"
         ? (raw.providerOverrides as PiSwitchConfig["providerOverrides"])
         : undefined,
+    pins: parsePins(raw.pins),
+    recent: parseRecent(raw.recent),
+    recentLimit: typeof raw.recentLimit === "number" && raw.recentLimit > 0
+      ? Math.floor(raw.recentLimit)
+      : undefined,
     debug: Boolean(raw.debug),
   };
+}
+
+// providerOverrideKeys / resolveProviderOverride live in provider-override.ts
+// (re-exported above) to break the settings ↔ model-meta cycle.
+
+// Re-export type for existing imports
+export type { ModelMetaOverride };
+
+/**
+ * Persist modelMeta for a provider under canonical dbId key.
+ * Pass modelMeta=null to clear only modelMeta (headers/label kept if present).
+ */
+export function writeProviderModelMeta(
+  fs: FsLike,
+  configPath: string,
+  provider: Pick<CcProvider, "id" | "displayName">,
+  modelMeta: ModelMetaOverride | null,
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const raw = readJsonFile(fs, configPath);
+    const overrides =
+      raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
+        ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
+        : {};
+
+    const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
+      ? { ...overrides[provider.id] }
+      : {}) as {
+      label?: string;
+      fingerprint?: FingerprintPreset;
+      headers?: Record<string, string>;
+      modelMeta?: ModelMetaOverride;
+    };
+
+    if (modelMeta === null) {
+      delete prev.modelMeta;
+      // Drop if nothing meaningful remains (label-only is not useful alone).
+      if (!prev.headers && !prev.modelMeta && !prev.fingerprint) {
+        delete overrides[provider.id];
+      } else {
+        overrides[provider.id] = prev;
+      }
+    } else {
+      if (typeof modelMeta.thinkingFormat === "string" && modelMeta.thinkingFormat.trim()) {
+        const fmt = modelMeta.thinkingFormat.trim();
+        if (!isThinkingFormat(fmt)) {
+          return {
+            ok: false,
+            error: `invalid thinkingFormat: ${fmt} (allowed: openai|openrouter|together|deepseek|zai|qwen|chat-template|qwen-chat-template|string-thinking|ant-ling)`,
+          };
+        }
+      }
+      const cleaned = cleanModelMeta(modelMeta);
+      if (!cleaned) {
+        delete prev.modelMeta;
+      } else {
+        prev.modelMeta = cleaned;
+      }
+      prev.label = prev.label ?? provider.displayName;
+      // Drop empty shell (no modelMeta/headers/fingerprint beyond default label-only)
+      if (!prev.modelMeta && !prev.headers && !prev.fingerprint) {
+        delete overrides[provider.id];
+      } else {
+        overrides[provider.id] = prev;
+      }
+    }
+
+    raw.providerOverrides = overrides;
+    writeJsonAtomic(fs, configPath, raw, pid);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function pinKey(dbId: string, model: string): string {
+  return `${dbId}::${model.trim()}`;
+}
+
+export function isPinned(pins: PinEntry[] | undefined, dbId: string, model: string): boolean {
+  const key = pinKey(dbId, model);
+  return (pins ?? []).some((p) => pinKey(p.dbId, p.model) === key);
+}
+
+/** Toggle a pin entry. Returns the new pins array. */
+export function togglePinEntry(
+  pins: PinEntry[] | undefined,
+  entry: PinEntry,
+): { pins: PinEntry[]; pinned: boolean } {
+  const list = [...(pins ?? [])];
+  const key = pinKey(entry.dbId, entry.model);
+  const idx = list.findIndex((p) => pinKey(p.dbId, p.model) === key);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+    return { pins: list, pinned: false };
+  }
+  list.unshift({
+    dbId: entry.dbId,
+    model: entry.model.trim(),
+    label: entry.label,
+  });
+  return { pins: list, pinned: true };
+}
+
+export function pushRecentEntry(
+  recent: RecentEntry[] | undefined,
+  entry: Omit<RecentEntry, "at"> & { at?: number },
+  limit = DEFAULT_RECENT_LIMIT,
+): RecentEntry[] {
+  const next: RecentEntry = {
+    dbId: entry.dbId,
+    model: entry.model.trim(),
+    at: entry.at ?? Date.now(),
+  };
+  const key = pinKey(next.dbId, next.model);
+  const filtered = (recent ?? []).filter((r) => pinKey(r.dbId, r.model) !== key);
+  return [next, ...filtered].slice(0, Math.max(1, limit));
+}
+
+/** Persist pins array (full replace). */
+export function writePins(
+  fs: FsLike,
+  configPath: string,
+  pins: PinEntry[],
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const raw = readJsonFile(fs, configPath);
+    raw.pins = pins;
+    writeJsonAtomic(fs, configPath, raw, pid);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Persist recent array (full replace). */
+export function writeRecent(
+  fs: FsLike,
+  configPath: string,
+  recent: RecentEntry[],
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const raw = readJsonFile(fs, configPath);
+    raw.recent = recent;
+    writeJsonAtomic(fs, configPath, raw, pid);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

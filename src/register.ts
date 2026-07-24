@@ -1,4 +1,4 @@
-import type { CcProvider, PiApi } from "./types.ts";
+import type { CcProvider, ModelMetaOverride, PiApi } from "./types.ts";
 import { API_MODEL_META, DEFAULT_MODEL_META } from "./types.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
@@ -13,16 +13,22 @@ export interface PiRegisterApi {
 }
 
 /** Model config with per-api tiered meta (SPEC review #4). */
-export function toModelConfig(modelId: string, api?: PiApi | null) {
+export function toModelConfig(
+  modelId: string,
+  api?: PiApi | null,
+  /** Per-provider overrides from pi-switch.json providerOverrides[dbId].modelMeta. */
+  meta?: ModelMetaOverride,
+) {
   const tier = api ? API_MODEL_META[api] : undefined;
   return {
     id: modelId,
     name: modelId,
-    reasoning: tier?.reasoning ?? true,
+    reasoning: meta?.reasoning ?? tier?.reasoning ?? true,
     input: (tier?.input ?? ["text"]) as ("text" | "image")[],
     cost: DEFAULT_MODEL_META.cost,
-    contextWindow: tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
-    maxTokens: tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
+    contextWindow: meta?.contextWindow ?? tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
+    maxTokens: meta?.maxTokens ?? tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
+    ...(meta?.thinkingFormat ? { thinkingFormat: meta.thinkingFormat } : {}),
   };
 }
 
@@ -32,21 +38,28 @@ export function buildProviderConfig(
   opts: {
     rules: HeaderRule[];
     overrideHeaders?: Record<string, string>;
+    /** fingerprint:"none" — skip defaults/provider-headers rules */
+    skipRules?: boolean;
     vars?: Record<string, string>;
     debug?: boolean;
+    onReject?: (name: string, reason: string) => void;
+    /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
+    modelMeta?: ModelMetaOverride;
   },
 ): Record<string, unknown> | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
-  const models = ids.filter(Boolean).map((id) => toModelConfig(id.trim(), provider.api));
+  const models = ids.filter(Boolean).map((id) => toModelConfig(id.trim(), provider.api, opts.modelMeta));
   if (!models.length) return undefined;
 
   const headers = mergeHeaders({
     api: provider.api,
     rules: opts.rules,
     overrideHeaders: opts.overrideHeaders,
+    skipRules: opts.skipRules,
     vars: opts.vars,
     debug: opts.debug,
+    onReject: opts.onReject,
   });
 
   return {
@@ -67,8 +80,11 @@ export function registerProvider(
   opts: {
     rules: HeaderRule[];
     overrideHeaders?: Record<string, string>;
+    skipRules?: boolean;
     vars?: Record<string, string>;
     debug?: boolean;
+    onReject?: (name: string, reason: string) => void;
+    modelMeta?: ModelMetaOverride;
   },
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);
@@ -81,7 +97,7 @@ export function registerProvider(
  * Commit order (SPEC §8.6):
  * 1. register candidate
  * 2. setModel
- * 3. on success unregister other ps-* (best-effort)
+ * 3. on success unregister other previous providers (best-effort)
  * 4. caller persists selection
  */
 export async function switchToProvider(opts: {
@@ -92,8 +108,11 @@ export async function switchToProvider(opts: {
   previousPsNames?: string[];
   rules: HeaderRule[];
   overrideHeaders?: Record<string, string>;
+  skipRules?: boolean;
   vars?: Record<string, string>;
   debug?: boolean;
+  onReject?: (name: string, reason: string) => void;
+  modelMeta?: ModelMetaOverride;
 }): Promise<{ ok: boolean; error?: string }> {
   const { pi, provider, modelId } = opts;
   const registered = registerProvider(pi, provider, [modelId], opts);
@@ -111,10 +130,10 @@ export async function switchToProvider(opts: {
     return { ok: false, error: `setModel failed: ${provider.piName} / ${modelId}` };
   }
 
-  // Cleanup other ps-* registrations
+  // Cleanup previous registrations (legacy ps-* and human-readable names)
   if (pi.unregisterProvider && opts.previousPsNames) {
     for (const name of opts.previousPsNames) {
-      if (name !== provider.piName && name.startsWith("ps-")) {
+      if (name !== provider.piName) {
         try {
           pi.unregisterProvider(name);
         } catch {

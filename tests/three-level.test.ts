@@ -3,6 +3,7 @@ import { buildTabs } from "../src/ui/tabs.ts";
 import { sortProviders } from "../src/ui/labels.ts";
 import type { CcProvider } from "../src/types.ts";
 import { isSwitchable } from "../src/parse/index.ts";
+import { formatFooterHints } from "../src/ui/three-level-pick.ts";
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -35,5 +36,41 @@ describe("three-level data wiring", () => {
     expect(names.map((p) => p.displayName)).toEqual(["alpha", "beta"]);
     expect(names[0].configModels).toEqual(["c1"]);
     expect(isSwitchable(names[0])).toBe(true);
+  });
+});
+
+describe("formatFooterHints override key", () => {
+  test("shows o override when name column revealed", () => {
+    const s = formatFooterHints(undefined, { revealed: 1, col: 1 });
+    expect(s).toContain("o");
+    expect(s).toContain("override");
+  });
+
+  test("hides o override on type-only view", () => {
+    const s = formatFooterHints(undefined, { revealed: 0, col: 0 });
+    expect(s).not.toContain("override");
+  });
+
+  test("shows p pin when model column revealed", () => {
+    const s = formatFooterHints(undefined, { revealed: 2, col: 2 });
+    expect(s).toContain("p");
+    expect(s).toContain("pin");
+  });
+
+  test("hides p pin before model column", () => {
+    const s = formatFooterHints(undefined, { revealed: 1, col: 1 });
+    expect(s).not.toContain("pin");
+  });
+});
+
+describe("sortProviders pin preference", () => {
+  test("pinned providers float above others (after lastUsed)", () => {
+    const providers = [
+      mk({ id: "1", displayName: "alpha", appType: "claude" }),
+      mk({ id: "2", displayName: "beta", appType: "claude" }),
+      mk({ id: "3", displayName: "gamma", appType: "claude" }),
+    ];
+    const sorted = sortProviders(providers, "1", ["3"]);
+    expect(sorted.map((p) => p.id)).toEqual(["1", "3", "2"]);
   });
 });

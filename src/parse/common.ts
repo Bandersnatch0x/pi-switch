@@ -13,17 +13,47 @@ export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Lowercase slug for appType segment of piName. */
+/**
+ * Lowercase slug for piName / appType segments.
+ * Keeps CJK so Chinese display names stay readable in the status bar.
+ */
 export function slug(s: string): string {
   return s
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-z0-9一-鿿]+/g, "-")
     .replace(/^-+|-+$/g, "") || "unknown";
 }
 
-/** Stable registration name: ps-<slug(appType)>-<full dbId> */
-export function makePiName(appType: string, dbId: string): string {
+/**
+ * Registration name shown in Pi status bar.
+ * Prefer human-readable displayName slug; fall back to stable ps-<appType>-<dbId>.
+ * Persistent identity remains dbId; piName is regenerative.
+ */
+export function makePiName(displayName: string, appType: string, dbId: string): string {
+  const fromName = slug(displayName);
+  if (fromName && fromName !== "unknown") return fromName;
   return `ps-${slug(appType)}-${dbId}`;
+}
+
+/**
+ * Ensure piNames are unique within a provider list.
+ * First occurrence keeps the readable base; later collisions get a short dbId suffix.
+ */
+export function uniquifyPiNames<T extends { id: string; piName: string }>(providers: T[]): T[] {
+  const used = new Set<string>();
+  return providers.map((p) => {
+    let name = p.piName;
+    if (used.has(name)) {
+      const short = p.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "x";
+      name = `${p.piName}-${short}`;
+      let i = 2;
+      while (used.has(name)) {
+        name = `${p.piName}-${short}-${i++}`;
+      }
+    }
+    used.add(name);
+    return name === p.piName ? p : { ...p, piName: name };
+  });
 }
 
 /** Read a `key = "value"` string assignment from a TOML fragment. */

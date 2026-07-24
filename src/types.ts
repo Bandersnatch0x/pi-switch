@@ -51,20 +51,98 @@ export interface PiSwitchSelection {
   provider?: string;
 }
 
+/** Optional CLI version / fingerprint overrides for UA templates. */
+export interface PiSwitchVars {
+  codexVersion?: string;
+  claudeCodeVersion?: string;
+  geminiVersion?: string;
+  anthropicVersion?: string;
+  anthropicBeta?: string;
+  codexOriginator?: string;
+}
+
+/** Force a CLI fingerprint preset regardless of api-matched default rules. */
+export type FingerprintPreset = "claude-code" | "codex" | "gemini" | "none";
+
+/** Per-provider model registration overrides (Pi model config fields). */
+export interface ModelMetaOverride {
+  reasoning?: boolean;
+  thinkingFormat?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+/** Local pin of a provider+model pair (not an expose center). */
+export interface PinEntry {
+  dbId: string;
+  model: string;
+  label?: string;
+}
+
+/** Last-N successful switches. */
+export interface RecentEntry {
+  dbId: string;
+  model: string;
+  at: number;
+}
+
 /** User config ~/.pi/agent/pi-switch.json */
 export interface PiSwitchConfig {
-  pageSize?: number;
   tabs?: string[];
   aliasCcs?: boolean;
   sqlitePath?: string | null;
+  /** Override detected codex/claude/gemini CLI versions used in User-Agent. */
+  vars?: PiSwitchVars;
+  /**
+   * Default modelMeta applied when a provider has no explicit override.
+   * Use for fleet-wide relay-safe defaults (e.g. reasoning:false).
+   */
+  defaultModelMeta?: ModelMetaOverride;
   providerOverrides?: Record<
     string,
     {
       label?: string;
+      /**
+       * Force a CLI fingerprint preset (claude-code / codex / gemini / none).
+       * Preset templates expand before explicit headers (explicit wins).
+       * `none` skips defaults/provider-headers rules so only explicit headers remain.
+       */
+      fingerprint?: FingerprintPreset;
       headers?: Record<string, string>;
+      /**
+       * Per-provider model meta overrides (e.g. reasoning:false for gateways
+       * that reject thinking/reasoning params, like a claude-protocol → GLM relay).
+       */
+      modelMeta?: ModelMetaOverride;
     }
   >;
+  /** Pinned provider/model shortcuts (local only). */
+  pins?: PinEntry[];
+  /** Recent successful switches (local only). */
+  recent?: RecentEntry[];
+  /** Max recent entries to keep (default 8). */
+  recentLimit?: number;
   debug?: boolean;
+}
+
+/** Pi SDK thinkingFormat literals (model-config.d.ts). Invalid values are rejected. */
+export const THINKING_FORMATS = [
+  "openai",
+  "openrouter",
+  "together",
+  "deepseek",
+  "zai",
+  "qwen",
+  "chat-template",
+  "qwen-chat-template",
+  "string-thinking",
+  "ant-ling",
+] as const;
+
+export type ThinkingFormat = (typeof THINKING_FORMATS)[number];
+
+export function isThinkingFormat(v: string): v is ThinkingFormat {
+  return (THINKING_FORMATS as readonly string[]).includes(v);
 }
 
 export interface HeaderRule {
@@ -123,10 +201,21 @@ export const API_MODEL_META: Record<PiApi, ApiModelMeta> = {
   },
 };
 
+/**
+ * Header allowlist — the ONLY header names pi-switch may inject or override.
+ *
+ * Defaults include fingerprint fields via defaults/headers.json templates:
+ * originator (codex), anthropic-version/beta (claude-code), x-goog-api-client
+ * (gemini). Overridable via providerOverrides.fingerprint / .headers / vars.
+ */
 export const HEADER_ALLOWLIST = new Set(
-  ["user-agent", "originator", "anthropic-version", "anthropic-beta"].map((s) =>
-    s.toLowerCase(),
-  ),
+  [
+    "user-agent",
+    "originator",
+    "anthropic-version",
+    "anthropic-beta",
+    "x-goog-api-client",
+  ].map((s) => s.toLowerCase()),
 );
 
 /** Canonical casing for allowed header names. */
@@ -135,8 +224,10 @@ export const HEADER_CANONICAL: Record<string, string> = {
   originator: "originator",
   "anthropic-version": "anthropic-version",
   "anthropic-beta": "anthropic-beta",
+  "x-goog-api-client": "x-goog-api-client",
 };
 
 export const SETTINGS_KEY = "piSwitchSelection";
 export const LEGACY_SETTINGS_KEY = "ccSwitchSelection";
 export const DEFAULT_PAGE_SIZE = 12;
+export const DEFAULT_RECENT_LIMIT = 8;
