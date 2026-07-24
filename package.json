@@ -1,0 +1,25 @@
+{
+  "name": "pi-switch",
+  "version": "0.1.0",
+  "description": "Pi extension: switch providers/models from cc-switch database",
+  "type": "module",
+  "private": true,
+  "pi": {
+    "extensions": ["./extensions/index.ts"]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT"
+}

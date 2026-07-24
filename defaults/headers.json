@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "name": "codex-cli",
+      "apis": [
+        "openai-responses",
+        "openai-completions",
+        "openai-codex-responses",
+        "azure-openai-responses"
+      ],
+      "headers": {
+        "User-Agent": "codex_cli_rs/{codexVersion} ({osInfo}) Terminal",
+        "originator": "codex_cli_rs"
+      }
+    },
+    {
+      "name": "claude-code",
+      "apis": ["anthropic-messages"],
+      "headers": {
+        "User-Agent": "claude-cli/{claudeCodeVersion} ({osInfo})",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+      }
+    },
+    {
+      "name": "gemini-cli",
+      "apis": ["google-generative-ai"],
+      "headers": {
+        "User-Agent": "gemini-cli/{geminiVersion} ({osInfo})"
+      }
+    }
+  ]
+}
