@@ -1,7 +1,7 @@
 # pi-switch
 
 [![CI](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/pi-switch?style=flat-square)](https://www.npmjs.com/package/pi-switch)
+[![npm](https://img.shields.io/npm/v/pi-ccs?style=flat-square)](https://www.npmjs.com/package/pi-ccs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 [English](./README.md) | 中文
@@ -124,7 +124,7 @@ pi-switch/
 ### 从 npm 安装（推荐）
 
 ```bash
-pi install npm:pi-switch
+pi install npm:pi-ccs
 ```
 
 当包以公开方式发布到 npm，且 `keywords` 包含 `pi-package`、`package.json` 中有合法的 `pi` 清单时，它也可能出现在 [Pi 包目录](https://pi.dev/packages)。目录没有单独的提交表单，主要依赖公开 npm 元数据自动发现。
@@ -132,7 +132,7 @@ pi install npm:pi-switch
 上架后的详情页形态：
 
 ```text
-https://pi.dev/packages/pi-switch
+https://pi.dev/packages/pi-ccs
 ```
 
 ### 从 GitHub 安装
@@ -146,7 +146,7 @@ pi install git:github.com/Bandersnatch0x/pi-switch
 ### 更新与启用
 
 ```bash
-pi update npm:pi-switch
+pi update npm:pi-ccs
 pi config
 ```
 

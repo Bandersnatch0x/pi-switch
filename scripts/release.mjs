@@ -48,7 +48,7 @@ function packageVersion() {
 }
 function packageName() {
   const name = packageJson().name;
-  return typeof name === "string" ? name : "pi-switch";
+  return typeof name === "string" ? name : "pi-ccs";
 }
 
 function checkTree() {

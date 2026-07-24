@@ -1,5 +1,5 @@
 {
-  "name": "pi-switch",
+  "name": "pi-ccs",
   "version": "0.1.0",
   "description": "Pi package: switch providers/models from local cc-switch, with parameter overrides and short display labels",
   "type": "module",

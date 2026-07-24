@@ -1,7 +1,7 @@
 # pi-switch
 
 [![CI](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/Bandersnatch0x/pi-switch/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/pi-switch?style=flat-square)](https://www.npmjs.com/package/pi-switch)
+[![npm](https://img.shields.io/npm/v/pi-ccs?style=flat-square)](https://www.npmjs.com/package/pi-ccs)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 English | [中文](./README-zh.md)
@@ -126,7 +126,7 @@ pi-switch/
 ### From npm (recommended)
 
 ```bash
-pi install npm:pi-switch
+pi install npm:pi-ccs
 ```
 
 After the package is published publicly on npm with the `pi-package` keyword, it can also appear in the [Pi package catalog](https://pi.dev/packages). There is no separate submission form — catalog discovery is based on public npm metadata (`keywords` includes `pi-package`, plus a valid `package.json` `pi` manifest).
@@ -134,7 +134,7 @@ After the package is published publicly on npm with the `pi-package` keyword, it
 Direct catalog page after listing:
 
 ```text
-https://pi.dev/packages/pi-switch
+https://pi.dev/packages/pi-ccs
 ```
 
 ### From GitHub
@@ -148,7 +148,7 @@ Git installs work even before npm / catalog listing.
 ### Update and enable
 
 ```bash
-pi update npm:pi-switch
+pi update npm:pi-ccs
 pi config
 ```
 
