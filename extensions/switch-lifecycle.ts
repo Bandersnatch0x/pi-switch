@@ -162,12 +162,10 @@ export function createSwitchLifecycle(
     };
     const persisted = rt.state.saveSelection(selection);
 
-    rt.reloadConfig();
-    const recentWritten = rt.state.recordRecent(
-      rt.config.recent,
-      { dbId: provider.id, model: modelId },
-      rt.config.recentLimit,
-    );
+    const recentWritten = rt.state.recordRecent({
+      dbId: provider.id,
+      model: modelId,
+    });
     if (!recentWritten.ok && rt.config.debug) {
       console.warn("[pi-switch] write recent failed:", recentWritten.error);
     }

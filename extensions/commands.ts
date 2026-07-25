@@ -6,10 +6,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CcProvider } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { isSwitchable } from "../src/parse/index.ts";
-import {
-  resolveProviderOverride,
-  type ModelMetaOverride,
-} from "../src/settings.ts";
+import type { ModelMetaOverride } from "../src/types.ts";
+import { resolveProviderOverride } from "../src/provider-override.ts";
 import { fetchRemoteModels } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
@@ -222,9 +220,7 @@ export async function runCommand(
     pins: rt.config.pins,
     recent: rt.config.recent,
     onTogglePin: (entry) => {
-      // Reload so concurrent edits aren't clobbered.
-      rt.reloadConfig();
-      const result = rt.state.togglePin(rt.config.pins, entry);
+      const result = rt.state.togglePin(entry);
       if (!result.ok) {
         throw new Error(result.error ?? "write pins failed");
       }

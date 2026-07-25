@@ -8,7 +8,7 @@
 
 import type { CcProvider } from "../types.ts";
 import { isThinkingFormat, THINKING_FORMATS } from "../types.ts";
-import type { ModelMetaOverride } from "../settings.ts";
+import type { ModelMetaOverride } from "../types.ts";
 import { MODEL_META_PRESETS, type ModelMetaPreset } from "../model-meta.ts";
 
 export type ModelMetaDialogUi = {

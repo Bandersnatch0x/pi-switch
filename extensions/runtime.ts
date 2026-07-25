@@ -6,11 +6,8 @@
 import type { CcProvider, HeaderRule, PiSwitchConfig } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
-import {
-  providerHeadersPath,
-  resolveProviderOverride,
-  type FsLike,
-} from "../src/settings.ts";
+import { providerHeadersPath, type FsLike } from "../src/settings.ts";
+import { resolveProviderOverride } from "../src/provider-override.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";

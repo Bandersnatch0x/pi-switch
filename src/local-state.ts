@@ -1,11 +1,11 @@
 import type {
   CcProvider,
+  ModelMetaOverride,
   PinEntry,
   PiSwitchConfig,
   PiSwitchSelection,
   RecentEntry,
 } from "./types.ts";
-import type { ModelMetaOverride } from "./settings.ts";
 import {
   migrateLegacySelection,
   piSettingsPath,
@@ -33,13 +33,10 @@ export interface LocalState {
     modelMeta: ModelMetaOverride | null,
   ): StateWriteResult;
   togglePin(
-    pins: PinEntry[] | undefined,
     entry: PinEntry,
   ): StateWriteResult & { pins: PinEntry[]; pinned: boolean };
   recordRecent(
-    recent: RecentEntry[] | undefined,
     entry: Omit<RecentEntry, "at"> & { at?: number },
-    limit?: number,
   ): StateWriteResult & { recent: RecentEntry[] };
 }
 
@@ -63,12 +60,18 @@ export function createLocalState(options: {
       writeSelection(fs, settingsPath, selection, pid),
     saveProviderModelMeta: (provider, modelMeta) =>
       writeProviderModelMeta(fs, configPath, provider, modelMeta, pid),
-    togglePin: (pins, entry) => {
-      const next = togglePinEntry(pins, entry);
+    togglePin: (entry) => {
+      const current = readPiSwitchConfig(fs, configPath);
+      const next = togglePinEntry(current.pins, entry);
       return { ...writePins(fs, configPath, next.pins, pid), ...next };
     },
-    recordRecent: (recent, entry, limit) => {
-      const next = pushRecentEntry(recent, entry, limit);
+    recordRecent: (entry) => {
+      const current = readPiSwitchConfig(fs, configPath);
+      const next = pushRecentEntry(
+        current.recent,
+        entry,
+        current.recentLimit,
+      );
       return { ...writeRecent(fs, configPath, next, pid), recent: next };
     },
   };

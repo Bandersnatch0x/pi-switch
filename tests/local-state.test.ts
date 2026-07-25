@@ -64,7 +64,7 @@ describe("local state interface", () => {
     const fs = memFs({ [configPath]: "{}" });
     const state = createLocalState({ fs, home, pid: 1 });
 
-    const result = state.togglePin(undefined, {
+    const result = state.togglePin({
       dbId: "abc",
       model: "gpt-5",
       label: "provider · gpt-5",
@@ -80,16 +80,17 @@ describe("local state interface", () => {
     const fs = memFs({ [configPath]: "{}" });
     const state = createLocalState({ fs, home, pid: 1 });
 
-    const first = state.recordRecent(undefined, {
+    const first = state.recordRecent({
       dbId: "abc",
       model: "gpt-5",
       at: 1,
-    }, 2);
-    const second = state.recordRecent(first.recent, {
+    });
+    expect(first.ok).toBe(true);
+    const second = state.recordRecent({
       dbId: "abc",
       model: "gpt-5",
       at: 2,
-    }, 2);
+    });
 
     expect(second).toMatchObject({ ok: true });
     expect(second.recent).toEqual([{ dbId: "abc", model: "gpt-5", at: 2 }]);
