@@ -123,6 +123,7 @@ pi-switch/
     db.ts
     sqlite-path.ts
     models-fetch.ts       # 对齐 cc-switch model_fetch 候选逻辑
+    local-state.ts        # selection/config 本地状态 interface
     doctor.ts             # /ps-doctor 结构化体检
     model-meta.ts         # register-time modelMeta 清洗
     provider-override.ts
