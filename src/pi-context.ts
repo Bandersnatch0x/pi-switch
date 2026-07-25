@@ -25,6 +25,7 @@ export type ModelRegistryLike = {
 /** Context with optional modelRegistry/model (commands + session handlers). */
 export type PiSwitchCtx = {
   ui: ExtensionUIContext;
+  mode?: ExtensionContext["mode"];
   modelRegistry?: ModelRegistryLike;
   model?: ActiveModelLike | null | undefined;
 };

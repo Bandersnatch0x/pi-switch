@@ -160,9 +160,10 @@ export async function threeLevelPick(
   ctx: PiSwitchCtx,
   opts: ThreeLevelPickOpts,
 ): Promise<ThreeLevelResult> {
-  if (typeof ctx.ui?.custom === "function") {
+  if (ctx.mode === "tui" && typeof ctx.ui?.custom === "function") {
     try {
-      return await threeLevelCustom(ctx, opts);
+      const result = await threeLevelCustom(ctx, opts);
+      if (result) return result;
     } catch (err) {
       console.error("[pi-switch] three-level custom UI failed:", err);
     }
