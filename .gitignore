@@ -34,3 +34,9 @@ Thumbs.db
 
 # Scratch
 .scratch/
+
+# Package tarballs
+*.tgz
+
+# Playwright CLI scratch
+.playwright-cli/

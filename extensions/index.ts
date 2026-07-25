@@ -2,7 +2,7 @@
  * pi-switch extension entry.
  *
  * Pure logic lives under ../src; runtime IO and command wiring live in
- * ./runtime.ts, ./commands.ts, ./bootstrap.ts.
+ * ./runtime.ts, ./commands.ts, ./switch-lifecycle.ts.
  * Runtime notes (from old cc-switch extension):
  *   - bun:sqlite is NOT available → shell out to sqlite3 CLI
  *   - node:* builtins must be dynamic-imported inside the async factory
@@ -11,8 +11,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveSqlitePath } from "../src/sqlite-path.ts";
 import { Runtime } from "./runtime.ts";
-import { bootstrap } from "./bootstrap.ts";
 import { registerCommands } from "./commands.ts";
+import { createSwitchLifecycle } from "./switch-lifecycle.ts";
 
 export default async function (pi: ExtensionAPI) {
   const [cp, fs, osMod] = await Promise.all([
@@ -49,6 +49,7 @@ export default async function (pi: ExtensionAPI) {
     rt.sqlite3Path = resolved.path;
   }
 
-  bootstrap(pi, rt);
-  registerCommands(pi, rt);
+  const lifecycle = createSwitchLifecycle(pi, rt);
+  lifecycle.install();
+  registerCommands(pi, rt, lifecycle);
 }

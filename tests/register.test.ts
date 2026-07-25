@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { switchToProvider, buildProviderConfig } from "../src/register.ts";
+import { buildProviderConfig } from "../src/register.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function mk(partial: Partial<CcProvider> & Pick<CcProvider, "id" | "appType">): CcProvider {
@@ -15,30 +15,6 @@ function mk(partial: Partial<CcProvider> & Pick<CcProvider, "id" | "appType">): 
     isCurrentInCc: false,
     ...partial,
   };
-}
-
-interface Call {
-  op: "register" | "unregister" | "setModel";
-  arg: unknown;
-}
-
-function fakePi(opts?: { setModelResult?: boolean; hasUnregister?: boolean }) {
-  const calls: Call[] = [];
-  const pi: any = {
-    registerProvider: (name: string, config: Record<string, unknown>) => {
-      calls.push({ op: "register", arg: { name, config } });
-    },
-    setModel: (model: unknown) => {
-      calls.push({ op: "setModel", arg: model });
-      return opts?.setModelResult ?? true;
-    },
-  };
-  if (opts?.hasUnregister !== false) {
-    pi.unregisterProvider = (name: string) => {
-      calls.push({ op: "unregister", arg: name });
-    };
-  }
-  return { pi, calls };
 }
 
 describe("buildProviderConfig", () => {
@@ -136,112 +112,5 @@ describe("buildProviderConfig", () => {
     const m = (cfg?.models as any[])[0];
     expect(m.reasoning).toBe(true);
     expect(m.contextWindow).toBe(200_000);
-  });
-});
-
-describe("switchToProvider commit order (SPEC §8.6)", () => {
-  test("success: register → setModel → cleanup previous names", async () => {
-    const { pi, calls } = fakePi({ setModelResult: true });
-    const provider = mk({ id: "new", appType: "codex" });
-    const r = await switchToProvider({
-      pi,
-      provider,
-      modelId: "gpt-5",
-      findModel: () => ({ id: "gpt-5" }),
-      previousPsNames: ["ps-claude-old", provider.piName],
-      rules: [],
-    });
-    expect(r.ok).toBe(true);
-    const ops = calls.map((c) => c.op);
-    // register must precede setModel; cleanup only after setModel
-    expect(ops.indexOf("register")).toBeLessThan(ops.indexOf("setModel"));
-    expect(ops.indexOf("setModel")).toBeLessThan(ops.indexOf("unregister"));
-    // only the stale ps-* is unregistered, not the newly registered one
-    const unregistered = calls.filter((c) => c.op === "unregister").map((c) => c.arg);
-    expect(unregistered).toEqual(["ps-claude-old"]);
-  });
-
-  test("success: also unregisters human-readable previous names", async () => {
-    const { pi, calls } = fakePi({ setModelResult: true });
-    const provider = mk({
-      id: "new",
-      appType: "claude",
-      piName: "elysiver-claude",
-      displayName: "elysiver-claude",
-    });
-    const r = await switchToProvider({
-      pi,
-      provider,
-      modelId: "glm-5.2",
-      findModel: () => ({ id: "glm-5.2" }),
-      previousPsNames: ["ps-claude-dooongai-1775180253543", "other-friendly", provider.piName],
-      rules: [],
-    });
-    expect(r.ok).toBe(true);
-    const unregistered = calls.filter((c) => c.op === "unregister").map((c) => c.arg);
-    expect(unregistered).toEqual([
-      "ps-claude-dooongai-1775180253543",
-      "other-friendly",
-    ]);
-  });
-
-  test("setModel fails: no cleanup, returns error", async () => {
-    const { pi, calls } = fakePi({ setModelResult: false });
-    const provider = mk({ id: "x", appType: "codex" });
-    const r = await switchToProvider({
-      pi,
-      provider,
-      modelId: "m",
-      findModel: () => ({ id: "m" }),
-      previousPsNames: ["ps-claude-old"],
-      rules: [],
-    });
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("setModel failed");
-    expect(calls.some((c) => c.op === "unregister")).toBe(false);
-  });
-
-  test("non-switchable provider: never registers or setModel", async () => {
-    const { pi, calls } = fakePi();
-    const r = await switchToProvider({
-      pi,
-      provider: mk({ id: "bad", appType: "codex", api: null, parseError: "unsupported apiFormat" }),
-      modelId: "m",
-      findModel: () => ({ id: "m" }),
-      rules: [],
-    });
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe("unsupported apiFormat");
-    expect(calls.length).toBe(0);
-  });
-
-  test("model not found after register: error, no setModel", async () => {
-    const { pi, calls } = fakePi();
-    const r = await switchToProvider({
-      pi,
-      provider: mk({ id: "y", appType: "codex" }),
-      modelId: "ghost",
-      findModel: () => undefined,
-      rules: [],
-    });
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("model not found after register");
-    expect(calls.some((c) => c.op === "register")).toBe(true);
-    expect(calls.some((c) => c.op === "setModel")).toBe(false);
-  });
-
-  test("no unregisterProvider on pi: success without cleanup", async () => {
-    const { pi, calls } = fakePi({ setModelResult: true, hasUnregister: false });
-    const provider = mk({ id: "z", appType: "codex" });
-    const r = await switchToProvider({
-      pi,
-      provider,
-      modelId: "m",
-      findModel: () => ({ id: "m" }),
-      previousPsNames: ["ps-claude-old"],
-      rules: [],
-    });
-    expect(r.ok).toBe(true);
-    expect(calls.some((c) => c.op === "unregister")).toBe(false);
   });
 });

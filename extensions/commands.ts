@@ -3,37 +3,22 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { CcProvider, PiSwitchSelection } from "../src/types.ts";
+import type { CcProvider } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import {
-  migrateLegacySelection,
-  piSettingsPath,
-  piSwitchConfigPath,
-  pushRecentEntry,
-  readSelection,
   resolveProviderOverride,
-  togglePinEntry,
-  writePins,
-  writeProviderModelMeta,
-  writeRecent,
-  writeSelection,
   type ModelMetaOverride,
 } from "../src/settings.ts";
-import { switchToProvider } from "../src/register.ts";
 import { fetchRemoteModels } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
-import {
-  activeProviderName,
-  asRegisterApi,
-  findRegisteredModel,
-  type PiSwitchCtx,
-} from "../src/pi-context.ts";
+import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
 import type { ModelMetaDialogUi } from "../src/ui/model-meta-dialog.ts";
 import type { Runtime } from "./runtime.ts";
+import type { SwitchLifecycle } from "./switch-lifecycle.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -53,19 +38,12 @@ function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
 
 async function persistAndMaybeReapplyMeta(
   rt: Runtime,
-  pi: ExtensionAPI,
+  lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   provider: CcProvider,
   modelMeta: ModelMetaOverride | null,
 ): Promise<boolean> {
-  const configPath = piSwitchConfigPath(rt.home);
-  const written = writeProviderModelMeta(
-    rt.fsLike(),
-    configPath,
-    provider,
-    modelMeta,
-    process.pid,
-  );
+  const written = rt.state.saveProviderModelMeta(provider, modelMeta);
   if (!written.ok) {
     ctx.ui?.notify?.(`参数覆写保存失败：${written.error}`, "error");
     return false;
@@ -74,8 +52,7 @@ async function persistAndMaybeReapplyMeta(
   rt.reloadConfig();
 
   // Re-apply immediately when this provider is currently registered/active.
-  const settingsPath = piSettingsPath(rt.home);
-  const sel = readSelection(rt.fsLike(), settingsPath);
+  const sel = rt.state.readSelection();
   const isActive =
     rt.registeredPsNames.includes(provider.piName) ||
     (sel?.dbId != null && sel.dbId === provider.id);
@@ -86,22 +63,11 @@ async function persistAndMaybeReapplyMeta(
         ? sel.model
         : provider.configModels[0];
     if (modelId) {
-      const result = await switchToProvider({
-        pi: asRegisterApi(pi),
-        provider,
-        modelId,
-        findModel: (p, m) => findRegisteredModel(ctx, p, m),
-        previousPsNames: rt.registeredPsNames,
-        rules: rt.headerRules,
-        ...rt.headerOverrideOpts(provider),
-        vars: rt.headerVars(),
-        debug: rt.config.debug,
-        onReject: rt.rejectSink(),
-        modelMeta: rt.modelMetaFor(provider),
-      });
-      if (result.ok) {
-        rt.registeredPsNames = [provider.piName];
-      } else {
+      const result = await lifecycle.activate(
+        { provider, modelId, commit: "runtime-only" },
+        ctx,
+      );
+      if (result.kind === "failed") {
         ctx.ui?.notify?.(
           `已保存覆写，但重新应用失败：${result.error}`,
           "warning",
@@ -120,7 +86,7 @@ async function persistAndMaybeReapplyMeta(
 
 async function openProviderOverride(
   rt: Runtime,
-  pi: ExtensionAPI,
+  lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   provider: CcProvider,
 ): Promise<void> {
@@ -136,7 +102,7 @@ async function openProviderOverride(
   if (result.kind === "cancel") return;
   await persistAndMaybeReapplyMeta(
     rt,
-    pi,
+    lifecycle,
     ctx,
     provider,
     result.kind === "clear" ? null : result.modelMeta,
@@ -145,7 +111,7 @@ async function openProviderOverride(
 
 export async function runOverrideCommand(
   rt: Runtime,
-  pi: ExtensionAPI,
+  lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
 ): Promise<void> {
   const { providers, error } = rt.refreshSnapshot();
@@ -156,9 +122,7 @@ export async function runOverrideCommand(
     return;
   }
 
-  const settingsPath = piSettingsPath(rt.home);
-  const sel = readSelection(rt.fsLike(), settingsPath);
-  const currentId = sel?.dbId;
+  const currentId = rt.state.readSelection()?.dbId;
 
   // Prefer current selection at top.
   const ordered = [
@@ -175,7 +139,7 @@ export async function runOverrideCommand(
   const idx = labels.indexOf(pick);
   const provider = ordered[idx];
   if (!provider) return;
-  await openProviderOverride(rt, pi, ctx, provider);
+  await openProviderOverride(rt, lifecycle, ctx, provider);
 }
 
 export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<void> {
@@ -186,8 +150,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   rt.headerVars();
 
   const { providers, error } = rt.refreshSnapshot();
-  const settingsPath = piSettingsPath(rt.home);
-  const sel = readSelection(rt.fsLike(), settingsPath);
+  const sel = rt.state.readSelection();
   const dbPath = defaultDbPath(rt.home);
 
   const report = runDoctor({
@@ -231,7 +194,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
 
 export async function runCommand(
   rt: Runtime,
-  pi: ExtensionAPI,
+  lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
 ): Promise<void> {
   rt.reloadConfig();
@@ -247,12 +210,7 @@ export async function runCommand(
     return;
   }
 
-  const settingsPath = piSettingsPath(rt.home);
-  const sel =
-    readSelection(rt.fsLike(), settingsPath) ??
-    migrateLegacySelection(rt.fsLike(), settingsPath, providers, process.pid);
-
-  const configPath = piSwitchConfigPath(rt.home);
+  const sel = rt.state.readOrMigrateSelection(providers);
 
   const picked = await threeLevelPick(ctx, {
     providers,
@@ -266,15 +224,12 @@ export async function runCommand(
     onTogglePin: (entry) => {
       // Reload so concurrent edits aren't clobbered.
       rt.reloadConfig();
-      const { pins, pinned } = togglePinEntry(rt.config.pins, entry);
-      const written = writePins(rt.fsLike(), configPath, pins, process.pid);
-      if (!written.ok) {
-        throw new Error(written.error ?? "write pins failed");
+      const result = rt.state.togglePin(rt.config.pins, entry);
+      if (!result.ok) {
+        throw new Error(result.error ?? "write pins failed");
       }
-      rt.config = { ...rt.config, pins };
-      // notify is done in picker; keep silent here
-      void pinned;
-      return pins;
+      rt.config = { ...rt.config, pins: result.pins };
+      return result.pins;
     },
     fetchRemote: async (provider) => {
       const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
@@ -291,54 +246,27 @@ export async function runCommand(
   });
   // Override path: custom TUI already closed; open dialog outside (H1).
   if (picked.kind === "override") {
-    await openProviderOverride(rt, pi, ctx, picked.provider);
+    await openProviderOverride(rt, lifecycle, ctx, picked.provider);
     return;
   }
   if (picked.kind !== "ok") return;
   const { provider, modelId } = picked;
 
-  const result = await switchToProvider({
-    pi: asRegisterApi(pi),
-    provider,
-    modelId,
-    findModel: (p, m) => findRegisteredModel(ctx, p, m),
-    previousPsNames: rt.registeredPsNames,
-    rules: rt.headerRules,
-    ...rt.headerOverrideOpts(provider),
-    vars: rt.headerVars(),
-    debug: rt.config.debug,
-    onReject: rt.rejectSink(),
-    modelMeta: rt.modelMetaFor(provider),
-  });
+  const result = await lifecycle.activate(
+    { provider, modelId, commit: "selection" },
+    ctx,
+  );
 
-  if (!result.ok) {
+  if (result.kind === "failed") {
     ctx.ui.notify(`切换失败：${result.error}`, "error");
     return;
   }
 
-  rt.registeredPsNames = [provider.piName];
-  const newSel: PiSwitchSelection = {
-    dbId: provider.id,
-    model: modelId,
-    tab: provider.appType,
-    appType: provider.appType,
-    provider: provider.piName,
-  };
-  const persisted = writeSelection(rt.fsLike(), settingsPath, newSel, process.pid);
-  // Track last-N recent (local only).
-  rt.reloadConfig();
-  const nextRecent = pushRecentEntry(
-    rt.config.recent,
-    { dbId: provider.id, model: modelId },
-    rt.config.recentLimit,
-  );
-  const recentWritten = writeRecent(rt.fsLike(), configPath, nextRecent, process.pid);
-  if (!recentWritten.ok && rt.config.debug) {
-    console.warn("[pi-switch] write recent failed:", recentWritten.error);
-  }
-
-  if (!persisted.ok) {
-    ctx.ui.notify(`已切换，本次选择未保存：${persisted.error}`, "warning");
+  if (result.persistence === "failed") {
+    ctx.ui.notify(
+      `已切换，本次选择未保存：${result.persistenceError}`,
+      "warning",
+    );
   } else {
     const metaHint = summarizeModelMeta(rt.modelMetaFor(provider));
     ctx.ui.notify(
@@ -352,11 +280,15 @@ export async function runCommand(
   );
 }
 
-export function registerCommands(pi: ExtensionAPI, rt: Runtime): void {
+export function registerCommands(
+  pi: ExtensionAPI,
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+): void {
   pi.registerCommand("ps-config", {
     description: "从 cc-switch 选择 Provider 与 Model 并切换（pin/recent 本地快捷）",
     handler: async (_args, ctx) => {
-      await runCommand(rt, pi, ctx);
+      await runCommand(rt, lifecycle, ctx);
     },
   });
 
@@ -364,7 +296,7 @@ export function registerCommands(pi: ExtensionAPI, rt: Runtime): void {
     pi.registerCommand("ccs", {
       description: "ps-config 别名",
       handler: async (_args, ctx) => {
-        await runCommand(rt, pi, ctx);
+        await runCommand(rt, lifecycle, ctx);
       },
     });
   }
@@ -372,7 +304,7 @@ export function registerCommands(pi: ExtensionAPI, rt: Runtime): void {
   pi.registerCommand("ps-override", {
     description: "为 Provider 设置 modelMeta 参数覆写（预设：中转兼容 / 完整推理）",
     handler: async (_args, ctx) => {
-      await runOverrideCommand(rt, pi, ctx);
+      await runOverrideCommand(rt, lifecycle, ctx);
     },
   });
 
