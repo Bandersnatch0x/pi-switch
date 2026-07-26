@@ -114,7 +114,7 @@ pi-switch/
     smoke.mjs             # doctor + 可选 models probe
   extensions/
     index.ts              # 唯一 extension 入口（薄壳）
-    bootstrap.ts          # 启动恢复
+    switch-lifecycle.ts   # 启动恢复与切换生命周期
     commands.ts           # /ps-config · /ps-override · /ps-doctor
     runtime.ts            # 运行时依赖装配
   src/
@@ -123,6 +123,7 @@ pi-switch/
     db.ts
     sqlite-path.ts
     models-fetch.ts       # 对齐 cc-switch model_fetch 候选逻辑
+    local-state.ts        # selection/config 本地状态 interface
     doctor.ts             # /ps-doctor 结构化体检
     model-meta.ts         # register-time modelMeta 清洗
     provider-override.ts

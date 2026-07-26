@@ -6,13 +6,9 @@
 import type { CcProvider, HeaderRule, PiSwitchConfig } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
-import {
-  piSwitchConfigPath,
-  providerHeadersPath,
-  readPiSwitchConfig,
-  resolveProviderOverride,
-  type FsLike,
-} from "../src/settings.ts";
+import { providerHeadersPath, type FsLike } from "../src/settings.ts";
+import { resolveProviderOverride } from "../src/provider-override.ts";
+import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
@@ -41,6 +37,7 @@ export type VarsSummary = {
 
 export class Runtime {
   readonly io: NodeIo;
+  readonly state: LocalState;
   lastGoodProviders: CcProvider[] = [];
   registeredPsNames: string[] = [];
   warnedMissingDbId = false;
@@ -54,6 +51,7 @@ export class Runtime {
 
   constructor(io: NodeIo) {
     this.io = io;
+    this.state = createLocalState({ fs: this.fsLike(), home: io.home });
   }
 
   get home(): string {
@@ -70,7 +68,7 @@ export class Runtime {
   }
 
   loadConfig(): PiSwitchConfig {
-    return readPiSwitchConfig(this.fsLike(), piSwitchConfigPath(this.home));
+    return this.state.readConfig();
   }
 
   reloadConfig(): PiSwitchConfig {
@@ -215,7 +213,7 @@ export class Runtime {
     return resolved;
   }
 
-  /** Spread into switchToProvider / registerProvider opts. */
+  /** Spread into lifecycle provider registration options. */
   headerOverrideOpts(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
     const resolved = this.overridesFor(provider);
     if (!resolved) return {};

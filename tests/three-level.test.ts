@@ -3,7 +3,11 @@ import { buildTabs } from "../src/ui/tabs.ts";
 import { sortProviders } from "../src/ui/labels.ts";
 import type { CcProvider } from "../src/types.ts";
 import { isSwitchable } from "../src/parse/index.ts";
-import { formatFooterHints } from "../src/ui/three-level-pick.ts";
+import {
+  formatFooterHints,
+  threeLevelPick,
+} from "../src/ui/three-level-pick.ts";
+import type { PiSwitchCtx } from "../src/pi-context.ts";
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -36,6 +40,34 @@ describe("three-level data wiring", () => {
     expect(names.map((p) => p.displayName)).toEqual(["alpha", "beta"]);
     expect(names[0].configModels).toEqual(["c1"]);
     expect(isSwitchable(names[0])).toBe(true);
+  });
+
+  test("RPC mode skips custom UI and uses select fallback", async () => {
+    let customCalls = 0;
+    let selectCalls = 0;
+    const ctx = {
+      mode: "rpc",
+      ui: {
+        custom: async () => {
+          customCalls += 1;
+          return undefined;
+        },
+        select: async () => {
+          selectCalls += 1;
+          return undefined;
+        },
+      },
+    } as unknown as PiSwitchCtx;
+
+    const result = await threeLevelPick(ctx, {
+      providers: [
+        mk({ id: "1", displayName: "alpha", appType: "claude" }),
+      ],
+    });
+
+    expect(result).toEqual({ kind: "cancel" });
+    expect(customCalls).toBe(0);
+    expect(selectCalls).toBe(1);
   });
 });
 
