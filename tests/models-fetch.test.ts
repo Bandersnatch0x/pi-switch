@@ -4,7 +4,24 @@ import {
   deriveFromFullUrl,
   mergeModelLists,
   extractModelIds,
+  fetchRemoteModels,
 } from "../src/models-fetch.ts";
+
+function recordingFetch(body: unknown) {
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  const fetchImpl = (async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args;
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    calls.push({ url, headers: new Headers(init?.headers) });
+    return Response.json(body);
+  }) as typeof fetch;
+  return { calls, fetchImpl };
+}
 
 describe("buildModelUrlCandidates", () => {
   test("modelsUrl override is sole candidate", () => {
@@ -32,6 +49,28 @@ describe("buildModelUrlCandidates", () => {
     expect(buildModelUrlCandidates({ baseUrl: "https://x.com" })).toEqual([
       "https://x.com/v1/models",
     ]);
+  });
+
+  test("native Gemini keeps an existing models endpoint", () => {
+    expect(
+      buildModelUrlCandidates({
+        api: "google-generative-ai",
+        authHeader: false,
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/models",
+      }),
+    ).toEqual(["https://generativelanguage.googleapis.com/v1beta/models"]);
+  });
+
+  test("native Gemini derives models endpoint from a full request URL", () => {
+    expect(
+      buildModelUrlCandidates({
+        api: "google-generative-ai",
+        authHeader: false,
+        baseUrl:
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        isFullUrl: true,
+      }),
+    ).toEqual(["https://generativelanguage.googleapis.com/v1beta/models"]);
   });
 
   test("compat suffix adds stripped candidates", () => {
@@ -105,5 +144,64 @@ describe("mergeModelLists", () => {
 describe("extractModelIds", () => {
   test("reads data[].id", () => {
     expect(extractModelIds({ data: [{ id: "m1" }, { id: "m2" }] })).toEqual(["m1", "m2"]);
+  });
+});
+
+describe("fetchRemoteModels protocol requests", () => {
+  test("native Anthropic API key uses x-api-key instead of Bearer", async () => {
+    const { calls, fetchImpl } = recordingFetch({ data: [{ id: "claude-sonnet-4" }] });
+
+    const result = await fetchRemoteModels({
+      api: "anthropic-messages",
+      authHeader: false,
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "secret",
+      fetchImpl,
+    });
+
+    expect(result.models).toEqual(["claude-sonnet-4"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.anthropic.com/v1/models");
+    expect(calls[0]?.headers.get("x-api-key")).toBe("secret");
+    expect(calls[0]?.headers.get("anthropic-version")).toBe("2023-06-01");
+    expect(calls[0]?.headers.get("authorization")).toBeNull();
+  });
+
+  test("native Gemini uses v1beta, x-goog-api-key, and models[].name", async () => {
+    const { calls, fetchImpl } = recordingFetch({
+      models: [{ name: "models/gemini-2.5-pro" }],
+    });
+
+    const result = await fetchRemoteModels({
+      api: "google-generative-ai",
+      authHeader: false,
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "secret",
+      fetchImpl,
+    });
+
+    expect(result.models).toEqual(["gemini-2.5-pro"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://generativelanguage.googleapis.com/v1beta/models");
+    expect(calls[0]?.headers.get("x-goog-api-key")).toBe("secret");
+    expect(calls[0]?.headers.get("authorization")).toBeNull();
+  });
+
+  test("Gemini-compatible gateway keeps OpenAI model discovery", async () => {
+    const { calls, fetchImpl } = recordingFetch({ data: [{ id: "gemini-2.5-pro" }] });
+
+    const result = await fetchRemoteModels({
+      api: "google-generative-ai",
+      authHeader: true,
+      baseUrl: "https://gateway.example.com",
+      apiKey: "secret",
+      fetchImpl,
+    });
+
+    expect(result.models).toEqual(["gemini-2.5-pro"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://gateway.example.com/v1/models");
+    expect(calls[0]?.headers.get("authorization")).toBe("Bearer secret");
+    expect(calls[0]?.headers.get("x-goog-api-key")).toBeNull();
   });
 });

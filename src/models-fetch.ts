@@ -1,3 +1,5 @@
+import type { PiApi } from "./types.ts";
+
 /**
  * Model list URL candidates — port of cc-switch model_fetch.rs
  * (commit a377d793…, see research/cc-switch-model-discovery.md).
@@ -25,6 +27,8 @@ const COMPAT_SUFFIXES = [
 ];
 
 export interface ModelFetchInput {
+  api?: PiApi | null;
+  authHeader?: boolean;
   baseUrl: string;
   apiKey: string;
   modelsUrl?: string;
@@ -36,6 +40,8 @@ export interface ModelFetchInput {
 
 /** Build ordered candidate URLs (deduped, first-seen wins). */
 export function buildModelUrlCandidates(input: {
+  api?: PiApi | null;
+  authHeader?: boolean;
   baseUrl: string;
   modelsUrl?: string;
   isFullUrl?: boolean;
@@ -45,6 +51,11 @@ export function buildModelUrlCandidates(input: {
 
   const base = trimBase(input.baseUrl);
   if (!base) return [];
+
+  if (input.api === "google-generative-ai" && input.authHeader === false) {
+    const derived = buildNativeGeminiModelsUrl(base, input.isFullUrl);
+    return derived ? [derived] : [];
+  }
 
   if (input.isFullUrl) {
     const derived = deriveFromFullUrl(base);
@@ -77,6 +88,16 @@ export function buildModelUrlCandidates(input: {
   }
 
   return candidates;
+}
+
+function buildNativeGeminiModelsUrl(base: string, isFullUrl?: boolean): string | undefined {
+  if (/\/v1(?:beta)?\/models$/i.test(base)) return base;
+  if (isFullUrl) {
+    const match = base.match(/^(.*\/v1(?:beta)?\/models)(?:\/.*)?$/i);
+    if (match?.[1]) return match[1];
+  }
+  if (/\/v1(?:beta)?$/i.test(base)) return `${base}/models`;
+  return `${base}/v1beta/models`;
 }
 
 function trimBase(url: string): string {
@@ -146,9 +167,7 @@ export async function fetchRemoteModels(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${input.apiKey}`,
-      };
+      const headers = buildModelRequestHeaders(input);
       if (input.userAgent) headers["User-Agent"] = input.userAgent;
 
       const res = await fetchImpl(url, { headers, signal: controller.signal });
@@ -175,6 +194,19 @@ export async function fetchRemoteModels(
   return { models: [], error: lastError };
 }
 
+function buildModelRequestHeaders(input: ModelFetchInput): Record<string, string> {
+  if (input.authHeader === false && input.api === "anthropic-messages") {
+    return {
+      "x-api-key": input.apiKey,
+      "anthropic-version": "2023-06-01",
+    };
+  }
+  if (input.authHeader === false && input.api === "google-generative-ai") {
+    return { "x-goog-api-key": input.apiKey };
+  }
+  return { Authorization: `Bearer ${input.apiKey}` };
+}
+
 export function extractModelIds(json: unknown): string[] {
   const root = json as { data?: unknown; models?: unknown };
   const list = Array.isArray(root?.data)
@@ -188,9 +220,12 @@ export function extractModelIds(json: unknown): string[] {
     let id: string | undefined;
     if (typeof m === "string") id = m.trim();
     else if (m && typeof m === "object") {
-      const rec = m as { id?: unknown; model?: unknown };
+      const rec = m as { id?: unknown; model?: unknown; name?: unknown };
       if (typeof rec.id === "string") id = rec.id.trim();
       else if (typeof rec.model === "string") id = rec.model.trim();
+      else if (typeof rec.name === "string" && rec.name.startsWith("models/")) {
+        id = rec.name.slice("models/".length).trim();
+      }
     }
     if (id && !seen.has(id)) {
       seen.add(id);

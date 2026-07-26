@@ -230,6 +230,8 @@ export async function runCommand(
     fetchRemote: async (provider) => {
       const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
       const r = await fetchRemoteModels({
+        api: provider.api,
+        authHeader: provider.authHeader,
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         modelsUrl: provider.modelsUrl,
