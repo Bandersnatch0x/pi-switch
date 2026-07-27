@@ -88,7 +88,10 @@ describe("key hint formatting", () => {
       "enter next 名称",
     );
     expect(formatFooterHints(undefined, { revealed: 0, col: 0 })).toContain(
-      "esc cancel",
+      "esc 退出",
+    );
+    expect(formatFooterHints(undefined, { revealed: 1, col: 1 })).toContain(
+      "esc 返回",
     );
     expect(formatFooterHints(undefined, { revealed: 1, col: 1 })).toContain(
       "←→ column",

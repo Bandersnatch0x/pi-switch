@@ -10,12 +10,12 @@
  *   ← →   switch among revealed columns (→ may open next level)
  *   ↑ ↓   move within column
  *   enter open next level / confirm model
- *   /     search in focused column
- *   m     manual model id
+ *   /     start in-picker search (no nested ui.input — avoids dismissing custom TUI)
+ *   m     in-picker manual model id (same: no nested ui.input)
  *   f     refresh models (remote)
  *   o     parameter override (when name/model revealed)
  *   p     toggle pin on current provider+model
- *   esc   cancel
+ *   esc   manual/search mode cancel; else clear filter; else pop level; exit at root
  *
  * Lines truncated via pi-tui visibleWidth / truncateToWidth.
  */
@@ -132,6 +132,27 @@ export function formatKeyHint(
   return `${dim(key)}${muted(` ${description}`)}`;
 }
 
+/**
+ * Pop one reveal level (Esc). Pure — used by the TUI and unit tests.
+ * - revealed≥2 → collapse model column
+ * - revealed=1 → collapse name column
+ * - revealed=0 → signal exit (caller finishes cancel)
+ */
+export function popPickerLevel(state: {
+  revealed: number;
+  col: number;
+}): { revealed: number; col: number; exit: boolean } {
+  const revealed = Math.max(0, Math.floor(state.revealed));
+  const col = Math.max(0, Math.min(2, Math.floor(state.col)));
+  if (revealed >= 2) {
+    return { revealed: 1, col: Math.min(col, 1), exit: false };
+  }
+  if (revealed === 1) {
+    return { revealed: 0, col: 0, exit: false };
+  }
+  return { revealed: 0, col: 0, exit: true };
+}
+
 export function formatFooterHints(
   theme?: ThemeLike,
   opts?: { revealed?: number; col?: number },
@@ -162,8 +183,31 @@ export function formatFooterHints(
   if (revealed >= 2) {
     parts.push(formatKeyHint(theme, "p", "pin"));
   }
-  parts.push(formatKeyHint(theme, "esc", "cancel"));
+  // Esc pops reveal depth; only type-only view exits the whole command.
+  parts.push(formatKeyHint(theme, "esc", revealed === 0 ? "退出" : "返回"));
   return parts.join(sep);
+}
+
+/** Footer while typing an in-picker search query. */
+export function formatSearchFooterHints(theme?: ThemeLike): string {
+  const sep =
+    typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
+  return [
+    formatKeyHint(theme, "type", "过滤"),
+    formatKeyHint(theme, "enter", "确认"),
+    formatKeyHint(theme, "esc", "取消搜索"),
+  ].join(sep);
+}
+
+/** Footer while typing a manual model id. */
+export function formatManualFooterHints(theme?: ThemeLike): string {
+  const sep =
+    typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
+  return [
+    formatKeyHint(theme, "type", "model id"),
+    formatKeyHint(theme, "enter", "切换"),
+    formatKeyHint(theme, "esc", "取消"),
+  ].join(sep);
 }
 
 export async function threeLevelPick(
@@ -210,6 +254,11 @@ async function threeLevelCustom(
     let nameScroll = 0;
     let modelScroll = 0;
     let query = "";
+    /** Inline search (do NOT use nested ctx.ui.input — it tears down custom TUI). */
+    let searchMode = false;
+    /** Inline manual model id entry (same nesting ban as search). */
+    let manualMode = false;
+    let manualDraft = "";
     const remoteById = new Map<string, string[]>();
     /** Live pin list; refreshed by onTogglePin without closing TUI. */
     let livePins: PinEntry[] = [...(opts.pins ?? [])];
@@ -427,10 +476,15 @@ async function threeLevelCustom(
         const realModels = models.filter((m) => m !== MANUAL && m !== FETCH).length;
         metaParts.push(`${realModels} 模型`);
       }
-      if (query) {
+      if (manualMode) {
+        metaParts.push(`手动 model "${manualDraft}█"`);
+      } else if (searchMode) {
+        metaParts.push(`搜索[${COL_LABELS[col]}] "${query}█"`);
+      } else if (query) {
         metaParts.push(`搜索[${COL_LABELS[col]}] "${query}"`);
       }
-      push(fg("dim", metaParts.join(" · ")));
+      const metaLine = metaParts.join(" · ");
+      push(manualMode || searchMode ? fg("accent", metaLine) : fg("dim", metaLine));
       push(border(width, "borderMuted"));
 
       // Headers only for revealed columns
@@ -570,7 +624,13 @@ async function threeLevelCustom(
       if (revealed >= 2) pos += ` · ${modelIdx + 1}/${Math.max(models.length, 1)}`;
       push(parts.join(arrow) + fg("dim", pos));
 
-      push(formatFooterHints(theme, { revealed, col }));
+      push(
+        manualMode
+          ? formatManualFooterHints(theme)
+          : searchMode
+            ? formatSearchFooterHints(theme)
+            : formatFooterHints(theme, { revealed, col }),
+      );
       push(border(width, "accent"));
 
       cache = out.map((l) => line(l, width));
@@ -581,6 +641,22 @@ async function threeLevelCustom(
     function invalidate() {
       cache = undefined;
       cacheWidth = -1;
+    }
+
+    /** Enter in-picker manual model entry (never nest ctx.ui.input). */
+    function beginManualEntry(): void {
+      const { provider } = current();
+      if (!provider || !isSwitchable(provider)) {
+        ctx.ui.notify("当前名称不可切换", "warning");
+        return;
+      }
+      searchMode = false;
+      manualMode = true;
+      // Soft default: first listed plain id (not MANUAL/FETCH).
+      const listed = listModels(provider).filter((m) => m !== MANUAL && m !== FETCH);
+      manualDraft = listed[0] ?? "";
+      invalidate();
+      tui.requestRender();
     }
 
     async function doFetch(p: CcProvider) {
@@ -608,8 +684,113 @@ async function threeLevelCustom(
     function handleInput(data: string) {
       if (disposed) return;
 
+      // --- In-picker manual model id (no nested ui.input) ---
+      if (manualMode) {
+        if (matchesKey(data, Key.escape)) {
+          manualMode = false;
+          manualDraft = "";
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          const id = manualDraft.trim();
+          if (!id) {
+            ctx.ui.notify("model id 不能为空", "warning");
+            return;
+          }
+          const { provider } = current();
+          if (!provider || !isSwitchable(provider)) {
+            ctx.ui.notify("当前名称不可切换", "warning");
+            manualMode = false;
+            invalidate();
+            tui.requestRender();
+            return;
+          }
+          finish({ kind: "ok", provider, modelId: id });
+          return;
+        }
+        if (data === "\x7f" || data === "\b") {
+          manualDraft = manualDraft.slice(0, -1);
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        if (data && data.length === 1 && data.charCodeAt(0) >= 32 && data !== "\x7f") {
+          manualDraft += data;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        return;
+      }
+
+      // --- In-picker search (no nested ui.input) ---
+      if (searchMode) {
+        if (matchesKey(data, Key.escape)) {
+          searchMode = false;
+          query = "";
+          if (col === 0) typeIdx = 0;
+          nameIdx = 0;
+          modelIdx = 0;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          // Commit filter; stay on picker with query applied.
+          searchMode = false;
+          query = query.trim();
+          if (col === 0) typeIdx = 0;
+          nameIdx = 0;
+          modelIdx = 0;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        if (data === "\x7f" || data === "\b") {
+          query = query.slice(0, -1);
+          if (col === 0) typeIdx = 0;
+          nameIdx = 0;
+          modelIdx = 0;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        if (data && data.length === 1 && data.charCodeAt(0) >= 32 && data !== "\x7f") {
+          query += data;
+          if (col === 0) typeIdx = 0;
+          nameIdx = 0;
+          modelIdx = 0;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        // Ignore arrows / other keys while typing the filter.
+        return;
+      }
+
       if (matchesKey(data, Key.escape)) {
-        finish({ kind: "cancel" });
+        // Clear active filter first (return to unfiltered list) before popping levels.
+        if (query) {
+          query = "";
+          if (col === 0) typeIdx = 0;
+          nameIdx = 0;
+          modelIdx = 0;
+          invalidate();
+          tui.requestRender();
+          return;
+        }
+        const next = popPickerLevel({ revealed, col });
+        if (next.exit) {
+          finish({ kind: "cancel" });
+          return;
+        }
+        revealed = next.revealed;
+        col = next.col;
+        query = "";
+        invalidate();
+        tui.requestRender();
         return;
       }
 
@@ -666,34 +847,16 @@ async function threeLevelCustom(
       }
 
       if (data === "/" || data === "?") {
-        void (async () => {
-          const scope = COL_LABELS[col];
-          const q = await ctx.ui.input(`搜索${scope}`, query);
-          query = q?.trim() ?? "";
-          if (col === 0) typeIdx = 0;
-          nameIdx = 0;
-          modelIdx = 0;
-          invalidate();
-          tui.requestRender();
-        })();
+        // Start inline search — live-filters the focused column without nested dialogs.
+        searchMode = true;
+        // Keep existing query so `/` again can refine; user Esc clears.
+        invalidate();
+        tui.requestRender();
         return;
       }
 
       if (data === "m" || data === "M") {
-        void (async () => {
-          const { provider } = current();
-          if (!provider || !isSwitchable(provider)) {
-            ctx.ui.notify("当前名称不可切换", "warning");
-            return;
-          }
-          const manual = await ctx.ui.input(
-            "输入 model id",
-            provider.configModels[0] ?? "",
-          );
-          if (manual?.trim()) {
-            finish({ kind: "ok", provider, modelId: manual.trim() });
-          }
-        })();
+        beginManualEntry();
         return;
       }
 
@@ -792,15 +955,7 @@ async function threeLevelCustom(
           return;
         }
         if (mid === MANUAL) {
-          void (async () => {
-            const manual = await ctx.ui.input(
-              "输入 model id",
-              provider.configModels[0] ?? "",
-            );
-            if (manual?.trim()) {
-              finish({ kind: "ok", provider, modelId: manual.trim() });
-            }
-          })();
+          beginManualEntry();
           return;
         }
         if (mid === FETCH) {

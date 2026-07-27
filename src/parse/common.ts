@@ -5,6 +5,16 @@ export function trimModelId(raw: string): string {
   return raw.trim();
 }
 
+/**
+ * cc-switch / Claude Code often tag 1M-context variants as `name[1M]` / `name[1m]`.
+ * pi-switch hides these in pickers: anyrouter (and similar) treat the gate via
+ * anthropic-beta, not via the bracket tag; listing both confuses selection.
+ * Registration still accepts an explicit manual id if the user types one.
+ */
+export function isBracket1mModelId(id: string): boolean {
+  return /\[1[Mm]\]\s*$/.test(id.trim());
+}
+
 export function stripTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "").trim();
 }

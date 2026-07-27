@@ -23,7 +23,9 @@
 
 import {
   cleanModelMeta,
+  inheritedModelMetaBelowExact,
   mergeModelMeta,
+  matchExactModelOverride,
   matchModelOverride,
   MODEL_META_PRESETS,
   type ModelMetaPreset,
@@ -108,7 +110,7 @@ export function storedFor(
 ): ModelMetaOverride | undefined {
   return s.kind === "provider"
     ? cleanModelMeta(input.providerMeta)
-    : matchModelOverride(input.modelOverrides ?? {}, s.modelId)?.modelMeta;
+    : matchExactModelOverride(input.modelOverrides ?? {}, s.modelId)?.modelMeta;
 }
 
 export function inheritedFor(
@@ -117,7 +119,12 @@ export function inheritedFor(
 ): ModelMetaOverride | undefined {
   return s.kind === "provider"
     ? cleanModelMeta(input.base)
-    : mergeModelMeta(input.base, input.providerMeta);
+    : inheritedModelMetaBelowExact(
+        input.base,
+        input.providerMeta,
+        input.modelOverrides,
+        s.modelId,
+      );
 }
 
 function ownInheritDefault(
@@ -427,8 +434,9 @@ export async function runModelMetaForm(
     return ui.confirm("未保存改动", "有未保存的修改，放弃并退出？");
   };
 
-  return ctx.ui!.custom!<ModelMetaDialogResult>((_tui: any, themeAny: any, _kb: any, done) => {
+  return ctx.ui!.custom!<ModelMetaDialogResult>((tuiAny: any, themeAny: any, _kb: any, done) => {
     let disposed = false;
+    const tui = tuiAny as { requestRender?: () => void };
     const theme = themeAny as {
       fg: (c: string, s: string) => string;
       bold: (s: string) => string;
@@ -484,6 +492,7 @@ export async function runModelMetaForm(
     function rerender(): void {
       renderCache = undefined;
       renderCacheWidth = -1;
+      tui?.requestRender?.();
     }
 
     function filteredItems(): SettingItem[] {
@@ -526,15 +535,22 @@ export async function runModelMetaForm(
         const marker = sel ? fg("accent", "›") : " ";
         const label = padR(it.label, maxLabelW);
         const labelText = sel ? fg("accent", bold(label as any)) : label;
-        const valText = sel ? fg("accent", it.currentValue as any) : fg("muted", it.currentValue as any);
-        const desc = it.description && sel ? fg("dim", `  → ${it.description}`) : "";
-        const valuePadded = "  " + padR(it.currentValue, Math.max(20, width - maxLabelW - 6));
-        push(`${marker} ${labelText}${valuePadded}${desc}`);
+        // Paint currentValue with accent when selected (was computed then unused).
+        const rawVal = it.currentValue;
+        const valuePadded = "  " + padR(rawVal, Math.max(20, width - maxLabelW - 6));
+        const valText = sel ? fg("accent", valuePadded as any) : fg("muted", valuePadded as any);
+        // Keep description only when it fits; avoid overwriting the value column.
+        const base = `${marker} ${labelText}${valText}`;
+        const desc =
+          it.description && sel && vw(base as any) < width - 12
+            ? fg("dim", `  → ${it.description}`)
+            : "";
+        push(`${base}${desc}`);
       }
       push(border(width, "dim"));
       const hint = queryActive
         ? fg("dim", "输入搜索 · Esc 关闭搜索")
-        : fg("dim", "Enter 切换/子菜单 · ↑↓ 选择 · / 搜索 · s 保存 · Esc 取消");
+        : fg("dim", "Enter 切换/子菜单 · ↑↓ 选择 · / 搜索 · s 保存 · Esc 返回");
       push(hint);
       return out;
     }
@@ -688,6 +704,11 @@ export async function runModelMetaForm(
     }
 
     async function onScopePick(value: string): Promise<void> {
+      // Switching scope reloads draft from disk layers; confirm before discard.
+      if (dirty() && !(await confirmDiscard())) {
+        closeSubmenu();
+        return;
+      }
       const r = parseScopePick(value);
       if (r.kind === "manual") {
         if (typeof ui.input === "function") {
@@ -765,6 +786,7 @@ export async function runModelMetaForm(
           void (async () => {
             const ok = await confirmDiscard();
             if (ok) finish({ kind: "cancel" });
+            else if (!disposed) rerender(); // nested confirm closed without discard
           })();
           return;
         }
@@ -787,6 +809,10 @@ export async function runModelMetaForm(
             return;
           }
           vm.inp.handleInput(data);
+          // Input mutates in place (typing); onSubmit/onEscape may close via
+          // callbacks. Always repaint while still on this view so the value
+          // is visible — without this, custom count looks frozen.
+          if (viewMode !== "main") rerender();
           return;
         }
         // other submenus (SelectList or confirm)
@@ -794,7 +820,19 @@ export async function runModelMetaForm(
           closeSubmenu();
           return;
         }
+        // Main form treats Space as activate; SelectList only binds Enter.
+        // Map Space → confirm so preset/count/scope submenus feel consistent.
+        if (matchesKey(data, "space")) {
+          const item = typeof vm.sl.getSelectedItem === "function" ? vm.sl.getSelectedItem() : null;
+          if (item && typeof vm.sl.onSelect === "function") vm.sl.onSelect(item);
+          if (viewMode !== "main") rerender();
+          return;
+        }
         vm.sl.handleInput(data);
+        // SelectList updates selectedIndex in place. onSelect → closeSubmenu
+        // already rerenders; up/down would otherwise leave renderCache stale
+        // so the › cursor never moves (user reports "无法修改").
+        if (viewMode !== "main") rerender();
         return;
       }
       // main view
@@ -806,20 +844,34 @@ export async function runModelMetaForm(
           return;
         }
         if (matchesKey(data, "enter")) {
+          // Capture the filtered hit BEFORE clearing search. Otherwise selIdx
+          // is re-interpreted against the full list and activates the wrong row.
+          const hit = filteredItems()[selIdx];
           queryActive = false;
-          activateMain();
+          query = "";
+          if (hit) {
+            const full = buildFormItems(input, scope, draft);
+            const fullIdx = full.findIndex((i) => i.id === hit.id);
+            if (fullIdx >= 0) selIdx = fullIdx;
+            activateMain();
+          }
+          if (!disposed && viewMode === "main") rerender();
           return;
         }
-        // type into query: accept printable chars
+        // Backspace / DEL before printable: \x7f has code 127 (>= 32) and would
+        // otherwise be appended to the query as a visible control char.
+        if (data === "\x7f" || data === "\b") {
+          query = query.slice(0, -1);
+          selIdx = 0;
+          rerender();
+          return;
+        }
+        // type into query: accept printable chars (exclude DEL handled above)
         const ch = data;
-        if (ch && ch.length === 1 && ch.charCodeAt(0) >= 32) {
+        if (ch && ch.length === 1 && ch.charCodeAt(0) >= 32 && ch !== "\x7f") {
           query += ch;
           selIdx = 0;
           scroll = 0;
-          rerender();
-        } else if (data === "\x7f" || data === "\b") {
-          query = query.slice(0, -1);
-          selIdx = 0;
           rerender();
         } else if (matchesKey(data, "up") || matchesKey(data, "down")) {
           const items = filteredItems();
@@ -865,6 +917,7 @@ export async function runModelMetaForm(
         void (async () => {
           const ok = await confirmDiscard();
           if (ok) finish({ kind: "cancel" });
+          else if (!disposed) rerender(); // nested confirm closed without discard
         })();
         return;
       }

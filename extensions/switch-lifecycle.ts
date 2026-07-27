@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { resolveListedModel } from "../src/models-fetch.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import {
   asRegisterApi,
@@ -67,8 +68,20 @@ export function createSwitchLifecycle(
     if (selection) {
       const provider = providers.find((item) => item.id === selection.dbId);
       if (provider && isSwitchable(provider)) {
-        if (register(provider, selection.model)) {
+        const modelId =
+          resolveListedModel(provider.configModels, selection.model) ?? selection.model;
+        if (register(provider, modelId)) {
           rt.registeredPsNames = [provider.piName];
+          // Persist plain id when selection still holds a filtered [1M] tag.
+          if (modelId !== selection.model) {
+            rt.state.saveSelection({
+              ...selection,
+              model: modelId,
+              tab: selection.tab ?? provider.appType,
+              appType: selection.appType ?? provider.appType,
+              provider: provider.piName,
+            });
+          }
         }
       } else {
         warnMissingSelection();
@@ -94,15 +107,26 @@ export function createSwitchLifecycle(
         return;
       }
 
-      if (!register(provider, current.model)) return;
+      const modelId =
+        resolveListedModel(provider.configModels, current.model) ?? current.model;
+      if (!register(provider, modelId)) return;
       rt.registeredPsNames = [provider.piName];
-      const model = findRegisteredModel(ctx, provider.piName, current.model);
+      const model = findRegisteredModel(ctx, provider.piName, modelId);
       if (!model) return;
       const activated = await pi.setModel(model as never);
       if (activated) {
+        if (modelId !== current.model) {
+          rt.state.saveSelection({
+            ...current,
+            model: modelId,
+            tab: current.tab ?? provider.appType,
+            appType: current.appType ?? provider.appType,
+            provider: provider.piName,
+          });
+        }
         ctx.ui?.setStatus?.(
           "pi-switch",
-          `${current.model} @ ${provider.appType}/${provider.displayName}`,
+          `${modelId} @ ${provider.appType}/${provider.displayName}`,
         );
       }
     });

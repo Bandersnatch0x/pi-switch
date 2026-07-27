@@ -26,6 +26,7 @@ description: 诊断 pi-switch 切换 Provider 后连接上游出现的报错（4
 | `429 rate_limit_exceeded` | 上游限流 | [§429](#429-限流) |
 | `502 Bad gateway` / `503 No available accounts` | 上游/中转侧故障，非本地问题 | [§5xx](#5xx-上游网关故障) |
 | `Connection error` / 切换后立刻断连 | UA 指纹被中转拒绝 | [§ua](#connection-error--ua-指纹) |
+| `400 ... 1m 上下文已经全量可用，请启用 1m 上下文` | anyrouter 等中转要求 `context-1m` beta | [§1m](#400-1m-上下文门闸) |
 | 模型列表拉取失败（`f` 刷新） | 候选 URL 算错 / 端点不开放 | [§fetch](#模型列表拉取失败) |
 
 ---
@@ -51,6 +52,35 @@ description: 诊断 pi-switch 切换 Provider 后连接上游出现的报错（4
 `<dbId>` 取自 `settings.json` 的 `piSwitchSelection.dbId`。改完 `/reload` 或重启 pi。
 
 **修复（兜底，全局）**：`settings.json` 里 `"defaultThinkingLevel": "off"`。缺点：会关掉所有 Provider 的 thinking（含真支持的 Claude/Grok），仅在多个 Provider 都不支持时才这么做。
+
+---
+
+## 400 1M 上下文门闸
+
+**报错**：`400 {"error":"1m 上下文已经全量可用，请启用 1m 上下文后重试","type":"error"}`
+
+**根因**：中转（典型：**anyrouter.top**）要求请求带 Anthropic 官方 beta
+`context-1m-2025-08-07`（完整字符串；日期是 beta 版本号，不是“今天”）。
+Claude Code 会自动加；Pi 默认 beta 不含此项。模型 id **不必**带 `[1M]` 也会触发。
+
+**pi-switch 行为**：注册时若 `baseUrl` 主机为 `anyrouter.top`（或子域）且协议为 `anthropic-messages`，自动把该 flag **合并**进 `anthropic-beta`，并把默认 `contextWindow` 设为 `1000000`（用户 `providerOverrides.modelMeta` 仍可覆盖）。
+
+**手工兜底**（非 anyrouter 主机但同样要求 1M 时）：
+
+```json
+{
+  "providerOverrides": {
+    "<dbId>": {
+      "headers": {
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,context-1m-2025-08-07"
+      },
+      "modelMeta": { "contextWindow": 1000000 }
+    }
+  }
+}
+```
+
+改完重新 `/ps-config` 切换或重启 pi 使注册生效。
 
 ---
 

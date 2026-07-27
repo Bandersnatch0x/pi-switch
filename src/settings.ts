@@ -13,7 +13,7 @@ import {
   SETTINGS_KEY,
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
-import { cleanModelMeta, matchModelOverride } from "./model-meta.ts";
+import { cleanModelMeta, matchExactModelOverride } from "./model-meta.ts";
 import {
   providerOverrideKeys,
   resolveProviderOverride,
@@ -303,8 +303,9 @@ export function writeModelMetaOverride(
       const modelId = scope.modelId.trim();
       if (!modelId) return { ok: false, error: "empty model id" };
       const map = { ...(prev.modelOverrides ?? {}) };
-      // Reuse the matched key (glob/case variant) so edits stay in one place.
-      const key = matchModelOverride(map, modelId)?.key ?? modelId;
+      // Reuse only a case-variant exact key. A concrete model edit must not
+      // mutate a matching glob that also affects sibling models.
+      const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
       const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
       if (!cleaned) delete map[key];
       else map[key] = cleaned;

@@ -8,7 +8,11 @@ import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
-import { fetchRemoteModels, mergeModelLists } from "../src/models-fetch.ts";
+import {
+  fetchRemoteModels,
+  mergeModelLists,
+  resolveListedModel,
+} from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
@@ -108,8 +112,10 @@ async function reapplyIfActive(
     (sel?.dbId != null && sel.dbId === provider.id);
   if (!isActive) return;
 
-  const modelId =
-    sel?.dbId === provider.id && sel.model ? sel.model : provider.configModels[0];
+  const modelId = resolveListedModel(
+    provider.configModels,
+    sel?.dbId === provider.id ? sel.model : undefined,
+  );
   if (!modelId) return;
 
   const result = await lifecycle.activate(
@@ -274,88 +280,93 @@ export async function runCommand(
   lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
 ): Promise<void> {
-  rt.reloadConfig();
   rt.reloadHeaderRules();
 
-  const { providers, error } = rt.refreshSnapshot();
-  if (error) ctx.ui.notify(error, "warning");
-  if (!providers.length) {
-    ctx.ui.notify(
-      "未找到 cc-switch provider（检查 ~/.cc-switch/cc-switch.db 或 CC_SWITCH_DB）",
-      "warning",
+  // Loop so `o` override returns to the picker (F contract). Esc at type-only exits.
+  // First pass and each resume after override reloads config + DB snapshot once.
+  while (true) {
+    rt.reloadConfig();
+    const { providers: live, error: snapErr } = rt.refreshSnapshot();
+    if (snapErr) ctx.ui.notify(snapErr, "warning");
+    if (!live.length) {
+      ctx.ui.notify(
+        "未找到 cc-switch provider（检查 ~/.cc-switch/cc-switch.db 或 CC_SWITCH_DB）",
+        "warning",
+      );
+      return;
+    }
+    const sel = rt.state.readOrMigrateSelection(live);
+
+    const picked = await threeLevelPick(ctx, {
+      providers: live,
+      preferredTab: sel?.tab ?? sel?.appType,
+      lastDbId: sel?.dbId,
+      lastModel: sel?.model,
+      activePiName: activeProviderName(ctx),
+      tabOrder: rt.config.tabs,
+      pins: rt.config.pins,
+      recent: rt.config.recent,
+      hasOverride: (provider, modelId) => rt.hasModelMetaOverride(provider, modelId),
+      onTogglePin: (entry) => {
+        const result = rt.state.togglePin(entry);
+        if (!result.ok) {
+          throw new Error(result.error ?? "write pins failed");
+        }
+        rt.config = { ...rt.config, pins: result.pins };
+        return result.pins;
+      },
+      fetchRemote: async (provider) => {
+        const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
+        const r = await fetchRemoteModels({
+          api: provider.api,
+          authHeader: provider.authHeader,
+          baseUrl: provider.baseUrl,
+          apiKey: provider.apiKey,
+          modelsUrl: provider.modelsUrl,
+          isFullUrl: provider.isFullUrl,
+          userAgent: ua,
+        });
+        if (r.error) throw new Error(r.error);
+        return r.models;
+      },
+    });
+
+    // Override path: custom TUI already closed; open form outside (H1), then resume picker.
+    if (picked.kind === "override") {
+      await openProviderOverride(rt, lifecycle, ctx, picked.provider, picked.modelId);
+      continue;
+    }
+    if (picked.kind !== "ok") return;
+    const { provider, modelId } = picked;
+
+    const result = await lifecycle.activate(
+      { provider, modelId, commit: "selection" },
+      ctx,
+    );
+
+    if (result.kind === "failed") {
+      ctx.ui.notify(`切换失败：${result.error}`, "error");
+      return;
+    }
+
+    if (result.persistence === "failed") {
+      ctx.ui.notify(
+        `已切换，本次选择未保存：${result.persistenceError}`,
+        "warning",
+      );
+    } else {
+      const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
+      ctx.ui.notify(
+        `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
+        "info",
+      );
+    }
+    ctx.ui.setStatus?.(
+      "pi-switch",
+      `${modelId} @ ${provider.appType}/${provider.displayName}`,
     );
     return;
   }
-
-  const sel = rt.state.readOrMigrateSelection(providers);
-
-  const picked = await threeLevelPick(ctx, {
-    providers,
-    preferredTab: sel?.tab ?? sel?.appType,
-    lastDbId: sel?.dbId,
-    lastModel: sel?.model,
-    activePiName: activeProviderName(ctx),
-    tabOrder: rt.config.tabs,
-    pins: rt.config.pins,
-    recent: rt.config.recent,
-    hasOverride: (provider, modelId) => rt.hasModelMetaOverride(provider, modelId),
-    onTogglePin: (entry) => {
-      const result = rt.state.togglePin(entry);
-      if (!result.ok) {
-        throw new Error(result.error ?? "write pins failed");
-      }
-      rt.config = { ...rt.config, pins: result.pins };
-      return result.pins;
-    },
-    fetchRemote: async (provider) => {
-      const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
-      const r = await fetchRemoteModels({
-        api: provider.api,
-        authHeader: provider.authHeader,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        modelsUrl: provider.modelsUrl,
-        isFullUrl: provider.isFullUrl,
-        userAgent: ua,
-      });
-      if (r.error) throw new Error(r.error);
-      return r.models;
-    },
-  });
-  // Override path: custom TUI already closed; open dialog outside (H1).
-  if (picked.kind === "override") {
-    await openProviderOverride(rt, lifecycle, ctx, picked.provider, picked.modelId);
-    return;
-  }
-  if (picked.kind !== "ok") return;
-  const { provider, modelId } = picked;
-
-  const result = await lifecycle.activate(
-    { provider, modelId, commit: "selection" },
-    ctx,
-  );
-
-  if (result.kind === "failed") {
-    ctx.ui.notify(`切换失败：${result.error}`, "error");
-    return;
-  }
-
-  if (result.persistence === "failed") {
-    ctx.ui.notify(
-      `已切换，本次选择未保存：${result.persistenceError}`,
-      "warning",
-    );
-  } else {
-    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
-    ctx.ui.notify(
-      `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
-      "info",
-    );
-  }
-  ctx.ui.setStatus?.(
-    "pi-switch",
-    `${modelId} @ ${provider.appType}/${provider.displayName}`,
-  );
 }
 
 export function registerCommands(

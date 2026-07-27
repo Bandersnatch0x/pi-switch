@@ -5,6 +5,9 @@ import type { CcProvider } from "../src/types.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import {
   formatFooterHints,
+  formatManualFooterHints,
+  formatSearchFooterHints,
+  popPickerLevel,
   threeLevelPick,
 } from "../src/ui/three-level-pick.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
@@ -71,11 +74,57 @@ describe("three-level data wiring", () => {
   });
 });
 
+describe("popPickerLevel (Esc stack)", () => {
+  test("pops model → name → type-only → exit", () => {
+    expect(popPickerLevel({ revealed: 2, col: 2 })).toEqual({
+      revealed: 1,
+      col: 1,
+      exit: false,
+    });
+    expect(popPickerLevel({ revealed: 2, col: 0 })).toEqual({
+      revealed: 1,
+      col: 0,
+      exit: false,
+    });
+    expect(popPickerLevel({ revealed: 1, col: 1 })).toEqual({
+      revealed: 0,
+      col: 0,
+      exit: false,
+    });
+    expect(popPickerLevel({ revealed: 0, col: 0 })).toEqual({
+      revealed: 0,
+      col: 0,
+      exit: true,
+    });
+  });
+});
+
 describe("formatFooterHints override key", () => {
   test("shows o override when name column revealed", () => {
     const s = formatFooterHints(undefined, { revealed: 1, col: 1 });
     expect(s).toContain("o");
     expect(s).toContain("override");
+  });
+
+  test("esc hint is 返回 when revealed, 退出 at root", () => {
+    expect(formatFooterHints(undefined, { revealed: 0, col: 0 })).toContain("esc 退出");
+    expect(formatFooterHints(undefined, { revealed: 1, col: 1 })).toContain("esc 返回");
+    expect(formatFooterHints(undefined, { revealed: 2, col: 2 })).toContain("esc 返回");
+    expect(formatFooterHints(undefined, { revealed: 2, col: 2 })).not.toContain("esc cancel");
+  });
+
+  test("search mode footer is distinct from nav footer", () => {
+    const s = formatSearchFooterHints(undefined);
+    expect(s).toContain("enter 确认");
+    expect(s).toContain("esc 取消搜索");
+    expect(s).not.toContain("esc 退出");
+  });
+
+  test("manual mode footer is distinct", () => {
+    const s = formatManualFooterHints(undefined);
+    expect(s).toContain("enter 切换");
+    expect(s).toContain("esc 取消");
+    expect(s).toContain("model id");
   });
 
   test("hides o override on type-only view", () => {

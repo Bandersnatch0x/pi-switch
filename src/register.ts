@@ -1,5 +1,9 @@
 import type { CcProvider, ModelMetaOverride, PiApi } from "./types.ts";
 import { API_MODEL_META, DEFAULT_MODEL_META } from "./types.ts";
+import {
+  applyAnyrouterHeaders,
+  applyAnyrouterModelMeta,
+} from "./headers/anyrouter.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
@@ -56,12 +60,14 @@ export function buildProviderConfig(
   const ids = modelIds.length ? modelIds : provider.configModels;
   const models = ids.filter(Boolean).map((raw) => {
     const id = raw.trim();
-    const meta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
+    const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
+    // anyrouter: default contextWindow=1M under user overrides (user wins).
+    const meta = applyAnyrouterModelMeta(provider.api, provider.baseUrl, userMeta);
     return toModelConfig(id, provider.api, meta);
   });
   if (!models.length) return undefined;
 
-  const headers = mergeHeaders({
+  let headers = mergeHeaders({
     api: provider.api,
     rules: opts.rules,
     overrideHeaders: opts.overrideHeaders,
@@ -70,6 +76,11 @@ export function buildProviderConfig(
     debug: opts.debug,
     onReject: opts.onReject,
   });
+  // anyrouter.top anthropic: merge official context-1m beta (Claude Code parity).
+  // fingerprint:"none" is an explicit request to keep only user headers.
+  if (!opts.skipRules) {
+    headers = applyAnyrouterHeaders(provider.api, provider.baseUrl, headers);
+  }
 
   return {
     name: provider.displayName,

@@ -1,3 +1,4 @@
+import { isBracket1mModelId, trimModelId } from "./parse/common.ts";
 import type { PiApi } from "./types.ts";
 
 /**
@@ -235,15 +236,45 @@ export function extractModelIds(json: unknown): string[] {
   return ids;
 }
 
-/** Merge config models (priority) with remote; exact-string dedupe. */
+/**
+ * Merge config models (priority) with remote; exact-string dedupe.
+ * Drops bracket-1M tags (`foo[1M]` / `foo[1m]`) so the picker only shows plain ids.
+ */
 export function mergeModelLists(configModels: string[], remote: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of [...configModels, ...remote]) {
-    const id = raw.trim();
-    if (!id || seen.has(id)) continue;
+    const id = trimModelId(raw);
+    if (!id || seen.has(id) || isBracket1mModelId(id)) continue;
     seen.add(id);
     out.push(id);
   }
   return out;
+}
+
+/** First usable model id for a provider (skips empty / bracket-1M). */
+export function firstListedModel(configModels: string[], remote: string[] = []): string | undefined {
+  return mergeModelLists(configModels, remote)[0];
+}
+
+/**
+ * Pick a model that appears in the filtered list.
+ * If `preferred` is a `foo[1M]` tag, prefer plain `foo` when listed.
+ */
+export function resolveListedModel(
+  configModels: string[],
+  preferred?: string | null,
+  remote: string[] = [],
+): string | undefined {
+  const listed = mergeModelLists(configModels, remote);
+  if (!listed.length) return undefined;
+  const want = preferred?.trim();
+  if (want) {
+    if (!isBracket1mModelId(want) && listed.includes(want)) return want;
+    if (isBracket1mModelId(want)) {
+      const plain = want.replace(/\[1[Mm]\]\s*$/, "").trim();
+      if (plain && listed.includes(plain)) return plain;
+    }
+  }
+  return listed[0];
 }

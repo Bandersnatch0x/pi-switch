@@ -68,6 +68,36 @@ describe("scope helpers", () => {
     });
   });
 
+  test("inheritedFor at model scope includes matching glob (not exact)", () => {
+    const input = baseInput({
+      base: { reasoning: true } as ModelMetaOverride,
+      providerMeta: { maxTokens: 8_000 } as ModelMetaOverride,
+      modelOverrides: {
+        "gpt-5*": { contextWindow: 400_000 },
+        "gpt-5-pro": { reasoning: false },
+      },
+    });
+    // Only glob → inherit shows glob fields
+    expect(
+      inheritedFor(
+        { ...input, modelOverrides: { "gpt-5*": { contextWindow: 400_000 } } },
+        { kind: "model", modelId: "gpt-5-pro" },
+      ),
+    ).toEqual({
+      reasoning: true,
+      maxTokens: 8_000,
+      contextWindow: 400_000,
+    });
+    // Exact key exists → glob not treated as inherit (exact is stored/own)
+    expect(inheritedFor(input, { kind: "model", modelId: "gpt-5-pro" })).toEqual({
+      reasoning: true,
+      maxTokens: 8_000,
+    });
+    expect(storedFor(input, { kind: "model", modelId: "gpt-5-pro" })).toEqual({
+      reasoning: false,
+    });
+  });
+
   test("sameMeta compares by cleaned sorted keys", () => {
     expect(sameMeta({ reasoning: true }, { reasoning: true })).toBe(true);
     expect(sameMeta({ reasoning: true }, { reasoning: false })).toBe(false);

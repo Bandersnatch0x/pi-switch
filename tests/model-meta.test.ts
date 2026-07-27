@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import {
   cleanModelMeta,
   countModelOverrides,
+  matchExactModelOverride,
   matchModelOverride,
   mergeModelMeta,
   resolveModelMetaLayers,
@@ -129,6 +130,24 @@ describe("matchModelOverride", () => {
   });
 });
 
+describe("matchExactModelOverride", () => {
+  const map = {
+    "glm-4.6": { reasoning: false },
+    "gpt-5*": { maxTokens: 128_000 },
+    "Claude-Sonnet": { reasoning: true },
+  };
+
+  test("exact and case-insensitive exact only — never globs", () => {
+    expect(matchExactModelOverride(map, "glm-4.6")?.key).toBe("glm-4.6");
+    expect(matchExactModelOverride(map, "claude-sonnet")?.key).toBe("Claude-Sonnet");
+    expect(matchExactModelOverride(map, "gpt-5-pro")).toBeUndefined();
+    expect(matchExactModelOverride(map, "gpt-5*")).toEqual({
+      key: "gpt-5*",
+      modelMeta: { maxTokens: 128_000 },
+    });
+  });
+});
+
 describe("model-scope layering", () => {
   const config = {
     defaultModelMeta: { reasoning: false, contextWindow: 128_000 },
@@ -169,8 +188,16 @@ describe("model-scope layering", () => {
     expect(layers.provider).toEqual({ contextWindow: 200_000 });
     expect(layers.model).toEqual({ maxTokens: 8_192 });
     expect(layers.modelKey).toBe("glm-4.6");
+    // Exact model key → inherit is base ⊕ provider only (exact is own layer).
     expect(layers.inheritedForModel).toEqual({
       reasoning: false,
+      contextWindow: 200_000,
+    });
+    // Glob-only match → inherit includes the glob fields for UI display.
+    const globLayers = resolveModelMetaLayers(config, provider, "gpt-5-pro");
+    expect(globLayers.modelKey).toBe("gpt-5*");
+    expect(globLayers.inheritedForModel).toEqual({
+      reasoning: true,
       contextWindow: 200_000,
     });
   });

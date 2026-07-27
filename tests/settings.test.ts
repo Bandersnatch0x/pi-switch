@@ -301,7 +301,8 @@ describe("per-model modelMeta overrides", () => {
     });
   });
 
-  test("model scope reuses matched glob key instead of adding a literal", () => {
+  test("model scope writes exact id without rewriting a matching glob", () => {
+    // Editing gpt-5-pro must not clobber the broader gpt-5* rule.
     const fs = memFs({
       "/c.json": JSON.stringify({
         providerOverrides: { abc: { modelOverrides: { "gpt-5*": { reasoning: true } } } },
@@ -316,8 +317,12 @@ describe("per-model modelMeta overrides", () => {
       7,
     );
     const raw = JSON.parse(fs.store["/c.json"]);
-    expect(Object.keys(raw.providerOverrides.abc.modelOverrides)).toEqual(["gpt-5*"]);
-    expect(raw.providerOverrides.abc.modelOverrides["gpt-5*"]).toEqual({
+    expect(Object.keys(raw.providerOverrides.abc.modelOverrides).sort()).toEqual([
+      "gpt-5*",
+      "gpt-5-pro",
+    ]);
+    expect(raw.providerOverrides.abc.modelOverrides["gpt-5*"]).toEqual({ reasoning: true });
+    expect(raw.providerOverrides.abc.modelOverrides["gpt-5-pro"]).toEqual({
       reasoning: false,
     });
   });

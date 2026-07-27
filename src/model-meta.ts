@@ -120,20 +120,35 @@ export function matchModelOverride(
   const id = modelId?.trim();
   if (!id) return undefined;
 
-  if (Object.prototype.hasOwnProperty.call(modelOverrides, id)) {
-    return { key: id, modelMeta: cleanModelMeta(modelOverrides[id]) };
-  }
+  const exact = matchExactModelOverride(modelOverrides, id);
+  if (exact) return exact;
 
   const entries = Object.entries(modelOverrides);
-  const ci = entries.find(([k]) => k.toLowerCase() === id.toLowerCase());
-  if (ci) return { key: ci[0], modelMeta: cleanModelMeta(ci[1]) };
-
   const globs = entries
     .filter(([k]) => k.includes("*") && globToRegExp(k).test(id))
     .sort((a, b) => globSpecificity(b[0]) - globSpecificity(a[0]));
   const hit = globs[0];
   if (!hit) return undefined;
   return { key: hit[0], modelMeta: cleanModelMeta(hit[1]) };
+}
+
+/** Pick only an exact modelOverrides key (case-insensitive), never a matching glob. */
+export function matchExactModelOverride(
+  modelOverrides: Record<string, ModelMetaOverride> | undefined,
+  modelId: string | undefined,
+): { key: string; modelMeta: ModelMetaOverride | undefined } | undefined {
+  if (!modelOverrides || typeof modelOverrides !== "object") return undefined;
+  const id = modelId?.trim();
+  if (!id) return undefined;
+
+  if (Object.prototype.hasOwnProperty.call(modelOverrides, id)) {
+    return { key: id, modelMeta: cleanModelMeta(modelOverrides[id]) };
+  }
+
+  const ci = Object.entries(modelOverrides).find(
+    ([key]) => key.toLowerCase() === id.toLowerCase(),
+  );
+  return ci ? { key: ci[0], modelMeta: cleanModelMeta(ci[1]) } : undefined;
 }
 
 export interface ModelMetaLayers {
@@ -147,8 +162,30 @@ export interface ModelMetaLayers {
   modelKey?: string;
   /** base ⊕ provider ⊕ model */
   effective: ModelMetaOverride | undefined;
-  /** base ⊕ provider — what a model-scope edit inherits. */
+  /**
+   * What a model-scope *exact* edit inherits:
+   * base ⊕ provider ⊕ (glob-only match when no exact key for this id).
+   * Exact modelOverrides are the "own" layer, not inherited.
+   */
   inheritedForModel: ModelMetaOverride | undefined;
+}
+
+/**
+ * Layers below a model-scope exact override.
+ * When only a glob matches `modelId`, include that glob as inherit (read-only
+ * display); never treat an exact key as inherit — that is the draft/own layer.
+ */
+export function inheritedModelMetaBelowExact(
+  base: ModelMetaOverride | undefined,
+  providerMeta: ModelMetaOverride | undefined,
+  modelOverrides: Record<string, ModelMetaOverride> | undefined,
+  modelId: string | undefined,
+): ModelMetaOverride | undefined {
+  const below = mergeModelMeta(base, providerMeta);
+  if (!modelId?.trim()) return below;
+  if (matchExactModelOverride(modelOverrides, modelId)) return below;
+  const matched = matchModelOverride(modelOverrides, modelId);
+  return mergeModelMeta(below, matched?.modelMeta);
 }
 
 /** Full layer breakdown for one provider(+model). Used by dialog and doctor. */
@@ -168,7 +205,12 @@ export function resolveModelMetaLayers(
     model: modelMeta,
     modelKey: matched?.key,
     effective: mergeModelMeta(base, providerMeta, modelMeta),
-    inheritedForModel: mergeModelMeta(base, providerMeta),
+    inheritedForModel: inheritedModelMetaBelowExact(
+      base,
+      providerMeta,
+      entry?.modelOverrides,
+      modelId,
+    ),
   };
 }
 

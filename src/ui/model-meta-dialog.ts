@@ -15,7 +15,9 @@ import { THINKING_FORMATS } from "../types.ts";
 import type { ModelMetaOverride } from "../types.ts";
 import {
   cleanModelMeta,
+  inheritedModelMetaBelowExact,
   mergeModelMeta,
+  matchExactModelOverride,
   matchModelOverride,
   MODEL_META_PRESETS,
   type ModelMetaPreset,
@@ -129,13 +131,18 @@ export async function runModelMetaDialog(
   const storedFor = (s: ModelMetaScope): ModelMetaOverride | undefined =>
     s.kind === "provider"
       ? cleanModelMeta(input.providerMeta)
-      : matchModelOverride(modelOverrides, s.modelId)?.modelMeta;
+      : matchExactModelOverride(modelOverrides, s.modelId)?.modelMeta;
 
-  /** Layers below the current scope. */
+  /** Layers below the current scope (model: base ⊕ provider ⊕ glob-only). */
   const inheritedFor = (s: ModelMetaScope): ModelMetaOverride | undefined =>
     s.kind === "provider"
       ? cleanModelMeta(input.base)
-      : mergeModelMeta(input.base, input.providerMeta);
+      : inheritedModelMetaBelowExact(
+          input.base,
+          input.providerMeta,
+          modelOverrides,
+          s.modelId,
+        );
 
   let stored = storedFor(scope);
   let draft: ModelMetaOverride = { ...(stored ?? {}) };

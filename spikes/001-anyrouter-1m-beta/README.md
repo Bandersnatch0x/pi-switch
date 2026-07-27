@@ -10,8 +10,8 @@ Also: is Pi-local `contextWindow` override enough by itself? (It is **not** sent
 
 - pi-switch already supports `modelMeta.contextWindow` overrides.
 - Pi / pi-switch do **not** auto-add `context-1m-2025-08-07` from `contextWindow`.
-- Community maps  
-  `1m 上下文已经全量可用，请启用1m 上下文后重试`  
+- Community maps
+  `1m 上下文已经全量可用，请启用1m 上下文后重试`
   to missing `context-1m` beta.
 - Prove the header actually changes anyrouter’s response class **before** product code.
 
@@ -77,7 +77,15 @@ Focused PowerShell re-check (same pair): with context-1m → **503** (×3); defa
 - No HTTP 2xx SUCCESS on any profile with these two keys today.
 - `contextWindow` cannot be A/B’d against the gateway (not on the wire). Local override remains orthogonal.
 
-## Verdict: **PARTIAL**
+## Product follow-up (2026-07-28)
+
+Implemented in `src/headers/anyrouter.ts` + `register.ts`: when
+`baseUrl` host is `anyrouter.top` and `api === anthropic-messages`, registration
+auto-merges `context-1m-2025-08-07` into `anthropic-beta` and defaults
+`contextWindow` to 1M (user overrides still win). Live Pi A/B on
+`anyrouter copy` + `claude-fable-5`: NEED_1M → cleared (then 503 upstream).
+
+## Verdict: **PARTIAL** (spike) / product adapt **shipped for anyrouter.top**
 
 ### What worked
 

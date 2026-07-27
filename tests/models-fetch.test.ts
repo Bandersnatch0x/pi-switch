@@ -2,9 +2,11 @@ import { test, expect, describe } from "bun:test";
 import {
   buildModelUrlCandidates,
   deriveFromFullUrl,
-  mergeModelLists,
   extractModelIds,
   fetchRemoteModels,
+  firstListedModel,
+  mergeModelLists,
+  resolveListedModel,
 } from "../src/models-fetch.ts";
 
 function recordingFetch(body: unknown) {
@@ -138,6 +140,27 @@ describe("deriveFromFullUrl", () => {
 describe("mergeModelLists", () => {
   test("config first exact dedupe preserves case", () => {
     expect(mergeModelLists(["A", "b"], ["b", "C", "A"])).toEqual(["A", "b", "C"]);
+  });
+
+  test("filters bracket 1M / 1m model tags", () => {
+    expect(
+      mergeModelLists(
+        ["claude-opus-5", "claude-opus-5[1M]", "claude-fable-5[1m]"],
+        ["claude-opus-5[1M]", "other"],
+      ),
+    ).toEqual(["claude-opus-5", "other"]);
+  });
+});
+
+describe("resolveListedModel", () => {
+  test("maps preferred [1M] tag to plain id when listed", () => {
+    expect(
+      resolveListedModel(["claude-opus-5", "claude-opus-5[1M]"], "claude-opus-5[1M]"),
+    ).toBe("claude-opus-5");
+  });
+
+  test("firstListedModel skips tags", () => {
+    expect(firstListedModel(["x[1M]", "y"])).toBe("y");
   });
 });
 
