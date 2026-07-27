@@ -393,16 +393,19 @@ export function formTitle(
 }
 
 /**
- * Interactive TUI editor. Returns the same result shape as the fallback.
+ * Interactive TUI editor — hand-written render + handleInput matching the
+ * three-level-pick visual style (─ border, › row markers, dim meta).
+ * Returns the same result shape as the fallback.
  * Caller (`openProviderOverride`) guards with `mode === "tui"` and
  * `typeof ctx.ui?.custom === "function"`, and falls back on any failure.
  *
- * Structure: one `Container` root. The main view mounts a header `Text` +
- * `SettingsList` + footer `Text`. Submenus clear the root and mount a
- * `SelectList` (or an `Input` for custom count). Returning to the main view
- * re-mounts header + the *same* SettingsList instance (state preserved) +
- * footer, and calls `list.updateValue(id, val)` for changed rows so the list
- * re-renders without losing selection.
+ * Single view with two modes sharing one state closure:
+ *   - "main": bordered list rendered by `renderMain()` — title + meta + rows
+ *     from `buildFormItems`. ↑↓ navigate; Enter/Space activate (cycle
+ *     reasoning values, open SelectList submenu, save/cancel).
+ *   - submenu: `renderSubmenu()` wraps a `SelectList` or `Input` inside the
+ *     same border frame; Esc closes back to main.
+ * `renderCache` is cleared on every state change via `rerender()`.
  */
 export async function runModelMetaForm(
   ctx: PiSwitchCtx,
