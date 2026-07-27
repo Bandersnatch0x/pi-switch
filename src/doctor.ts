@@ -5,7 +5,12 @@
 
 import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEntry } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
-import { summarizeModelMeta, resolveEffectiveModelMeta } from "./model-meta.ts";
+import {
+  countModelOverrides,
+  resolveModelMetaLayers,
+  summarizeModelMeta,
+} from "./model-meta.ts";
+import { resolveProviderOverride } from "./provider-override.ts";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -196,22 +201,55 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     });
   }
 
-  // 7. effective modelMeta for current selection
+  // 7. effective modelMeta for current selection (layer-aware)
   if (sel) {
     const match = input.providers.find((p) => p.id === sel.dbId);
     if (match) {
-      const meta = resolveEffectiveModelMeta(input.config, match);
+      const layers = resolveModelMetaLayers(input.config, match, sel.model);
+      const sources: string[] = [];
+      if (layers.base) sources.push("defaultModelMeta");
+      if (layers.provider) sources.push("provider");
+      if (layers.model) sources.push(`model[${layers.modelKey}]`);
+      const detail =
+        summarizeModelMeta(layers.effective) +
+        (sources.length ? `（来源: ${sources.join(" → ")}）` : "");
       checks.push({
         id: "model-meta",
         title: "当前 modelMeta 策略",
         status: "pass",
-        detail: summarizeModelMeta(meta),
+        detail,
         fix:
-          meta?.reasoning === false
+          layers.effective?.reasoning === false
             ? undefined
             : "若中转报 400 reasoning/thinking，用 /ps-override 选「中转兼容」或设 defaultModelMeta.reasoning=false",
       });
     }
+  }
+
+  // 7b. per-model overrides: count + stale keys
+  const modelOverrideCount = countModelOverrides(input.config.providerOverrides);
+  if (modelOverrideCount) {
+    const stale: string[] = [];
+    for (const provider of input.providers) {
+      const entry = resolveProviderOverride(input.config.providerOverrides, provider);
+      for (const key of Object.keys(entry?.modelOverrides ?? {})) {
+        if (key.includes("*")) continue;
+        if (!provider.configModels.includes(key)) {
+          stale.push(`${provider.displayName}/${key}`);
+        }
+      }
+    }
+    checks.push({
+      id: "model-overrides",
+      title: "按模型覆写",
+      status: stale.length ? "warn" : "pass",
+      detail:
+        `${modelOverrideCount} 条` +
+        (stale.length ? `（${stale.length} 条不在 DB 模型列表: ${stale.slice(0, 3).join(", ")}）` : ""),
+      fix: stale.length
+        ? "模型 id 可能已改名或只在远端存在；用 /ps-override 重新设置或清除该层"
+        : undefined,
+    });
   }
 
   // 8. pins

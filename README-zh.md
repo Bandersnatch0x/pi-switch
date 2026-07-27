@@ -104,7 +104,8 @@ pi-switch/
 │  ├─ parse/                   # cc-switch Provider 配置解析
 │  └─ ui/
 │     ├─ three-level-pick.ts   # 类型 → 名称 → 模型三级选择器
-│     ├─ model-meta-dialog.ts  # modelMeta 参数覆写弹窗
+│     ├─ model-meta-dialog.ts  # modelMeta 参数覆写弹窗（非交互 / 测试 fallback）
+│     ├─ model-meta-form.ts    # modelMeta 参数覆写表单（TUI SettingsList）
 │     ├─ labels.ts             # 显示名与状态文案
 │     └─ tabs.ts               # 标签辅助
 ├─ skills/
@@ -183,22 +184,26 @@ Pi 包通常会安装到 `~/.pi/agent/npm/`；如果使用项目局部安装，�
 
 选择完成后，Pi 会使用所选 Provider 的 baseUrl、apiKey、协议类型和模型 ID 发起后续请求。
 
-### 参数覆写弹窗
+### 参数覆写表单
 
-弹窗走 Pi 原生交互（`select` / `input` / `confirm`），不再挤在 TUI 窄窗里改：
+终端（TUI）下走单屏 **SettingsList** 覆盖表单（Pi 自同的设置列表原型）：每字段一行，`Enter`/`Space` 循环枚举值，contextWindow/预设/作用域 行开 `SelectList` 子菜单，自定义数字可输 `200k` / `1M`。非交互环境（RPC / headless / 测试）退到 `model-meta-dialog.ts` 中的串接 `select` / `input` / `confirm` 弹窗。两路径返回同一结果。默认作用域是打开时的选中模型（来自拾取器 `o` 键），子菜单可切到 provider 级或另一模型/glob。
 
 ```text
-参数覆写 · elysiver-claude
-- reasoning · 默认 / true / false
-- contextWindow · 数字或默认
-- maxTokens · 数字或默认
-- thinkingFormat · 字符串或默认
-- 清除全部覆写
-- 保存
-- 取消
+参数覆写 · elysiver-claude · 模型 glm-4.6 ✱
+  作用域             模型 glm-4.6            ▸   § 子菜单切换层
+  预设                选择…                 ▸   § 中转兼容 / 完整推理
+  reasoning          继承 true            ∘ 内联：§ true / false / 不覆写
+  contextWindow      覆写 200k            ▸   § 200k 256k 500k 1M / 自定义
+  maxTokens          默认 64k              ▸   § 4k 8k 16k 32k 64k 128k / 自定义
+  thinkingFormat     覆写 deepseek        ∘   内联循环枚举
+  — 清除本层覆写                     ▸
+  — 清除该 Provider 全部覆写    ▸
+  保存                                    ✱（标题有空改动时显 ✱）
+  取消
+Enter/Space 切换· Esc 返回 · s 保存
 ```
 
-保存后写入 `providerOverrides`，键是 cc-switch 的 **dbId**。若该 Provider 当前已激活，会立即重新注册生效。
+每行显示 **覆写 / 继承 / 默认** 三态：覆写=本作用域设过，继承=下层设过，默认=协议档。数字常用预设 `200k` / `256k` / `500k` / `1M`，另接受自定义输入（支持 k/M 后缀）。保存后写入 `providerOverrides`，键是 cc-switch 的 **dbId**；按模型写入 `modelOverrides[modelId]`。若该 Provider 当前已激活，会立即重新注册生效。
 
 ## 运行要求
 
@@ -248,7 +253,7 @@ Windows 用户如果没有全局安装 `sqlite3.exe`，建议显式配置 `SQLIT
 | `sqlitePath` | 覆盖 sqlite3 可执行文件路径（`null` 禁用查找） |
 | `tabs` | 选择器中 Provider 类型优先顺序 |
 | `vars` | 可选覆盖 UA 模板版本号（缺省则自动探测） |
-| `providerOverrides` | 按 Provider 的 `label` / `fingerprint` / `headers` / `modelMeta` 覆写（以 **dbId** 为键） |
+| `providerOverrides` | 按 Provider 的 `label` / `fingerprint` / `headers` / `modelMeta` / 按模型 `modelOverrides` 覆写（以 **dbId** 为键） |
 | `aliasCcs` | 是否注册 `/ccs` 别名（默认 `true`） |
 | `debug` | 输出调试信息 |
 
@@ -262,7 +267,7 @@ Windows 用户如果没有全局安装 `sqlite3.exe`，建议显式配置 `SQLIT
 Unsupported parameter(s): `reasoning`
 ```
 
-请用弹窗（`/ps-override` 或选择器快捷键 `o`）把 `modelMeta.reasoning` 设为 `false`，也可同时设置简短 `label`。配置会按 cc-switch 的 **dbId** 写入 `~/.pi/agent/pi-switch.json`：
+请用弹窗（`/ps-override` 或选择器快捷键 `o`）把 `modelMeta.reasoning` 设为 `false`，也可同时设置简短 `label`。弹窗支持作用域切换：可选 **全部模型**（provider 级）或单个模型 id。配置会按 cc-switch 的 **dbId** 写入 `~/.pi/agent/pi-switch.json`：
 
 ```json
 {
@@ -271,11 +276,23 @@ Unsupported parameter(s): `reasoning`
       "label": "elysiver-claude",
       "modelMeta": {
         "reasoning": false
+      },
+      "modelOverrides": {
+        "glm-4.6": { "reasoning": false, "maxTokens": 8192 },
+        "gpt-5*":  { "reasoning": true }
       }
     }
   }
 }
 ```
+
+分层合并（后者逐字段覆盖，未设字段不会抹除下层）：
+
+```text
+defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides[dbId].modelOverrides[modelId]
+```
+
+`modelOverrides` 键可为确切 id 或 glob（`gpt-5*` / `*sonnet*`）。匹配顺序：确切 → 忽略大小写 → 最具体的 glob。
 
 可选 `fingerprint` 字段可强制某套 CLI 指纹（与协议默认无关）：
 
@@ -301,7 +318,7 @@ Unsupported parameter(s): `reasoning`
 
 最近一次选择会写入 Pi 设置文件中的 `piSwitchSelection`，用于下次打开时高亮当前选择。
 
-> 说明：当前远程模型列表只保留模型 **ID**，不会从 `/models` 导入各模型参数；参数来自协议默认值 + 可选的 `providerOverrides.modelMeta`。
+> 说明：当前远程模型列表只保留模型 **ID**，不会从 `/models` 导入各模型参数；参数来自协议默认值 + 可选的 `providerOverrides.modelMeta` / `modelOverrides`。
 
 ## Header 规则
 

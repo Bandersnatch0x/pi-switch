@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
+  clearAllModelMetaOverrides,
   migrateLegacySelection,
   pushRecentEntry,
   readPiSwitchConfig,
@@ -7,6 +8,7 @@ import {
   resolveProviderOverride,
   togglePinEntry,
   writePins,
+  writeModelMetaOverride,
   writeProviderModelMeta,
   writeRecent,
   writeSelection,
@@ -273,5 +275,152 @@ describe("pins and recent", () => {
     expect(cfg.pins).toEqual([{ dbId: "x", model: "y" }]);
     expect(cfg.recent?.[0].model).toBe("y");
     expect(cfg.recentLimit).toBe(5);
+  });
+});
+
+describe("per-model modelMeta overrides", () => {
+  test("model scope writes under modelOverrides[id], keeps provider meta", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: { abc: { modelMeta: { reasoning: false } } },
+      }),
+    });
+    const r = writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "glm-4.6" },
+      { maxTokens: 8192 },
+      7,
+    );
+    expect(r.ok).toBe(true);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(raw.providerOverrides.abc.modelMeta).toEqual({ reasoning: false });
+    expect(raw.providerOverrides.abc.modelOverrides["glm-4.6"]).toEqual({
+      maxTokens: 8192,
+    });
+  });
+
+  test("model scope reuses matched glob key instead of adding a literal", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: { abc: { modelOverrides: { "gpt-5*": { reasoning: true } } } },
+      }),
+    });
+    writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "gpt-5-pro" },
+      { reasoning: false },
+      7,
+    );
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(Object.keys(raw.providerOverrides.abc.modelOverrides)).toEqual(["gpt-5*"]);
+    expect(raw.providerOverrides.abc.modelOverrides["gpt-5*"]).toEqual({
+      reasoning: false,
+    });
+  });
+
+  test("model scope clear drops only that model key", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          abc: {
+            modelOverrides: { "glm-4.6": { reasoning: false }, "gpt-5": { maxTokens: 1 } },
+          },
+        },
+      }),
+    });
+    writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "glm-4.6" },
+      null,
+      7,
+    );
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(Object.keys(raw.providerOverrides.abc.modelOverrides)).toEqual(["gpt-5"]);
+  });
+
+  test("provider-scope clear keeps per-model overrides", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          abc: {
+            modelMeta: { reasoning: false },
+            modelOverrides: { "glm-4.6": { maxTokens: 1 } },
+          },
+        },
+      }),
+    });
+    writeProviderModelMeta(fs, "/c.json", { id: "abc", displayName: "relay" }, null, 7);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(raw.providerOverrides.abc.modelMeta).toBeUndefined();
+    expect(raw.providerOverrides.abc.modelOverrides["glm-4.6"]).toEqual({ maxTokens: 1 });
+  });
+
+  test("clearAllModelMetaOverrides wipes both layers and empty entry", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          abc: {
+            label: "relay",
+            modelMeta: { reasoning: false },
+            modelOverrides: { "glm-4.6": { maxTokens: 1 } },
+          },
+        },
+      }),
+    });
+    clearAllModelMetaOverrides(fs, "/c.json", { id: "abc", displayName: "relay" }, 7);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(raw.providerOverrides.abc).toBeUndefined();
+  });
+
+  test("clearAllModelMetaOverrides keeps headers/fingerprint", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          abc: {
+            fingerprint: "codex",
+            headers: { "User-Agent": "x" },
+            modelOverrides: { "glm-4.6": { maxTokens: 1 } },
+          },
+        },
+      }),
+    });
+    clearAllModelMetaOverrides(fs, "/c.json", { id: "abc", displayName: "relay" }, 7);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(raw.providerOverrides.abc.fingerprint).toBe("codex");
+    expect(raw.providerOverrides.abc.modelOverrides).toBeUndefined();
+  });
+
+  test("model scope rejects invalid thinkingFormat", () => {
+    const fs = memFs();
+    const r = writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "glm-4.6" },
+      { thinkingFormat: "nope" },
+      7,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("invalid thinkingFormat");
+  });
+
+  test("model scope rejects empty model id", () => {
+    const fs = memFs();
+    const r = writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "   " },
+      { reasoning: false },
+      7,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("empty model id");
   });
 });

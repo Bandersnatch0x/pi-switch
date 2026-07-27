@@ -7,6 +7,7 @@ import type {
   RecentEntry,
 } from "./types.ts";
 import {
+  clearAllModelMetaOverrides,
   migrateLegacySelection,
   piSettingsPath,
   piSwitchConfigPath,
@@ -14,11 +15,12 @@ import {
   readPiSwitchConfig,
   readSelection,
   togglePinEntry,
+  writeModelMetaOverride,
   writePins,
-  writeProviderModelMeta,
   writeRecent,
   writeSelection,
   type FsLike,
+  type ModelMetaScope,
 } from "./settings.ts";
 
 export type StateWriteResult = { ok: boolean; error?: string };
@@ -31,6 +33,16 @@ export interface LocalState {
   saveProviderModelMeta(
     provider: Pick<CcProvider, "id" | "displayName">,
     modelMeta: ModelMetaOverride | null,
+  ): StateWriteResult;
+  /** Write one scope (provider or a single model id). */
+  saveModelMetaOverride(
+    provider: Pick<CcProvider, "id" | "displayName">,
+    scope: ModelMetaScope,
+    modelMeta: ModelMetaOverride | null,
+  ): StateWriteResult;
+  /** Drop provider modelMeta plus every per-model override. */
+  clearModelMetaOverrides(
+    provider: Pick<CcProvider, "id" | "displayName">,
   ): StateWriteResult;
   togglePin(
     entry: PinEntry,
@@ -59,7 +71,11 @@ export function createLocalState(options: {
     saveSelection: (selection) =>
       writeSelection(fs, settingsPath, selection, pid),
     saveProviderModelMeta: (provider, modelMeta) =>
-      writeProviderModelMeta(fs, configPath, provider, modelMeta, pid),
+      writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid),
+    saveModelMetaOverride: (provider, scope, modelMeta) =>
+      writeModelMetaOverride(fs, configPath, provider, scope, modelMeta, pid),
+    clearModelMetaOverrides: (provider) =>
+      clearAllModelMetaOverrides(fs, configPath, provider, pid),
     togglePin: (entry) => {
       const current = readPiSwitchConfig(fs, configPath);
       const next = togglePinEntry(current.pins, entry);

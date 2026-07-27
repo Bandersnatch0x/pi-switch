@@ -114,6 +114,13 @@ export interface PiSwitchConfig {
        * that reject thinking/reasoning params, like a claude-protocol → GLM relay).
        */
       modelMeta?: ModelMetaOverride;
+      /**
+       * Per-model overrides inside this provider, keyed by model id.
+       * Keys may be exact ids (`glm-4.6`) or globs (`gpt-5*`, `*sonnet*`).
+       * Merged on top of provider `modelMeta`, which merges on top of
+       * `defaultModelMeta`. Most specific glob wins.
+       */
+      modelOverrides?: Record<string, ModelMetaOverride>;
     }
   >;
   /** Pinned provider/model shortcuts (local only). */

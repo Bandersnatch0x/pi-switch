@@ -106,7 +106,8 @@ pi-switch/
 │  ├─ parse/                   # cc-switch provider config parsers
 │  └─ ui/
 │     ├─ three-level-pick.ts   # Progressive type → name → model picker
-│     ├─ model-meta-dialog.ts  # Native dialog for modelMeta overrides
+│     ├─ model-meta-dialog.ts  # Non-interactive dialog (fallback / tests)
+│     ├─ model-meta-form.ts    # TUI SettingsList form for modelMeta overrides
 │     ├─ labels.ts             # Display labels and status text
 │     └─ tabs.ts               # Tab helpers
 ├─ skills/
@@ -187,20 +188,24 @@ After selection, Pi uses the selected provider baseUrl, apiKey, protocol type, a
 
 ### Override dialog
 
-The dialog is a native Pi popup (`select` / `input` / `confirm`), not an inline TUI form:
+In a terminal (TUI) Pi runs a single-screen **SettingsList** overlay form (Pi's own settings-list primitive): one row per field, `Enter`/`Space` cycles enum values, count/预设/作用域 rows open a `SelectList` submenu, custom counts accept a `200k` / `1M` input. In non-interactive modes (RPC / headless / tests) it falls back to the chained `select` / `input` / `confirm` popup in `model-meta-dialog.ts`. Both paths return the same result shape.
 
 ```text
-Parameter override · elysiver-claude
-- reasoning · default / true / false
-- contextWindow · number or default
-- maxTokens · number or default
-- thinkingFormat · string or default
-- clear all overrides
-- save
-- cancel
+Parameter override · elysiver-claude · model glm-4.6 ✱
+  scope              model glm-g4           ▸   § submenu switch layer
+  preset             select…               ▸   § relay-safe / full-reasoning
+  reasoning          inherit true             ∘ inline: § true / false / inherit
+  contextWindow      override 200k           ▸   § 200k 256k 500k 1M / custom
+  maxTokens          default 64k             ▸   § 4k 8k 16k 32k 64k 128k / custom
+  thinkingFormat     override deepseek     ∘   inline-cycle enum
+  — clear this layer                  ▸
+  — clear all for provider           ▸
+  save                                   ✱ save (Title shows ✱ when dirty)
+  cancel
+Enter/Space switch or open submenu · Esc back · s save
 ```
 
-Saving writes `providerOverrides` keyed by the cc-switch **dbId**. If that provider is currently active, pi-switch re-registers it immediately.
+Each row reads one of three states: **override** (set in this scope), **inherit** (a lower layer set it), **default** (protocol tier). Count fields offer common presets (`200k`, `256k`, `500k`, `1M`) plus custom input (k/M suffix). Saving writes `providerOverrides` keyed by the cc-switch **dbId**; model-scope edits go under `modelOverrides[modelId]` (default scope is the preselected model when opened from the picker's `o` key; the § submenu switches to provider-scope or another model/glob). If that provider is currently active, pi-switch re-registers it immediately.
 
 ## Requirements
 
@@ -250,7 +255,7 @@ Example:
 | `sqlitePath` | Overrides the sqlite3 executable path (`null` disables lookup) |
 | `tabs` | Preferred provider-type order in the picker |
 | `vars` | Optional overrides for UA template versions (otherwise auto-detected) |
-| `providerOverrides` | Per-provider `label`, `fingerprint`, `headers`, and `modelMeta` (keyed by **dbId**) |
+| `providerOverrides` | Per-provider `label`, `fingerprint`, `headers`, `modelMeta`, and per-model `modelOverrides` (keyed by **dbId**) |
 | `aliasCcs` | Register `/ccs` alias (default `true`) |
 | `debug` | Enables debug output |
 
@@ -264,7 +269,7 @@ Some gateways reject Anthropic-style fields. A common case is Claude-protocol �
 Unsupported parameter(s): `reasoning`
 ```
 
-Use the popup dialog (`/ps-override` or picker key `o`) to set `modelMeta.reasoning` to `false`, and optionally set a short `label`. Values are persisted under the provider's cc-switch **dbId** in `~/.pi/agent/pi-switch.json`:
+Use the popup dialog (`/ps-override` or picker key `o`) to set `modelMeta.reasoning` to `false`, and optionally set a short `label`. The dialog is scope-aware: edit **全部模型** (provider level) or pick one model id. Values are persisted under the provider's cc-switch **dbId** in `~/.pi/agent/pi-switch.json`:
 
 ```json
 {
@@ -273,11 +278,23 @@ Use the popup dialog (`/ps-override` or picker key `o`) to set `modelMeta.reason
       "label": "elysiver-claude",
       "modelMeta": {
         "reasoning": false
+      },
+      "modelOverrides": {
+        "glm-4.6": { "reasoning": false, "maxTokens": 8192 },
+        "gpt-5*":  { "reasoning": true }
       }
     }
   }
 }
 ```
+
+Layering (later wins per field, unset fields never clobber a lower layer):
+
+```text
+defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides[dbId].modelOverrides[modelId]
+```
+
+`modelOverrides` keys may be exact ids or globs (`gpt-5*` / `*sonnet*`). Match order: exact → case-insensitive → most specific glob.
 
 Optional `fingerprint` field forces a CLI disguise preset regardless of protocol:
 
@@ -303,7 +320,7 @@ After save, if the provider is currently active, pi-switch re-registers it so th
 
 The latest selection is stored as `piSwitchSelection` in Pi settings, so it can be highlighted the next time the switcher opens.
 
-> Note: remote model list fetching currently returns model **IDs only**. Per-model parameters are not imported from `/models`; use protocol defaults plus `providerOverrides.modelMeta` instead.
+> Note: remote model list fetching currently returns model **IDs only**. Per-model parameters are not imported from `/models`; use protocol defaults plus `providerOverrides.modelMeta` / `modelOverrides` instead.
 
 ## Header Rules
 

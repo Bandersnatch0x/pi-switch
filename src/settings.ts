@@ -13,7 +13,7 @@ import {
   SETTINGS_KEY,
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
-import { cleanModelMeta } from "./model-meta.ts";
+import { cleanModelMeta, matchModelOverride } from "./model-meta.ts";
 import {
   providerOverrideKeys,
   resolveProviderOverride,
@@ -230,18 +230,61 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
 // Re-export type for existing imports
 export type { ModelMetaOverride };
 
+/** Where a modelMeta edit is stored. */
+export type ModelMetaScope =
+  | { kind: "provider" }
+  | { kind: "model"; modelId: string };
+
+type MutableOverrideEntry = {
+  label?: string;
+  fingerprint?: FingerprintPreset;
+  headers?: Record<string, string>;
+  modelMeta?: ModelMetaOverride;
+  modelOverrides?: Record<string, ModelMetaOverride>;
+};
+
+function validateThinkingFormat(
+  modelMeta: ModelMetaOverride,
+): { ok: true } | { ok: false; error: string } {
+  if (typeof modelMeta.thinkingFormat === "string" && modelMeta.thinkingFormat.trim()) {
+    const fmt = modelMeta.thinkingFormat.trim();
+    if (!isThinkingFormat(fmt)) {
+      return {
+        ok: false,
+        error: `invalid thinkingFormat: ${fmt} (allowed: openai|openrouter|together|deepseek|zai|qwen|chat-template|qwen-chat-template|string-thinking|ant-ling)`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/** An override entry is only worth keeping when it carries real config. */
+function entryIsEmpty(entry: MutableOverrideEntry): boolean {
+  const modelCount = entry.modelOverrides ? Object.keys(entry.modelOverrides).length : 0;
+  return !entry.modelMeta && !entry.headers && !entry.fingerprint && modelCount === 0;
+}
+
 /**
- * Persist modelMeta for a provider under canonical dbId key.
- * Pass modelMeta=null to clear only modelMeta (headers/label kept if present).
+ * Persist modelMeta for a provider (provider scope) or one model id
+ * (model scope) under the canonical dbId key.
+ *
+ * Pass modelMeta=null to clear that scope only. Provider-scope clear keeps
+ * per-model overrides; use clearAllModelMetaOverrides to wipe both.
  */
-export function writeProviderModelMeta(
+export function writeModelMetaOverride(
   fs: FsLike,
   configPath: string,
   provider: Pick<CcProvider, "id" | "displayName">,
+  scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
+    if (modelMeta) {
+      const valid = validateThinkingFormat(modelMeta);
+      if (!valid.ok) return valid;
+    }
+
     const raw = readJsonFile(fs, configPath);
     const overrides =
       raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
@@ -250,45 +293,29 @@ export function writeProviderModelMeta(
 
     const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
       ? { ...overrides[provider.id] }
-      : {}) as {
-      label?: string;
-      fingerprint?: FingerprintPreset;
-      headers?: Record<string, string>;
-      modelMeta?: ModelMetaOverride;
-    };
+      : {}) as MutableOverrideEntry;
 
-    if (modelMeta === null) {
-      delete prev.modelMeta;
-      // Drop if nothing meaningful remains (label-only is not useful alone).
-      if (!prev.headers && !prev.modelMeta && !prev.fingerprint) {
-        delete overrides[provider.id];
-      } else {
-        overrides[provider.id] = prev;
-      }
+    if (scope.kind === "provider") {
+      const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+      if (!cleaned) delete prev.modelMeta;
+      else prev.modelMeta = cleaned;
     } else {
-      if (typeof modelMeta.thinkingFormat === "string" && modelMeta.thinkingFormat.trim()) {
-        const fmt = modelMeta.thinkingFormat.trim();
-        if (!isThinkingFormat(fmt)) {
-          return {
-            ok: false,
-            error: `invalid thinkingFormat: ${fmt} (allowed: openai|openrouter|together|deepseek|zai|qwen|chat-template|qwen-chat-template|string-thinking|ant-ling)`,
-          };
-        }
-      }
-      const cleaned = cleanModelMeta(modelMeta);
-      if (!cleaned) {
-        delete prev.modelMeta;
-      } else {
-        prev.modelMeta = cleaned;
-      }
-      prev.label = prev.label ?? provider.displayName;
-      // Drop empty shell (no modelMeta/headers/fingerprint beyond default label-only)
-      if (!prev.modelMeta && !prev.headers && !prev.fingerprint) {
-        delete overrides[provider.id];
-      } else {
-        overrides[provider.id] = prev;
-      }
+      const modelId = scope.modelId.trim();
+      if (!modelId) return { ok: false, error: "empty model id" };
+      const map = { ...(prev.modelOverrides ?? {}) };
+      // Reuse the matched key (glob/case variant) so edits stay in one place.
+      const key = matchModelOverride(map, modelId)?.key ?? modelId;
+      const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+      if (!cleaned) delete map[key];
+      else map[key] = cleaned;
+      if (Object.keys(map).length) prev.modelOverrides = map;
+      else delete prev.modelOverrides;
     }
+
+    if (modelMeta) prev.label = prev.label ?? provider.displayName;
+
+    if (entryIsEmpty(prev)) delete overrides[provider.id];
+    else overrides[provider.id] = prev;
 
     raw.providerOverrides = overrides;
     writeJsonAtomic(fs, configPath, raw, pid);
@@ -296,6 +323,45 @@ export function writeProviderModelMeta(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** Drop provider-scope modelMeta and every per-model override for a provider. */
+export function clearAllModelMetaOverrides(
+  fs: FsLike,
+  configPath: string,
+  provider: Pick<CcProvider, "id" | "displayName">,
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const raw = readJsonFile(fs, configPath);
+    const overrides =
+      raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
+        ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
+        : {};
+    const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
+      ? { ...overrides[provider.id] }
+      : {}) as MutableOverrideEntry;
+    delete prev.modelMeta;
+    delete prev.modelOverrides;
+    if (entryIsEmpty(prev)) delete overrides[provider.id];
+    else overrides[provider.id] = prev;
+    raw.providerOverrides = overrides;
+    writeJsonAtomic(fs, configPath, raw, pid);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Back-compat wrapper: provider-scope write. */
+export function writeProviderModelMeta(
+  fs: FsLike,
+  configPath: string,
+  provider: Pick<CcProvider, "id" | "displayName">,
+  modelMeta: ModelMetaOverride | null,
+  pid: number,
+): { ok: boolean; error?: string } {
+  return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
 }
 
 export function pinKey(dbId: string, model: string): string {

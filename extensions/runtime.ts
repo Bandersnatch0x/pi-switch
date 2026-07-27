@@ -11,7 +11,7 @@ import { resolveProviderOverride } from "../src/provider-override.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
-import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
+import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -223,8 +223,34 @@ export class Runtime {
     };
   }
 
-  /** Effective modelMeta: per-provider override > defaultModelMeta. */
-  modelMetaFor(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
-    return resolveEffectiveModelMeta(this.config, provider);
+  /** Effective modelMeta: model override > provider override > defaultModelMeta. */
+  modelMetaFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+    modelId?: string,
+  ) {
+    return resolveEffectiveModelMeta(this.config, provider, modelId);
+  }
+
+  /** Full layer breakdown (base / provider / model) for dialog + doctor. */
+  modelMetaLayers(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+    modelId?: string,
+  ) {
+    return resolveModelMetaLayers(this.config, provider, modelId);
+  }
+
+  /**
+   * Does an *explicit* override exist for this provider (modelId omitted:
+   * provider layer or any per-model entry) or for this exact model?
+   * Drives the ⚙ badge in the picker.
+   */
+  hasModelMetaOverride(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+    modelId?: string,
+  ): boolean {
+    if (modelId) return Boolean(this.modelMetaLayers(provider, modelId).model);
+    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
+    if (cleanModelMeta(entry?.modelMeta)) return true;
+    return Object.keys(entry?.modelOverrides ?? {}).length > 0;
   }
 }

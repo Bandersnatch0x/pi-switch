@@ -67,6 +67,56 @@ describe("runDoctor", () => {
     expect(formatDoctorReport(report)).toContain("pass=");
   });
 
+  test("model-meta detail names the contributing layers", () => {
+    const p = mk({ id: "1", displayName: "alpha", appType: "claude", configModels: ["glm-4.6"] });
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "/usr/bin/sqlite3",
+      providers: [p],
+      selection: { dbId: "1", model: "glm-4.6" },
+      config: {
+        defaultModelMeta: { reasoning: true },
+        providerOverrides: {
+          "1": {
+            modelMeta: { contextWindow: 200_000 },
+            modelOverrides: { "glm-4.6": { reasoning: false } },
+          },
+        },
+      },
+      headerRuleCount: 1,
+    });
+    const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
+    expect(detail).toContain("reasoning=false");
+    expect(detail).toContain("defaultModelMeta");
+    expect(detail).toContain("provider");
+    expect(detail).toContain("model[glm-4.6]");
+    expect(report.checks.find((c) => c.id === "model-overrides")?.status).toBe("pass");
+  });
+
+  test("warns on per-model override keys missing from the provider", () => {
+    const p = mk({ id: "1", displayName: "alpha", appType: "claude", configModels: ["m1"] });
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "/usr/bin/sqlite3",
+      providers: [p],
+      config: {
+        providerOverrides: {
+          "1": { modelOverrides: { "gone-model": { reasoning: false }, "gpt-5*": { reasoning: true } } },
+        },
+      },
+      headerRuleCount: 1,
+    });
+    const check = report.checks.find((c) => c.id === "model-overrides");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("alpha/gone-model");
+    // globs are never reported stale
+    expect(check?.detail).not.toContain("gpt-5*");
+  });
+
   test("warns when fingerprint uses fallbacks", () => {
     const report = runDoctor({
       home: "/h",

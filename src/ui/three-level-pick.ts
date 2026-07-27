@@ -34,8 +34,12 @@ import type { PiSwitchCtx } from "../pi-context.ts";
 
 export type ThreeLevelResult =
   | { kind: "ok"; provider: CcProvider; modelId: string }
-  /** Exit custom TUI first; caller opens override dialog outside (no nested UI). */
-  | { kind: "override"; provider: CcProvider }
+  /**
+   * Exit custom TUI first; caller opens override dialog outside (no nested UI).
+   * modelId is set when the 模型 column is revealed on a concrete model, so the
+   * dialog can preselect model scope.
+   */
+  | { kind: "override"; provider: CcProvider; modelId?: string }
   | { kind: "cancel" };
 
 export interface ThreeLevelPickOpts {
@@ -52,6 +56,12 @@ export interface ThreeLevelPickOpts {
   /** Persist pin toggle; return the new pins array (picker stays open). */
   onTogglePin?: (entry: PinEntry) => PinEntry[] | Promise<PinEntry[]>;
   fetchRemote?: (provider: CcProvider) => Promise<string[]>;
+  /**
+   * Whether a modelMeta override exists. Called with modelId for the model
+   * column (model-scope only) and without it for the name column (any scope).
+   * Drives the ⚙ badge.
+   */
+  hasOverride?: (provider: CcProvider, modelId?: string) => boolean;
 }
 
 const MANUAL = "__manual__";
@@ -280,13 +290,19 @@ async function threeLevelCustom(
     function modelLabel(id: string, provider?: CcProvider): string {
       if (id === MANUAL) return "✎ 手动输入";
       if (id === FETCH) return "↻ 刷新模型";
-      if (provider && isPinned(livePins, provider.id, id)) return `★ ${id}`;
-      return id;
+      const gear = provider && opts.hasOverride?.(provider, id) ? " ⚙" : "";
+      if (provider && isPinned(livePins, provider.id, id)) return `★ ${id}${gear}`;
+      return `${id}${gear}`;
     }
 
     function providerHasPin(provider: CcProvider | undefined): boolean {
       if (!provider) return false;
       return livePins.some((p) => p.dbId === provider.id);
+    }
+
+    function providerHasOverride(provider: CcProvider | undefined): boolean {
+      if (!provider) return false;
+      return Boolean(opts.hasOverride?.(provider));
     }
 
     /** Open next level if possible; returns true if UI advanced. */
@@ -452,8 +468,10 @@ async function threeLevelCustom(
             const p = names[ni];
             const nameBudget = Math.max(4, c1 - 6);
             const pinMark = providerHasPin(p) ? "★ " : "";
-            const name = truncatePlain(p.displayName, Math.max(2, nameBudget - (pinMark ? 2 : 0)));
-            const labeled = `${pinMark}${name}`;
+            const gear = providerHasOverride(p) ? " ⚙" : "";
+            const reserved = (pinMark ? 2 : 0) + (gear ? 2 : 0);
+            const name = truncatePlain(p.displayName, Math.max(2, nameBudget - reserved));
+            const labeled = `${pinMark}${name}${gear}`;
             const ok = isSwitchable(p);
             const core = ok
               ? labeled
@@ -742,12 +760,15 @@ async function threeLevelCustom(
           ctx.ui.notify("请先进入名称列再设置参数覆写", "warning");
           return;
         }
-        const { provider } = current();
+        const { provider, models } = current();
         if (!provider || !isSwitchable(provider)) {
           ctx.ui.notify("当前名称不可切换", "warning");
           return;
         }
-        finish({ kind: "override", provider });
+        // At model level, preselect model scope from the highlighted row.
+        const mid = revealed >= 2 ? models[modelIdx] : undefined;
+        const modelId = mid && mid !== MANUAL && mid !== FETCH ? mid : undefined;
+        finish({ kind: "override", provider, modelId });
         return;
       }
 

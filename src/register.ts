@@ -45,11 +45,20 @@ export function buildProviderConfig(
     onReject?: (name: string, reason: string) => void;
     /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
     modelMeta?: ModelMetaOverride;
+    /**
+     * Per-model resolver; wins over `modelMeta` when it returns a value.
+     * Lets one provider register models with different reasoning/ctx settings.
+     */
+    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
   },
 ): Record<string, unknown> | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
-  const models = ids.filter(Boolean).map((id) => toModelConfig(id.trim(), provider.api, opts.modelMeta));
+  const models = ids.filter(Boolean).map((raw) => {
+    const id = raw.trim();
+    const meta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
+    return toModelConfig(id, provider.api, meta);
+  });
   if (!models.length) return undefined;
 
   const headers = mergeHeaders({
@@ -85,6 +94,7 @@ export function registerProvider(
     debug?: boolean;
     onReject?: (name: string, reason: string) => void;
     modelMeta?: ModelMetaOverride;
+    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
   },
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);

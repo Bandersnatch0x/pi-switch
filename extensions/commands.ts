@@ -3,14 +3,16 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { CcProvider } from "../src/types.ts";
+import type { CcProvider, ModelMetaOverride } from "../src/types.ts";
+import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { isSwitchable } from "../src/parse/index.ts";
-import type { ModelMetaOverride } from "../src/types.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
-import { fetchRemoteModels } from "../src/models-fetch.ts";
+import { fetchRemoteModels, mergeModelLists } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
+import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
+import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
@@ -34,52 +36,89 @@ function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
   };
 }
 
+/** Protocol-tier fallback shown as 默认 in the dialog. */
+function tierMeta(provider: CcProvider): ModelMetaOverride | undefined {
+  if (!provider.api) return undefined;
+  const tier = API_MODEL_META[provider.api];
+  return {
+    reasoning: tier.reasoning,
+    contextWindow: tier.contextWindow,
+    maxTokens: tier.maxTokens,
+  };
+}
+
+function scopeText(scope: ModelMetaScope): string {
+  return scope.kind === "provider" ? "全部模型" : `模型 ${scope.modelId}`;
+}
+
 async function persistAndMaybeReapplyMeta(
   rt: Runtime,
   lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   provider: CcProvider,
+  scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
 ): Promise<boolean> {
-  const written = rt.state.saveProviderModelMeta(provider, modelMeta);
+  const written = rt.state.saveModelMetaOverride(provider, scope, modelMeta);
   if (!written.ok) {
     ctx.ui?.notify?.(`参数覆写保存失败：${written.error}`, "error");
     return false;
   }
 
   rt.reloadConfig();
-
-  // Re-apply immediately when this provider is currently registered/active.
-  const sel = rt.state.readSelection();
-  const isActive =
-    rt.registeredPsNames.includes(provider.piName) ||
-    (sel?.dbId != null && sel.dbId === provider.id);
-
-  if (isActive) {
-    const modelId =
-      sel?.dbId === provider.id && sel.model
-        ? sel.model
-        : provider.configModels[0];
-    if (modelId) {
-      const result = await lifecycle.activate(
-        { provider, modelId, commit: "runtime-only" },
-        ctx,
-      );
-      if (result.kind === "failed") {
-        ctx.ui?.notify?.(
-          `已保存覆写，但重新应用失败：${result.error}`,
-          "warning",
-        );
-      }
-    }
-  }
+  await reapplyIfActive(rt, lifecycle, ctx, provider);
 
   const summary =
     modelMeta == null
       ? "已清除 modelMeta 覆写"
       : `已保存：${summarizeModelMeta(modelMeta)}`;
-  ctx.ui?.notify?.(`${summary} · ${provider.displayName}`, "info");
+  ctx.ui?.notify?.(
+    `${summary} · ${provider.displayName} · ${scopeText(scope)}`,
+    "info",
+  );
   return true;
+}
+
+async function clearAllAndMaybeReapply(
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+  ctx: PiSwitchCtx,
+  provider: CcProvider,
+): Promise<void> {
+  const written = rt.state.clearModelMetaOverrides(provider);
+  if (!written.ok) {
+    ctx.ui?.notify?.(`清除覆写失败：${written.error}`, "error");
+    return;
+  }
+  rt.reloadConfig();
+  await reapplyIfActive(rt, lifecycle, ctx, provider);
+  ctx.ui?.notify?.(`已清除全部覆写 · ${provider.displayName}`, "info");
+}
+
+/** Re-apply registration when this provider is currently registered/active. */
+async function reapplyIfActive(
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+  ctx: PiSwitchCtx,
+  provider: CcProvider,
+): Promise<void> {
+  const sel = rt.state.readSelection();
+  const isActive =
+    rt.registeredPsNames.includes(provider.piName) ||
+    (sel?.dbId != null && sel.dbId === provider.id);
+  if (!isActive) return;
+
+  const modelId =
+    sel?.dbId === provider.id && sel.model ? sel.model : provider.configModels[0];
+  if (!modelId) return;
+
+  const result = await lifecycle.activate(
+    { provider, modelId, commit: "runtime-only" },
+    ctx,
+  );
+  if (result.kind === "failed") {
+    ctx.ui?.notify?.(`已保存覆写，但重新应用失败：${result.error}`, "warning");
+  }
 }
 
 async function openProviderOverride(
@@ -87,6 +126,8 @@ async function openProviderOverride(
   lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   provider: CcProvider,
+  /** Preselect model scope (from picker `o` on a highlighted model). */
+  modelId?: string,
 ): Promise<void> {
   if (!isSwitchable(provider)) {
     ctx.ui?.notify?.(`不可切换: ${provider.parseError ?? "unknown"}`, "warning");
@@ -94,15 +135,49 @@ async function openProviderOverride(
   }
   // Reload so dialog shows latest disk values.
   rt.reloadConfig();
-  // Dialog edits the *explicit* per-provider override (not the effective merge).
-  const existing = resolveProviderOverride(rt.config.providerOverrides, provider)?.modelMeta;
-  const result = await runModelMetaDialog(asModelMetaUi(ctx.ui), provider, existing);
+  // Dialog edits *explicit* layers (not the effective merge).
+  const entry = resolveProviderOverride(rt.config.providerOverrides, provider);
+  const knownModels = mergeModelLists(
+    provider.configModels,
+    Object.keys(entry?.modelOverrides ?? {}).filter((k) => !k.includes("*")),
+  );
+  const models = modelId && !knownModels.includes(modelId)
+    ? [modelId, ...knownModels]
+    : knownModels;
+
+  const dialogInput: ModelMetaDialogInput = {
+    provider,
+    scope: modelId ? { kind: "model", modelId } : { kind: "provider" },
+    providerMeta: entry?.modelMeta,
+    modelOverrides: entry?.modelOverrides,
+    base: rt.config.defaultModelMeta,
+    tier: tierMeta(provider),
+    models,
+  };
+
+  let result: ModelMetaDialogResult;
+  if (ctx.mode === "tui" && typeof ctx.ui?.custom === "function") {
+    try {
+      result = await runModelMetaForm(ctx, dialogInput);
+    } catch (err) {
+      console.error("[pi-switch] model-meta form failed, falling back:", err);
+      result = await runModelMetaDialog(asModelMetaUi(ctx.ui), dialogInput);
+    }
+  } else {
+    result = await runModelMetaDialog(asModelMetaUi(ctx.ui), dialogInput);
+  }
+
   if (result.kind === "cancel") return;
+  if (result.kind === "clearAll") {
+    await clearAllAndMaybeReapply(rt, lifecycle, ctx, provider);
+    return;
+  }
   await persistAndMaybeReapplyMeta(
     rt,
     lifecycle,
     ctx,
     provider,
+    result.scope,
     result.kind === "clear" ? null : result.modelMeta,
   );
 }
@@ -114,6 +189,7 @@ export async function runOverrideCommand(
 ): Promise<void> {
   const { providers, error } = rt.refreshSnapshot();
   if (error) ctx.ui?.notify?.(error, "warning");
+  rt.reloadConfig();
   const switchable = providers.filter(isSwitchable);
   if (!switchable.length) {
     ctx.ui?.notify?.("没有可切换的 Provider", "warning");
@@ -129,7 +205,10 @@ export async function runOverrideCommand(
   ];
   const labels = ordered.map((p) => {
     const mark = p.id === currentId ? "★ " : "";
-    return `${mark}${p.appType}/${p.displayName}`;
+    const entry = resolveProviderOverride(rt.config.providerOverrides, p);
+    const n = Object.keys(entry?.modelOverrides ?? {}).length;
+    const badge = entry?.modelMeta ? (n ? ` · 覆写+${n}模型` : " · 覆写") : n ? ` · ${n}模型覆写` : "";
+    return `${mark}${p.appType}/${p.displayName}${badge}`;
   });
 
   const pick = await ctx.ui.select("参数覆写 · 选择 Provider", labels);
@@ -219,6 +298,7 @@ export async function runCommand(
     tabOrder: rt.config.tabs,
     pins: rt.config.pins,
     recent: rt.config.recent,
+    hasOverride: (provider, modelId) => rt.hasModelMetaOverride(provider, modelId),
     onTogglePin: (entry) => {
       const result = rt.state.togglePin(entry);
       if (!result.ok) {
@@ -244,7 +324,7 @@ export async function runCommand(
   });
   // Override path: custom TUI already closed; open dialog outside (H1).
   if (picked.kind === "override") {
-    await openProviderOverride(rt, lifecycle, ctx, picked.provider);
+    await openProviderOverride(rt, lifecycle, ctx, picked.provider, picked.modelId);
     return;
   }
   if (picked.kind !== "ok") return;
@@ -266,7 +346,7 @@ export async function runCommand(
       "warning",
     );
   } else {
-    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider));
+    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
     ctx.ui.notify(
       `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
       "info",
@@ -300,7 +380,7 @@ export function registerCommands(
   }
 
   pi.registerCommand("ps-override", {
-    description: "为 Provider 设置 modelMeta 参数覆写（预设：中转兼容 / 完整推理）",
+    description: "设置 modelMeta 参数覆写（可按模型细粒度；预设：中转兼容 / 完整推理）",
     handler: async (_args, ctx) => {
       await runOverrideCommand(rt, lifecycle, ctx);
     },

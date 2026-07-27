@@ -103,6 +103,24 @@ describe("buildProviderConfig", () => {
     expect(m.reasoning).toBe(true);
   });
 
+  test("modelMetaFor gives each model its own meta", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "per", appType: "claude", api: "anthropic-messages" }),
+      ["glm-4.6", "claude-sonnet-4"],
+      {
+        rules: [],
+        modelMeta: { reasoning: true },
+        modelMetaFor: (id) =>
+          id === "glm-4.6" ? { reasoning: false, maxTokens: 8_192 } : undefined,
+      },
+    );
+    const models = cfg?.models as any[];
+    expect(models[0].reasoning).toBe(false);
+    expect(models[0].maxTokens).toBe(8_192);
+    // falls back to opts.modelMeta when the resolver returns nothing
+    expect(models[1].reasoning).toBe(true);
+  });
+
   test("no modelMeta keeps api-tier defaults", () => {
     const cfg = buildProviderConfig(
       mk({ id: "def", appType: "claude", api: "anthropic-messages" }),

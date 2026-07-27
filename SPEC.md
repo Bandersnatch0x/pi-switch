@@ -147,7 +147,8 @@ pi-switch/
       tabs.ts
       labels.ts
       three-level-pick.ts # 类型 → 名称 → 模型（搜索；无分页）
-      model-meta-dialog.ts
+      model-meta-dialog.ts   # 串接 select/input/confirm（非交互 fallback / 测试）
+      model-meta-form.ts     # SettingsList + SelectList 单屏表单（TUI）
     register.ts
     settings.ts
   defaults/
@@ -352,7 +353,7 @@ v0.1 **不包含**：
 |------|------|
 | `/ps-config` | 主流程：重读 DB → 快照 → tab → provider → model（pin/recent） |
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
-| `/ps-override` | 为 Provider 设置 modelMeta 覆写（预设：中转兼容 / 完整推理） |
+| `/ps-override` | 为 Provider 设置 modelMeta 覆写（TUI SettingsList 表单；非交互退到串接弹窗）；预设：中转兼容 / 完整推理；默认编辑当前选中模型，可在子菜单切 provider 级 / 其他模型 / glob |
 | `/ps-doctor` | 结构化体检：PASS/WARN/FAIL + 修复建议 |
 
 ### 8.2 渐进三级选择（类型 → 名称 → 模型）
@@ -453,7 +454,12 @@ session_start(startup)
       "headers": {
         "User-Agent": "codex_cli_rs/0.144.0 (Windows 10.0; x64) Terminal"
       },
-      "modelMeta": { "reasoning": false }
+      "modelMeta": { "reasoning": false },
+      "modelOverrides": {
+        "glm-4.6":    { "reasoning": false, "maxTokens": 8192 },
+        "gpt-5*":     { "reasoning": true },
+        "*sonnet*":   { "contextWindow": 200000 }
+      }
     }
   },
   "pins": [{ "dbId": "448d0e64-...", "model": "gpt-5" }],
@@ -464,6 +470,7 @@ session_start(startup)
 ```
 
 - `providerOverrides` 以 **dbId** 为键；`label` 仅人读，不参与匹配。
+- `providerOverrides[*].modelMeta` 作用域为该 Provider 全部模型；`modelOverrides[modelId]` 作用域为单个模型。键可为确切 id 或 glob（`gpt-5*` / `*sonnet*`），最具体的 glob 生效。合并顺序：`defaultModelMeta ⊕ provider.modelMeta ⊕ provider.modelOverrides[id]`（后者逐字段覆盖，未设字段不会抹除下层）。
 - `tabs` 只影响排序；DB 多出的类型仍显示在末尾。
 - **无 `pageSize`**：三级选择器用可滚动列表 + `/` 搜索，**不**做分页/跳页（旧配置中的 `pageSize` 忽略）。
 - `pins` / `recent` / `recentLimit`：仅本地快捷，不引入 expose 配置中心。
