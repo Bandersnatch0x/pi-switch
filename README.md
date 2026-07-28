@@ -117,8 +117,7 @@ pi-switch/
 ├─ docs/
 │  └─ images/                  # README sample screenshots
 ├─ tests/                      # Bun tests
-├─ SPEC.md                     # Product spec
-├─ DESIGN.md                   # UI and interaction design notes
+├─ SPEC.md                     # Product contract (maintainers)
 └─ package.json
 ```
 
