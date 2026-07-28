@@ -27,6 +27,7 @@ description: 诊断 pi-switch 切换 Provider 后连接上游出现的报错（4
 | `502 Bad gateway` / `503 No available accounts` | 上游/中转侧故障，非本地问题 | [§5xx](#5xx-上游网关故障) |
 | `Connection error` / 切换后立刻断连 | UA 指纹被中转拒绝 | [§ua](#connection-error--ua-指纹) |
 | `400 ... 1m 上下文已经全量可用，请启用 1m 上下文` | anyrouter 等中转要求 `context-1m` beta | [§1m](#400-1m-上下文门闸) |
+| `503 {"error":{"message":"Service Unavailable"...}}`（anyrouter） | 中转校验 Claude Code 客户端指纹（metadata.user_id + Agent SDK system 前缀） | [§503-cc](#503-anyrouter-claude-code-指纹) |
 | 模型列表拉取失败（`f` 刷新） | 候选 URL 算错 / 端点不开放 | [§fetch](#模型列表拉取失败) |
 
 ---
@@ -81,6 +82,53 @@ Claude Code 会自动加；Pi 默认 beta 不含此项。模型 id **不必**带
 ```
 
 改完重新 `/ps-config` 切换或重启 pi 使注册生效。
+
+---
+
+## 503 anyrouter Claude Code 指纹
+
+**报错**：`503 {"error":{"message":"Service Unavailable","type":"error"},"type":"error"}`  
+（同一把 key 在 Claude Code 里正常，Pi 里连 anyrouter 必现。）
+
+**根因**：anyrouter 等中转按 **Claude Code 请求形状** 做渠道门闸，不只是 UA/beta：
+
+1. body `metadata.user_id` = JSON 字符串，内含 `device_id`（与 `~/.claude.json` 的 `userID` 一致，64 hex）
+2. system 首块前缀为  
+   `You are a Claude agent, built on Anthropic's Claude Agent SDK.`
+3. 仍需 `anthropic-beta` 含 `context-1m-2025-08-07`
+
+缺任一项常返回糊成 **503 Service Unavailable**（不是 401）。
+
+**pi-switch 行为**（`claudeCodeCompat`，默认 `mode: "auto"`）：
+
+- 当前 Provider 的 `baseUrl` 为 `anyrouter.top`（或配置的 hosts）时自动：
+  1. 注入 `metadata.user_id`（`device_id` 优先读 `~/.claude.json` `userID`；**`session_id` 必须非空 UUID**，空字符串会 503）
+  2. system 前 prepend Agent SDK 前缀
+  3. **tools[] 补齐 ≥10 个 Claude Code 工具 schema**（`Bash`/`Read`/`Glob`…；Pi 原工具保留）
+  4. header 补 `x-app` / `anthropic-dangerous-direct-browser-access` / 完整 CC beta 集
+  5. **Pi `thinking: {type:"enabled", budget_tokens}` → `adaptive` + `output_config.effort`**（enabled 预算模式在 anyrouter 上 503）
+- 改完 **重启 pi**（hooks 在 extension 启动时注册）
+- 运行痕迹：`~/.pi/agent/pi-switch-compat.log`（hook 是否触发）
+
+配置示例（`~/.pi/agent/pi-switch.json`）：
+
+```json
+{
+  "claudeCodeCompat": {
+    "mode": "auto",
+    "hosts": ["anyrouter.top"],
+    "deviceIdSource": "claude-json",
+    "systemPrefix": "agent-sdk",
+    "injectToolFingerprint": true
+  }
+}
+```
+
+- `mode: "always"`：所有 anthropic-messages 请求都伪装  
+- `mode: "never"`：关闭  
+- `providerOverrides.<dbId>.claudeCodeCompat: true|false`：单 Provider 强制开/关  
+
+**注意**：stub 工具仅用于过门闸，Pi 不会执行它们；若模型误调 stub，会报工具不存在——正常对话应仍用 Pi 自己的工具名。若仍 503：看 `pi-switch-compat.log` 是否有 `apply:true`，确认 `userID` 存在，并降低 `retry.maxRetries` 避免打满限流（anyrouter 限流也返回 Service Unavailable）。
 
 ---
 

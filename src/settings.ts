@@ -19,6 +19,7 @@ import {
   resolveProviderOverride,
   type ProviderOverrideEntry,
 } from "./provider-override.ts";
+import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
 
 export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
@@ -211,6 +212,7 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
         }
       : undefined,
     defaultModelMeta: parseModelMeta(raw.defaultModelMeta),
+    claudeCodeCompat: parseClaudeCodeCompatConfig(raw.claudeCodeCompat),
     providerOverrides:
       raw.providerOverrides && typeof raw.providerOverrides === "object"
         ? (raw.providerOverrides as PiSwitchConfig["providerOverrides"])
