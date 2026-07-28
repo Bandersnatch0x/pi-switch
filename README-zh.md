@@ -115,8 +115,7 @@ pi-switch/
 ├─ docs/
 │  └─ images/                  # README 样例截图
 ├─ tests/                      # Bun 测试
-├─ SPEC.md                     # 产品规格
-├─ DESIGN.md                   # UI 与交互设计记录
+├─ SPEC.md                     # 产品契约（维护者）
 └─ package.json
 ```
 

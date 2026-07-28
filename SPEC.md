@@ -11,7 +11,7 @@
 | 正式支持 | Windows 10/11 x64 |
 | 理论兼容 | macOS（同路径 `~/.cc-switch/cc-switch.db`，未验收） |
 
-> 冲突时以本文件为准，优先于 `DESIGN.md` 与任何旧草稿。
+> 冲突时以本文件为准，优先于 README 与任何旧草稿。
 
 ---
 
@@ -108,8 +108,6 @@ pi-switch/
   package.json
   README.md
   SPEC.md
-  DESIGN.md
-  research/
   scripts/
     smoke.mjs             # doctor + 可选 models probe
   extensions/
@@ -381,7 +379,7 @@ v0.1 **不包含**：
 
 1. **立即**显示 `configModels`（仅 trim 去重）。
 2. 始终提供 `✎ 手动输入`。
-3. **不**自动请求远端。仅当用户选择 **`↻ 刷新模型`** 时，按 cc-switch 逻辑请求（见 `research/cc-switch-model-discovery.md`）：
+3. **不**自动请求远端。仅当用户选择 **`↻ 刷新模型`** 时，按 cc-switch 逻辑请求（对齐 `model_fetch` 候选推导）：
    - 支持 `modelsUrl` 覆写、`isFullUrl` 推导
    - `/vN` 规则与兼容后缀剥离候选
    - Bearer + 可选 User-Agent；超时 15s
@@ -592,4 +590,4 @@ session_start(startup)
 
 ---
 
-*文档结束。实现以本 SPEC 为准；与 DESIGN.md 冲突时以 SPEC 为准。*
+*文档结束。实现以本 SPEC 为准。*

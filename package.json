@@ -36,11 +36,10 @@
     "src",
     "defaults",
     "skills",
-    "docs",
+    "docs/images",
     "README.md",
     "README-zh.md",
-    "LICENSE",
-    "SPEC.md"
+    "LICENSE"
   ],
   "scripts": {
     "test": "bun test",

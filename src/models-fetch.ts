@@ -3,7 +3,7 @@ import type { PiApi } from "./types.ts";
 
 /**
  * Model list URL candidates — port of cc-switch model_fetch.rs
- * (commit a377d793…, see research/cc-switch-model-discovery.md).
+ * (commit a377d793…).
  */
 
 /**
