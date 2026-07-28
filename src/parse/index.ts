@@ -1,5 +1,5 @@
 import type { CcProvider, ProviderRow } from "../types.ts";
-import { makePiName, parseMeta, safeJsonParse, asString } from "./common.ts";
+import { makePiName, parseMeta, safeJsonParse, asString, asRecord, hasLeafValue } from "./common.ts";
 import { parseClaude } from "./claude.ts";
 import { parseCodex } from "./codex.ts";
 import { parseGemini } from "./gemini.ts";
@@ -18,6 +18,45 @@ export { parseGrokbuild } from "./grokbuild.ts";
 export { parseOpencode } from "./opencode.ts";
 export { parseHermes } from "./hermes.ts";
 export { parseGeneric } from "./generic.ts";
+
+/** Human-readable reason for cc-switch official-login entries (credentials live in cc-switch, not the DB). */
+export const MANAGED_AUTH_PARSE_ERROR =
+  "官方/OAuth 登录条目:凭据由 cc-switch 托管,pi 无法直连";
+
+/**
+ * Official/OAuth entries carry no direct credentials in settings_config:
+ * - claude/gemini Official: empty (possibly nested-empty) config object
+ * - codex Official: auth.tokens OAuth block
+ * - grokbuild Official: config-only TOML without base_url/api_key
+ * Only consulted for rows that already failed to parse as switchable.
+ */
+function isManagedAuthEntry(configRaw: unknown): boolean {
+  const root = asRecord(configRaw);
+  if (!root) return false;
+  if (!hasLeafValue(root)) {
+    // Only trust bare config-container shells ({}, {env:{},config:{}}) — an
+    // opencode agents-only shell is also leafless but is NOT an official entry.
+    return Object.keys(root).every((k) => k === "env" || k === "config" || k === "auth");
+  }
+  // OAuth tokens only signal managed auth when no direct API key coexists —
+  // a key + stale tokens + broken TOML must keep its real, fixable error.
+  const auth = asRecord(root.auth);
+  const tokens = asRecord(auth?.tokens);
+  if (
+    tokens &&
+    !asString(auth?.OPENAI_API_KEY) &&
+    ("access_token" in tokens || "refresh_token" in tokens)
+  ) {
+    return true;
+  }
+  const keys = Object.keys(root);
+  return (
+    keys.length === 1 &&
+    typeof root.config === "string" &&
+    !root.config.includes("base_url") &&
+    !root.config.includes("api_key")
+  );
+}
 
 /** Convert one DB row into a CcProvider (never returns null 鈥?failures become parseError). */
 export function parseProviderRow(row: ProviderRow): CcProvider {
@@ -74,6 +113,9 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
       : !core.baseUrl
         ? "missing baseUrl"
         : "missing apiKey";
+  }
+  if (parseError && isManagedAuthEntry(configRaw)) {
+    parseError = MANAGED_AUTH_PARSE_ERROR;
   }
 
   return {

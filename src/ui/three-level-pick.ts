@@ -57,6 +57,12 @@ export interface ThreeLevelPickOpts {
   onTogglePin?: (entry: PinEntry) => PinEntry[] | Promise<PinEntry[]>;
   fetchRemote?: (provider: CcProvider) => Promise<string[]>;
   /**
+   * Session-scoped remote-models cache (dbId → ids). Pass the same Map across
+   * reopenings (the `o` override loop re-enters the picker) so a fetched list
+   * survives instead of being lost with the closed TUI.
+   */
+  remoteCache?: Map<string, string[]>;
+  /**
    * Whether a modelMeta override exists. Called with modelId for the model
    * column (model-scope only) and without it for the name column (any scope).
    * Drives the ⚙ badge.
@@ -259,7 +265,7 @@ async function threeLevelCustom(
     /** Inline manual model id entry (same nesting ban as search). */
     let manualMode = false;
     let manualDraft = "";
-    const remoteById = new Map<string, string[]>();
+    const remoteById = opts.remoteCache ?? new Map<string, string[]>();
     /** Live pin list; refreshed by onTogglePin without closing TUI. */
     let livePins: PinEntry[] = [...(opts.pins ?? [])];
     let disposed = false;

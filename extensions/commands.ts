@@ -14,6 +14,7 @@ import {
   resolveListedModel,
 } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
+import { buildQuickEntries } from "../src/ui/quick-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
@@ -22,7 +23,7 @@ import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
 import type { ModelMetaDialogUi } from "../src/ui/model-meta-dialog.ts";
 import type { Runtime } from "./runtime.ts";
-import type { SwitchLifecycle } from "./switch-lifecycle.ts";
+import type { SwitchLifecycle, ActivationResult } from "./switch-lifecycle.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -284,6 +285,8 @@ export async function runCommand(
 
   // Loop so `o` override returns to the picker (F contract). Esc at type-only exits.
   // First pass and each resume after override reloads config + DB snapshot once.
+  // Remote model lists live here so they survive picker re-entry after `o`.
+  const remoteCache = new Map<string, string[]>();
   while (true) {
     rt.reloadConfig();
     const { providers: live, error: snapErr } = rt.refreshSnapshot();
@@ -306,6 +309,7 @@ export async function runCommand(
       tabOrder: rt.config.tabs,
       pins: rt.config.pins,
       recent: rt.config.recent,
+      remoteCache,
       hasOverride: (provider, modelId) => rt.hasModelMetaOverride(provider, modelId),
       onTogglePin: (entry) => {
         const result = rt.state.togglePin(entry);
@@ -343,30 +347,66 @@ export async function runCommand(
       { provider, modelId, commit: "selection" },
       ctx,
     );
-
-    if (result.kind === "failed") {
-      ctx.ui.notify(`切换失败：${result.error}`, "error");
-      return;
-    }
-
-    if (result.persistence === "failed") {
-      ctx.ui.notify(
-        `已切换，本次选择未保存：${result.persistenceError}`,
-        "warning",
-      );
-    } else {
-      const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
-      ctx.ui.notify(
-        `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
-        "info",
-      );
-    }
-    ctx.ui.setStatus?.(
-      "pi-switch",
-      `${modelId} @ ${provider.appType}/${provider.displayName}`,
-    );
+    notifyActivation(rt, ctx, provider, modelId, result);
     return;
   }
+}
+
+/** Shared post-activate notifications (used by /ps-config and /ps). */
+function notifyActivation(
+  rt: Runtime,
+  ctx: PiSwitchCtx,
+  provider: CcProvider,
+  modelId: string,
+  result: ActivationResult,
+): void {
+  if (result.kind === "failed") {
+    ctx.ui.notify(`切换失败：${result.error}`, "error");
+    return;
+  }
+
+  if (result.persistence === "failed") {
+    ctx.ui.notify(
+      `已切换，本次选择未保存：${result.persistenceError}`,
+      "warning",
+    );
+  } else {
+    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
+    ctx.ui.notify(
+      `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
+      "info",
+    );
+  }
+  ctx.ui.setStatus?.(
+    "pi-switch",
+    `${modelId} @ ${provider.appType}/${provider.displayName}`,
+  );
+}
+
+/** /ps — one-screen quick switch across pinned + recent pairs (skips 3-level nav). */
+export async function runQuickSwitch(
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+  ctx: PiSwitchCtx,
+): Promise<void> {
+  rt.reloadConfig();
+  const { providers: live, error: snapErr } = rt.refreshSnapshot();
+  if (snapErr) ctx.ui.notify(snapErr, "warning");
+  const entries = buildQuickEntries(rt.config.pins ?? [], rt.config.recent ?? [], live);
+  if (!entries.length) {
+    ctx.ui.notify("没有可用的 pin / recent；先用 /ps-config 完成一次切换", "warning");
+    return;
+  }
+  const labels = entries.map((e) => e.label);
+  const pick = await ctx.ui.select("快速切换", labels);
+  if (!pick) return;
+  const entry = entries[labels.indexOf(pick)];
+  if (!entry) return;
+  const result = await lifecycle.activate(
+    { provider: entry.provider, modelId: entry.modelId, commit: "selection" },
+    ctx,
+  );
+  notifyActivation(rt, ctx, entry.provider, entry.modelId, result);
 }
 
 export function registerCommands(
@@ -378,6 +418,13 @@ export function registerCommands(
     description: "从 cc-switch 选择 Provider 与 Model 并切换（pin/recent 本地快捷）",
     handler: async (_args, ctx) => {
       await runCommand(rt, lifecycle, ctx);
+    },
+  });
+
+  pi.registerCommand("ps", {
+    description: "快速切换：pin + recent 一屏直达",
+    handler: async (_args, ctx) => {
+      await runQuickSwitch(rt, lifecycle, ctx);
     },
   });
 
