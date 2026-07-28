@@ -17,7 +17,7 @@ This repository combines **GitHub Rulesets** and **classic branch protection**.
 | Require conversation resolution | yes |
 | Allow force pushes | **no** |
 | Allow deletions | **no** |
-| Enforce for admins | **no** (admin emergency push allowed) |
+| Enforce for admins | **yes** (admins also need PR + Test) |
 
 Source snapshot: `.github/classic-main-protection.json`
 
