@@ -11,13 +11,11 @@ import {
   migrateLegacySelection,
   piSettingsPath,
   piSwitchConfigPath,
-  pushRecentEntry,
+  recordRecentAndWrite,
   readPiSwitchConfig,
   readSelection,
-  togglePinEntry,
+  togglePinAndWrite,
   writeModelMetaOverride,
-  writePins,
-  writeRecent,
   writeSelection,
   type FsLike,
   type ModelMetaScope,
@@ -76,19 +74,7 @@ export function createLocalState(options: {
       writeModelMetaOverride(fs, configPath, provider, scope, modelMeta, pid),
     clearModelMetaOverrides: (provider) =>
       clearAllModelMetaOverrides(fs, configPath, provider, pid),
-    togglePin: (entry) => {
-      const current = readPiSwitchConfig(fs, configPath);
-      const next = togglePinEntry(current.pins, entry);
-      return { ...writePins(fs, configPath, next.pins, pid), ...next };
-    },
-    recordRecent: (entry) => {
-      const current = readPiSwitchConfig(fs, configPath);
-      const next = pushRecentEntry(
-        current.recent,
-        entry,
-        current.recentLimit,
-      );
-      return { ...writeRecent(fs, configPath, next, pid), recent: next };
-    },
+    togglePin: (entry) => togglePinAndWrite(fs, configPath, entry, pid),
+    recordRecent: (entry) => recordRecentAndWrite(fs, configPath, entry, pid),
   };
 }

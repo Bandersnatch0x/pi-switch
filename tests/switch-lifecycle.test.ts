@@ -42,7 +42,7 @@ function provider(
 
 function memFs(
   initial: Record<string, string> = {},
-  failRenameTo?: string,
+  failRenameTo: string[] = [],
 ): FsLike & { store: Record<string, string> } {
   const store = { ...initial };
   return {
@@ -56,9 +56,12 @@ function memFs(
       store[path] = data;
     },
     renameSync: (from, to) => {
-      if (to === failRenameTo) throw new Error("disk full");
+      if (failRenameTo.includes(to)) throw new Error("disk full");
       store[to] = store[from];
       delete store[from];
+    },
+    unlinkSync: (path) => {
+      delete store[path];
     },
   };
 }
@@ -68,6 +71,8 @@ function setup(options?: {
   selection?: { dbId: string; model: string };
   setModelResult?: boolean;
   failSelectionWrite?: boolean;
+  failRecentWrite?: boolean;
+  failUnregister?: boolean;
   hasUnregister?: boolean;
 }) {
   const home = "/home/test";
@@ -83,7 +88,10 @@ function setup(options?: {
     : { [configPath]: "{}" };
   const fs = memFs(
     initial,
-    options?.failSelectionWrite ? settingsPath : undefined,
+    [
+      ...(options?.failSelectionWrite ? [settingsPath] : []),
+      ...(options?.failRecentWrite ? [configPath] : []),
+    ],
   );
   const operations: Operation[] = [];
   const providers = options?.providers ?? [provider()];
@@ -105,6 +113,7 @@ function setup(options?: {
       : {
           unregisterProvider: (name: string) => {
             operations.push({ op: "unregister", name });
+            if (options?.failUnregister) throw new Error("provider busy");
           },
         }),
   };
@@ -163,7 +172,16 @@ describe("switch lifecycle interface", () => {
       state.ctx,
     );
 
-    expect(result).toEqual({ kind: "activated", persistence: "saved" });
+    expect(result).toEqual({
+      kind: "activated",
+      stages: {
+        providerRegistration: { status: "succeeded" },
+        modelSwitch: { status: "succeeded" },
+        providerCleanup: { status: "succeeded" },
+        selectionPersistence: { status: "succeeded" },
+        recentPersistence: { status: "succeeded" },
+      },
+    });
     expect(state.operations.map((item) => item.op)).toEqual([
       "register",
       "find",
@@ -186,7 +204,12 @@ describe("switch lifecycle interface", () => {
       state.ctx,
     );
 
-    expect(result).toEqual({ kind: "failed", error: "unsupported apiFormat: magic" });
+    expect(result).toMatchObject({
+      kind: "failed",
+      failedStage: "providerRegistration",
+      error: "unsupported apiFormat: magic",
+      stages: { providerRegistration: { status: "failed" } },
+    });
     expect(state.operations).toEqual([]);
     expect(state.runtime.registeredPsNames).toEqual(["ps-claude-old"]);
     expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
@@ -205,7 +228,11 @@ describe("switch lifecycle interface", () => {
       state.ctx,
     );
 
-    expect(result).toMatchObject({ kind: "failed" });
+    expect(result).toMatchObject({
+      kind: "failed",
+      failedStage: "modelSwitch",
+      stages: { modelSwitch: { status: "failed" } },
+    });
     expect(state.operations.some((item) => item.op === "unregister")).toBe(false);
     expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
       dbId: "old",
@@ -224,6 +251,7 @@ describe("switch lifecycle interface", () => {
 
     expect(result).toMatchObject({
       kind: "failed",
+      failedStage: "providerRegistration",
       error: "model not found after register: ps-codex-new / ghost",
     });
     expect(state.operations.some((item) => item.op === "setModel")).toBe(false);
@@ -236,13 +264,59 @@ describe("switch lifecycle interface", () => {
       state.ctx,
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "activated",
-      persistence: "failed",
-      persistenceError: "disk full",
+      stages: {
+        selectionPersistence: {
+          status: "failed",
+          error: expect.stringContaining("disk full"),
+        },
+        recentPersistence: { status: "succeeded" },
+      },
     });
     expect(state.operations.some((item) => item.op === "setModel")).toBe(true);
     expect(state.runtime.registeredPsNames).toEqual(["ps-codex-new"]);
+  });
+
+  test("recent failure is reported independently from selection persistence", async () => {
+    const state = setup({ failRecentWrite: true });
+    const result = await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "selection" },
+      state.ctx,
+    );
+
+    expect(result).toMatchObject({
+      kind: "activated",
+      stages: {
+        selectionPersistence: { status: "succeeded" },
+        recentPersistence: {
+          status: "failed",
+          error: expect.stringContaining("disk full"),
+        },
+      },
+    });
+  });
+
+  test("cleanup failure retains the old registration and reports the stage", async () => {
+    const state = setup({ failUnregister: true });
+    const result = await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "selection" },
+      state.ctx,
+    );
+
+    expect(result).toMatchObject({
+      kind: "activated",
+      stages: {
+        providerCleanup: {
+          status: "failed",
+          error: "ps-claude-old: provider busy",
+        },
+      },
+    });
+    expect(state.runtime.registeredPsNames).toEqual([
+      "ps-codex-new",
+      "ps-claude-old",
+    ]);
   });
 
   test("runtime-only activation skips selection persistence", async () => {
@@ -252,7 +326,19 @@ describe("switch lifecycle interface", () => {
       state.ctx,
     );
 
-    expect(result).toEqual({ kind: "activated", persistence: "skipped" });
+    expect(result).toMatchObject({
+      kind: "activated",
+      stages: {
+        selectionPersistence: {
+          status: "skipped",
+          reason: "runtime-only activation",
+        },
+        recentPersistence: {
+          status: "skipped",
+          reason: "runtime-only activation",
+        },
+      },
+    });
     expect(readSelection(state.fs, state.settingsPath)).toBeUndefined();
   });
 

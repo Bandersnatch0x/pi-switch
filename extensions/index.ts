@@ -28,6 +28,7 @@ export default async function (pi: ExtensionAPI) {
     readFileSync: fs.readFileSync,
     writeFileSync: fs.writeFileSync,
     renameSync: fs.renameSync,
+    unlinkSync: fs.unlinkSync,
     release: osMod.release(),
     home: osMod.homedir(),
   });

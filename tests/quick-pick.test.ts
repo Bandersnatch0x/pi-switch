@@ -26,7 +26,7 @@ const providers = [
 ];
 
 describe("buildQuickEntries", () => {
-  test("pins first with ★, then recent by time desc, deduped", () => {
+  test("pins first with *, then recent by time desc, deduped", () => {
     const pins: PinEntry[] = [{ dbId: "a", model: "gpt-5" }];
     const recent: RecentEntry[] = [
       { dbId: "b", model: "r-old", at: 100 },
@@ -40,8 +40,8 @@ describe("buildQuickEntries", () => {
       "b:r-old",
     ]);
     expect(entries[0].pinned).toBe(true);
-    expect(entries[0].label).toBe("★ claude/alpha · gpt-5");
-    expect(entries[1].label).toBe("codex/beta · r-new");
+    expect(entries[0].label).toBe("* C claude/alpha · gpt-5");
+    expect(entries[1].label).toBe("  O codex/beta · r-new");
   });
 
   test("filters stale dbIds and unswitchable providers", () => {
@@ -81,7 +81,16 @@ describe("runQuickSwitch", () => {
       install() {},
       activate: async (t: { provider: CcProvider; modelId: string; commit: string }) => {
         activations.push({ id: t.provider.id, model: t.modelId, commit: t.commit });
-        return { kind: "activated", persistence: "saved" } as const;
+        return {
+          kind: "activated",
+          stages: {
+            providerRegistration: { status: "succeeded" },
+            modelSwitch: { status: "succeeded" },
+            providerCleanup: { status: "succeeded" },
+            selectionPersistence: { status: "succeeded" },
+            recentPersistence: { status: "succeeded" },
+          },
+        } as const;
       },
     };
     const ctx = {
@@ -116,7 +125,7 @@ describe("runQuickSwitch", () => {
 
   test("picking an entry activates provider+model with selection commit", async () => {
     const d = makeDeps([{ dbId: "a", model: "gpt-5" }], [{ dbId: "b", model: "r1", at: 1 }]);
-    d.answer("codex/beta · r1");
+    d.answer("  O codex/beta · r1");
     await runQuickSwitch(d.rt as never, d.lifecycle as never, d.ctx as never);
     expect(d.activations).toEqual([{ id: "b", model: "r1", commit: "selection" }]);
   });

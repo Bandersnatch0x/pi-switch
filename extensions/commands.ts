@@ -1,5 +1,5 @@
 /**
- * Interactive slash-command handlers: /ps-config, /ps-override, /ps-doctor.
+ * Interactive slash-command handlers: /ps-config, /ps-override, /ps-info, /ps-doctor.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -20,10 +20,20 @@ import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
+import {
+  createEffectiveConfigSummary,
+  formatEffectiveConfigSummary,
+} from "../src/effective-config.ts";
+import { isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
+import { buildProviderConfig } from "../src/register.ts";
 import type { ModelMetaDialogUi } from "../src/ui/model-meta-dialog.ts";
 import type { Runtime } from "./runtime.ts";
-import type { SwitchLifecycle, ActivationResult } from "./switch-lifecycle.ts";
+import type {
+  SwitchLifecycle,
+  ActivationResult,
+  ActivationStageResult,
+} from "./switch-lifecycle.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -254,25 +264,93 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   });
 
   const text = formatDoctorReport(report);
-  console.log(text);
-  // Prefer multi-line notify when available; fall back to summary.
+  // Prefer multi-line notify when available; fall back to console.log so the
+  // report still surfaces in headless/RPC hosts. Avoids double-printing in
+  // hosts (like Orca) that surface both console.log and notify.
   if (typeof ctx.ui?.notify === "function") {
     const level =
       report.summary.fail > 0 ? "error" : report.summary.warn > 0 ? "warning" : "info";
-    ctx.ui.notify(
-      `pi-switch doctor · pass=${report.summary.pass} warn=${report.summary.warn} fail=${report.summary.fail}\n` +
-        report.checks
-          .map((c) => {
-            const tag = c.status === "pass" ? "PASS" : c.status === "warn" ? "WARN" : "FAIL";
-            return `[${tag}] ${c.title}: ${c.detail}`;
-          })
-          .join("\n"),
-      level,
-    );
+    ctx.ui.notify(text, level);
+  } else {
+    console.log(text);
   }
   ctx.ui?.setStatus?.(
     "pi-switch",
     `doctor p=${report.summary.pass} w=${report.summary.warn} f=${report.summary.fail}`,
+  );
+}
+
+/** /ps-info — readonly view of the config registration would currently use. */
+export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
+  rt.reloadConfig();
+  rt.reloadHeaderRules();
+  const { providers, error } = rt.refreshSnapshot();
+  if (error) ctx.ui?.notify?.(error, "warning");
+
+  const activePiName = activeProviderName(ctx);
+  const activeModelId =
+    typeof ctx.model?.id === "string" && ctx.model.id.trim()
+      ? ctx.model.id.trim()
+      : undefined;
+  let source: "active" | "saved" = "active";
+  let provider = activePiName
+    ? providers.find((candidate) => candidate.piName === activePiName)
+    : undefined;
+  let modelId = activeModelId;
+
+  if (!provider || !modelId) {
+    const selection = rt.state.readSelection();
+    provider = selection
+      ? providers.find((candidate) => candidate.id === selection.dbId)
+      : undefined;
+    modelId = selection?.model;
+    source = "saved";
+  }
+
+  if (!provider || !modelId) {
+    ctx.ui?.notify?.("没有可显示的当前或已保存 pi-switch 配置", "warning");
+    return;
+  }
+
+  const resolvedModelId =
+    resolveListedModel(provider.configModels, modelId) ?? modelId;
+  const config = buildProviderConfig(provider, [resolvedModelId], {
+    rules: rt.headerRules,
+    ...rt.headerOverrideOpts(provider),
+    vars: rt.headerVars(),
+    debug: rt.config.debug,
+    onReject: rt.rejectSink(),
+    modelMetaFor: (id) => rt.modelMetaFor(provider, id),
+  });
+  if (!config) {
+    ctx.ui?.notify?.(
+      `无法构建有效配置：${provider.parseError ?? provider.displayName}`,
+      "error",
+    );
+    return;
+  }
+
+  const override = resolveProviderOverride(rt.config.providerOverrides, provider);
+  const fingerprint =
+    typeof override?.fingerprint === "string" && isFingerprintPreset(override.fingerprint)
+      ? override.fingerprint
+      : undefined;
+  const summary = createEffectiveConfigSummary({
+    source,
+    provider,
+    modelId: resolvedModelId,
+    config,
+    fingerprint,
+  });
+  const text = formatEffectiveConfigSummary(summary);
+  if (ctx.ui?.notify) {
+    ctx.ui.notify(text, "info");
+  } else {
+    console.log(text);
+  }
+  ctx.ui?.setStatus?.(
+    "pi-switch",
+    `info ${summary.modelId} @ ${summary.appType}/${summary.providerName}`,
   );
 }
 
@@ -361,13 +439,16 @@ function notifyActivation(
   result: ActivationResult,
 ): void {
   if (result.kind === "failed") {
-    ctx.ui.notify(`切换失败：${result.error}`, "error");
+    const label =
+      result.failedStage === "providerRegistration" ? "Provider 注册" : "模型切换";
+    ctx.ui.notify(`切换失败（${label}）：${result.error}`, "error");
     return;
   }
 
-  if (result.persistence === "failed") {
+  const warnings = activationWarnings(result);
+  if (warnings.length) {
     ctx.ui.notify(
-      `已切换，本次选择未保存：${result.persistenceError}`,
+      `已切换，但部分阶段未完成：\n- ${warnings.join("\n- ")}`,
       "warning",
     );
   } else {
@@ -381,6 +462,28 @@ function notifyActivation(
     "pi-switch",
     `${modelId} @ ${provider.appType}/${provider.displayName}`,
   );
+}
+
+function stageIssue(
+  stage: ActivationStageResult,
+  failedLabel: string,
+  skippedLabel?: string,
+): string | undefined {
+  if (stage.status === "failed") return `${failedLabel}：${stage.error}`;
+  if (stage.status === "skipped" && skippedLabel && stage.reason) {
+    return `${skippedLabel}：${stage.reason}`;
+  }
+  return undefined;
+}
+
+export function activationWarnings(
+  result: Extract<ActivationResult, { kind: "activated" }>,
+): string[] {
+  return [
+    stageIssue(result.stages.providerCleanup, "旧 Provider 清理失败", "旧 Provider 清理跳过"),
+    stageIssue(result.stages.selectionPersistence, "selection 保存失败"),
+    stageIssue(result.stages.recentPersistence, "recent 保存失败"),
+  ].filter((item): item is string => Boolean(item));
 }
 
 /** /ps — one-screen quick switch across pinned + recent pairs (skips 3-level nav). */
@@ -448,6 +551,13 @@ export function registerCommands(
     description: "诊断 pi-switch 环境（sqlite3 / DB / 指纹 / modelMeta / pin）",
     handler: async (_args, ctx) => {
       await runDoctorCommand(rt, ctx);
+    },
+  });
+
+  pi.registerCommand("ps-info", {
+    description: "显示当前生效的 Provider、Model、参数与非敏感 Header 名称",
+    handler: async (_args, ctx) => {
+      runEffectiveConfigCommand(rt, ctx);
     },
   });
 }

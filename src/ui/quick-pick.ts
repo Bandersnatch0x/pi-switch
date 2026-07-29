@@ -1,6 +1,7 @@
 /** /ps quick-switch list: pinned + recent pairs collapsed to one screen. */
 import { isSwitchable } from "../parse/index.ts";
 import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
+import { getAppTypeIcon } from "./labels.ts";
 
 export interface QuickEntry {
   provider: CcProvider;
@@ -33,14 +34,15 @@ export function buildQuickEntries(
     const provider = byId.get(dbId);
     if (!provider || !isSwitchable(provider)) return;
     seen.add(key);
+    const icon = getAppTypeIcon(provider.appType);
+    const badge = pinned ? "* " : "  ";
     out.push({
       provider,
       modelId,
       pinned,
-      label: `${pinned ? "★ " : ""}${provider.appType}/${provider.displayName} · ${modelId}`,
+      label: `${badge}${icon} ${provider.appType}/${provider.displayName} · ${modelId}`,
     });
   };
-
   for (const p of pins) push(p.dbId, p.model, true);
   for (const r of [...recent].sort((a, b) => b.at - a.at)) push(r.dbId, r.model, false);
   return out;

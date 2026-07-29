@@ -9,12 +9,30 @@ export function extractHostname(url: string): string {
   }
 }
 
-/** ANSI yellow for current session model.provider (no ★/● markers). */
+/** ANSI styles for TUI highlights. */
 export const ANSI_YELLOW = "\x1b[33m";
 export const ANSI_RESET = "\x1b[0m";
 
 export function yellowHighlight(text: string): string {
   return `${ANSI_YELLOW}${text}${ANSI_RESET}`;
+}
+
+/**
+ * AppType → single-cell ASCII tag for tab / list prefixes. ASCII is used
+ * deliberately: Unicode glyphs (✦/⊕/◈/…) render at varying widths across
+ * terminal fonts, which breaks three-level-pick column alignment since
+ * `fit()` trusts `visibleWidth`. A single ASCII letter is exactly 1 cell
+ * in every font, so alignment stays correct.
+ */
+export function getAppTypeIcon(appType: string): string {
+  const t = appType.toLowerCase();
+  if (t.includes("claude")) return "C";
+  if (t.includes("codex") || t.includes("openai")) return "O";
+  if (t.includes("gemini") || t.includes("google")) return "G";
+  if (t.includes("grok")) return "K";
+  if (t.includes("hermes")) return "H";
+  if (t.includes("opencode")) return "E";
+  return "·";
 }
 
 /**

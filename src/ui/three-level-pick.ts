@@ -26,6 +26,7 @@ import { isPinned } from "../settings.ts";
 import { buildTabs, type TabInfo } from "./tabs.ts";
 import {
   filterProviders,
+  getAppTypeIcon,
   sortProviders,
   yellowHighlight,
 } from "./labels.ts";
@@ -343,10 +344,10 @@ async function threeLevelCustom(
     }
 
     function modelLabel(id: string, provider?: CcProvider): string {
-      if (id === MANUAL) return "✎ 手动输入";
-      if (id === FETCH) return "↻ 刷新模型";
-      const gear = provider && opts.hasOverride?.(provider, id) ? " ⚙" : "";
-      if (provider && isPinned(livePins, provider.id, id)) return `★ ${id}${gear}`;
+      if (id === MANUAL) return "+ 手动输入";
+      if (id === FETCH) return "r 刷新模型";
+      const gear = provider && opts.hasOverride?.(provider, id) ? fg("accent", " *") : "";
+      if (provider && isPinned(livePins, provider.id, id)) return `* ${id}${gear}`;
       return `${id}${gear}`;
     }
 
@@ -434,20 +435,20 @@ async function threeLevelCustom(
       return fg(color, "─".repeat(Math.max(1, width)));
     }
 
-    function vsep(): string {
-      return fg("dim", "│");
+    function vsep(active?: boolean): string {
+      return active ? fg("accent", "│") : fg("dim", "│");
     }
 
     function headerCell(label: string, focused: boolean, colWidth: number): string {
       if (focused) {
-        return fit(fg("accent", bold(`▸ ${label}`)), colWidth);
+        return fit(fg("accent", bold(`> ${label}`)), colWidth);
       }
       return fit(fg("muted", `  ${label}`), colWidth);
     }
 
     function rowMarker(selected: boolean, focused: boolean, body: string): string {
-      if (selected && focused) return fg("accent", `› ${body}`);
-      if (selected) return `› ${body}`;
+      if (selected && focused) return fg("accent", bold(`> ${body}`));
+      if (selected) return fg("muted", `> ${body}`);
       return `  ${body}`;
     }
 
@@ -495,8 +496,8 @@ async function threeLevelCustom(
 
       // Headers only for revealed columns
       let header = headerCell(COL_LABELS[0], col === 0, c0);
-      if (revealed >= 1) header += vsep() + headerCell(COL_LABELS[1], col === 1, c1);
-      if (revealed >= 2) header += vsep() + headerCell(COL_LABELS[2], col === 2, c2);
+      if (revealed >= 1) header += vsep(col === 0 || col === 1) + headerCell(COL_LABELS[1], col === 1, c1);
+      if (revealed >= 2) header += vsep(col === 1 || col === 2) + headerCell(COL_LABELS[2], col === 2, c2);
       push(header);
       push(border(width, "dim"));
 
@@ -508,7 +509,8 @@ async function threeLevelCustom(
         let tCell = "";
         if (ti < tabs.length) {
           const tab = tabs[ti];
-          const namePart = tab.appType;
+          const icon = getAppTypeIcon(tab.appType);
+          const namePart = `${icon} ${tab.appType}`;
           const countPart = String(tab.count);
           const sel = ti === tIdx;
           const body =
@@ -527,21 +529,21 @@ async function threeLevelCustom(
           if (ni < names.length) {
             const p = names[ni];
             const nameBudget = Math.max(4, c1 - 6);
-            const pinMark = providerHasPin(p) ? "★ " : "";
-            const gear = providerHasOverride(p) ? " ⚙" : "";
+            const pinMark = providerHasPin(p) ? "* " : "";
+            const gear = providerHasOverride(p) ? " *" : "";
             const reserved = (pinMark ? 2 : 0) + (gear ? 2 : 0);
             const name = truncatePlain(p.displayName, Math.max(2, nameBudget - reserved));
             const labeled = `${pinMark}${name}${gear}`;
             const ok = isSwitchable(p);
             const core = ok
               ? labeled
-              : `${labeled} ${fg("dim", "·")} ${fg("warning", "不可切换")}`;
+              : `${labeled} ${fg("dim", "-")} ${fg("warning", "不可切换")}`;
             const sel = ni === nameIdx;
             const active = opts.activePiName === p.piName;
             if (sel && col === 1) {
-              nCell = fg("accent", `› ${labeled}${ok ? "" : " · 不可切换"}`);
-            } else if (sel && active) nCell = `› ${yellowHighlight(labeled)}`;
-            else if (sel) nCell = `› ${ok ? labeled : `${labeled} · 不可切换`}`;
+              nCell = fg("accent", `> ${labeled}${ok ? "" : " - 不可切换"}`);
+            } else if (sel && active) nCell = `> ${yellowHighlight(labeled)}`;
+            else if (sel) nCell = `> ${ok ? labeled : `${labeled} - 不可切换`}`;
             else if (active) nCell = `  ${yellowHighlight(labeled)}`;
             else nCell = `  ${core}`;
           } else if (row === 0 && names.length === 0) {

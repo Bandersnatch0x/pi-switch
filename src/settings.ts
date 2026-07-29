@@ -20,16 +20,15 @@ import {
   type ProviderOverrideEntry,
 } from "./provider-override.ts";
 import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
+import {
+  readJsonObjectLenient,
+  updateJsonObjectAtomic,
+  type FsLike,
+} from "./json-file.ts";
 
 export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
-
-export interface FsLike {
-  existsSync: (path: string) => boolean;
-  readFileSync: (path: string, encoding: "utf8") => string;
-  writeFileSync: (path: string, data: string, encoding: "utf8") => void;
-  renameSync: (from: string, to: string) => void;
-}
+export type { FsLike } from "./json-file.ts";
 
 export function piSettingsPath(home: string): string {
   return `${home.replace(/[\\/]+$/, "")}/.pi/agent/settings.json`;
@@ -44,13 +43,7 @@ export function providerHeadersPath(home: string): string {
 }
 
 export function readJsonFile(fs: FsLike, path: string): Record<string, unknown> {
-  try {
-    if (!fs.existsSync(path)) return {};
-    const v = JSON.parse(fs.readFileSync(path, "utf8"));
-    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-  } catch {
-    return {};
-  }
+  return readJsonObjectLenient(fs, path);
 }
 
 export function writeJsonAtomic(
@@ -59,9 +52,10 @@ export function writeJsonAtomic(
   data: Record<string, unknown>,
   pid: number,
 ): void {
-  const tmp = `${path}.tmp-${pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, path);
+  updateJsonObjectAtomic(fs, path, pid, () => ({
+    document: data,
+    result: undefined,
+  }));
 }
 
 export function readSelection(fs: FsLike, settingsPath: string): PiSwitchSelection | undefined {
@@ -86,15 +80,19 @@ export function writeSelection(
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
-    const settings = readJsonFile(fs, settingsPath);
-    settings[SETTINGS_KEY] = {
-      dbId: sel.dbId,
-      model: sel.model.trim(),
-      tab: sel.tab,
-      appType: sel.appType,
-      provider: sel.provider,
-    };
-    writeJsonAtomic(fs, settingsPath, settings, pid);
+    updateJsonObjectAtomic(fs, settingsPath, pid, (settings) => ({
+      document: {
+        ...settings,
+        [SETTINGS_KEY]: {
+          dbId: sel.dbId,
+          model: sel.model.trim(),
+          tab: sel.tab,
+          appType: sel.appType,
+          provider: sel.provider,
+        },
+      },
+      result: undefined,
+    }));
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -287,41 +285,42 @@ export function writeModelMetaOverride(
       if (!valid.ok) return valid;
     }
 
-    const raw = readJsonFile(fs, configPath);
-    const overrides =
-      raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
-        ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
-        : {};
-
-    const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
-      ? { ...overrides[provider.id] }
-      : {}) as MutableOverrideEntry;
-
-    if (scope.kind === "provider") {
-      const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-      if (!cleaned) delete prev.modelMeta;
-      else prev.modelMeta = cleaned;
-    } else {
-      const modelId = scope.modelId.trim();
-      if (!modelId) return { ok: false, error: "empty model id" };
-      const map = { ...(prev.modelOverrides ?? {}) };
-      // Reuse only a case-variant exact key. A concrete model edit must not
-      // mutate a matching glob that also affects sibling models.
-      const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
-      const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-      if (!cleaned) delete map[key];
-      else map[key] = cleaned;
-      if (Object.keys(map).length) prev.modelOverrides = map;
-      else delete prev.modelOverrides;
+    if (scope.kind === "model" && !scope.modelId.trim()) {
+      return { ok: false, error: "empty model id" };
     }
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const overrides =
+        raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
+          ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
+          : {};
+      const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
+        ? { ...overrides[provider.id] }
+        : {}) as MutableOverrideEntry;
 
-    if (modelMeta) prev.label = prev.label ?? provider.displayName;
+      if (scope.kind === "provider") {
+        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+        if (!cleaned) delete prev.modelMeta;
+        else prev.modelMeta = cleaned;
+      } else {
+        const modelId = scope.modelId.trim();
+        const map = { ...(prev.modelOverrides ?? {}) };
+        const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
+        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+        if (!cleaned) delete map[key];
+        else map[key] = cleaned;
+        if (Object.keys(map).length) prev.modelOverrides = map;
+        else delete prev.modelOverrides;
+      }
 
-    if (entryIsEmpty(prev)) delete overrides[provider.id];
-    else overrides[provider.id] = prev;
+      if (modelMeta) prev.label = prev.label ?? provider.displayName;
+      if (entryIsEmpty(prev)) delete overrides[provider.id];
+      else overrides[provider.id] = prev;
 
-    raw.providerOverrides = overrides;
-    writeJsonAtomic(fs, configPath, raw, pid);
+      return {
+        document: { ...raw, providerOverrides: overrides },
+        result: undefined,
+      };
+    });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -336,20 +335,23 @@ export function clearAllModelMetaOverrides(
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
-    const raw = readJsonFile(fs, configPath);
-    const overrides =
-      raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
-        ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
-        : {};
-    const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
-      ? { ...overrides[provider.id] }
-      : {}) as MutableOverrideEntry;
-    delete prev.modelMeta;
-    delete prev.modelOverrides;
-    if (entryIsEmpty(prev)) delete overrides[provider.id];
-    else overrides[provider.id] = prev;
-    raw.providerOverrides = overrides;
-    writeJsonAtomic(fs, configPath, raw, pid);
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const overrides =
+        raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
+          ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
+          : {};
+      const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
+        ? { ...overrides[provider.id] }
+        : {}) as MutableOverrideEntry;
+      delete prev.modelMeta;
+      delete prev.modelOverrides;
+      if (entryIsEmpty(prev)) delete overrides[provider.id];
+      else overrides[provider.id] = prev;
+      return {
+        document: { ...raw, providerOverrides: overrides },
+        result: undefined,
+      };
+    });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -419,9 +421,10 @@ export function writePins(
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
-    const raw = readJsonFile(fs, configPath);
-    raw.pins = pins;
-    writeJsonAtomic(fs, configPath, raw, pid);
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => ({
+      document: { ...raw, pins },
+      result: undefined,
+    }));
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -436,11 +439,67 @@ export function writeRecent(
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
-    const raw = readJsonFile(fs, configPath);
-    raw.recent = recent;
-    writeJsonAtomic(fs, configPath, raw, pid);
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => ({
+      document: { ...raw, recent },
+      result: undefined,
+    }));
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export function togglePinAndWrite(
+  fs: FsLike,
+  configPath: string,
+  entry: PinEntry,
+  pid: number,
+): { ok: boolean; error?: string; pins: PinEntry[]; pinned: boolean } {
+  try {
+    const next = updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const toggled = togglePinEntry(parsePins(raw.pins), entry);
+      return {
+        document: { ...raw, pins: toggled.pins },
+        result: toggled,
+      };
+    });
+    return { ok: true, ...next };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      pins: [],
+      pinned: false,
+    };
+  }
+}
+
+export function recordRecentAndWrite(
+  fs: FsLike,
+  configPath: string,
+  entry: Omit<RecentEntry, "at"> & { at?: number },
+  pid: number,
+): { ok: boolean; error?: string; recent: RecentEntry[] } {
+  try {
+    const recent = updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const config = readPiSwitchConfig({
+        ...fs,
+        existsSync: (path) => path === configPath || fs.existsSync(path),
+        readFileSync: (path, encoding) =>
+          path === configPath ? JSON.stringify(raw) : fs.readFileSync(path, encoding),
+      }, configPath);
+      const next = pushRecentEntry(config.recent, entry, config.recentLimit);
+      return {
+        document: { ...raw, recent: next },
+        result: next,
+      };
+    });
+    return { ok: true, recent };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      recent: [],
+    };
   }
 }
