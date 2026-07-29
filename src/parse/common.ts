@@ -72,6 +72,15 @@ export function extractTomlValue(toml: string, key: string): string | undefined 
   return m?.[1];
 }
 
+/** All `key = "value"` assignments in the fragment, in order (section-blind by design). */
+export function extractAllTomlValues(toml: string, key: string): string[] {
+  const re = new RegExp(`(?:^|\\n)\\s*${escapeRegExp(key)}\\s*=\\s*"([^"]*)"`, "g");
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(toml))) out.push(m[1]);
+  return out;
+}
+
 /** Read unquoted TOML string or simple identifier assignment. */
 export function extractTomlLoose(toml: string, key: string): string | undefined {
   const quoted = extractTomlValue(toml, key);
@@ -117,4 +126,13 @@ export function asRecord(v: unknown): Record<string, unknown> | undefined {
 
 export function asString(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+/** True if the value tree contains at least one non-empty scalar leaf. */
+export function hasLeafValue(v: unknown): boolean {
+  if (typeof v === "string") return v.trim() !== "";
+  if (typeof v === "number" || typeof v === "boolean") return true;
+  if (Array.isArray(v)) return v.some(hasLeafValue);
+  const r = asRecord(v);
+  return r ? Object.values(r).some(hasLeafValue) : false;
 }

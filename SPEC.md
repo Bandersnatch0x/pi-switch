@@ -350,6 +350,7 @@ v0.1 **不包含**：
 | 命令 | 行为 |
 |------|------|
 | `/ps-config` | 主流程：重读 DB → 快照 → tab → provider → model（pin/recent） |
+| `/ps` | 快速切换：pin + recent 合并去重一屏直达（≤10 条；失效/不可切换条目静默过滤） |
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
 | `/ps-override` | 为 Provider 设置 modelMeta 覆写（TUI SettingsList 表单；非交互退到串接弹窗）；预设：中转兼容 / 完整推理；默认编辑当前选中模型，可在子菜单切 provider 级 / 其他模型 / glob |
 | `/ps-doctor` | 结构化体检：PASS/WARN/FAIL + 修复建议 |
@@ -491,6 +492,8 @@ session_start(startup)
 | setModel 失败 | notify error，不写 selection |
 | 上游 401/403 | 切换仍成功；发消息时由 pi 报错 |
 | 未知 apiFormat | 可见，不可切换 |
+| 官方 OAuth 登录条目（Official；空配置 / auth.tokens / 无端点 TOML） | 可见，不可切换：「凭据由 cc-switch 托管，pi 无法直连」 |
+| grokbuild 多 block 且 base_url / api_key 不一致 | 可见，不可切换（拒绝歧义配置，不静默取第一个 block） |
 | opencode agents-only | 可见，不可切换 |
 | 远端 /models 失败 | 保留 configModels / 手动输入 |
 

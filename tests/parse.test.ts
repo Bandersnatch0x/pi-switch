@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseProviderRow, makePiName, trimModelId, isSwitchable, uniquifyPiNames } from "../src/parse/index.ts";
+import { parseProviderRow, makePiName, trimModelId, isSwitchable, uniquifyPiNames, MANAGED_AUTH_PARSE_ERROR } from "../src/parse/index.ts";
 import { parseGemini } from "../src/parse/gemini.ts";
 import type { ProviderRow } from "../src/types.ts";
 
@@ -190,5 +190,184 @@ describe("parse gemini authHeader", () => {
 
   test("missing baseUrl defaults to Bearer", () => {
     expect(parseGemini({ env: { GEMINI_API_KEY: "k" } }).authHeader).toBe(true);
+  });
+
+  test("appends /v1beta when host-only so Pi google client hits the API path", () => {
+    expect(gemini("https://elysia.h-e.top").baseUrl).toBe("https://elysia.h-e.top/v1beta");
+    expect(gemini("https://generativelanguage.googleapis.com").baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+  });
+
+  test("preserves an explicit version segment", () => {
+    expect(gemini("https://elysia.h-e.top/v1beta").baseUrl).toBe("https://elysia.h-e.top/v1beta");
+    expect(gemini("https://elysia.h-e.top/v1").baseUrl).toBe("https://elysia.h-e.top/v1");
+    expect(gemini("https://elysia.h-e.top/v1alpha/").baseUrl).toBe(
+      "https://elysia.h-e.top/v1alpha",
+    );
+  });
+});
+
+describe("managed auth (Official/OAuth) entries", () => {
+  test("claude Official: empty config object → human-readable reason", () => {
+    const p = parseProviderRow(
+      row({ id: "o1", app_type: "claude", name: "Claude Official", settings_config: "{}" }),
+    );
+    expect(isSwitchable(p)).toBe(false);
+    expect(p.parseError).toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+
+  test("gemini Official: nested empty objects → managed", () => {
+    const p = parseProviderRow(
+      row({
+        id: "o2",
+        app_type: "gemini",
+        name: "Google Official",
+        settings_config: JSON.stringify({ env: {}, config: {} }),
+      }),
+    );
+    expect(p.parseError).toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+
+  test("codex Official: OAuth tokens without API key → managed", () => {
+    const p = parseProviderRow(
+      row({
+        id: "o3",
+        app_type: "codex",
+        name: "OpenAI Official",
+        settings_config: JSON.stringify({
+          auth: {
+            auth_mode: "oauth",
+            OPENAI_API_KEY: null,
+            tokens: { id_token: "x", access_token: "x", refresh_token: "x", account_id: "a" },
+            last_refresh: "2026-07-01T00:00:00Z",
+          },
+          config: 'model = "gpt-5"\n',
+        }),
+      }),
+    );
+    expect(p.parseError).toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+
+  test("grokbuild Official: config-only TOML without base_url/api_key → managed", () => {
+    const p = parseProviderRow(
+      row({
+        id: "o4",
+        app_type: "grokbuild",
+        name: "Grok Official",
+        settings_config: JSON.stringify({ config: '# managed by cc-switch\nmodel = "grok-4"\n' }),
+      }),
+    );
+    expect(p.parseError).toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+
+  test("normal misconfig is NOT flagged as managed", () => {
+    const p = parseProviderRow(
+      row({
+        id: "n1",
+        app_type: "claude",
+        name: "half-configured",
+        settings_config: JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "tok" } }),
+      }),
+    );
+    expect(p.parseError).toBe("missing ANTHROPIC_BASE_URL");
+  });
+
+  test("codex with both OAuth tokens and a working key stays switchable", () => {
+    const toml = `
+model_provider = "custom"
+wire_api = "responses"
+
+[model_providers.custom]
+base_url = "https://api.example.com/v1"
+`;
+    const p = parseProviderRow(
+      row({
+        id: "n2",
+        app_type: "codex",
+        name: "hybrid",
+        settings_config: JSON.stringify({
+          auth: { OPENAI_API_KEY: "sk-x", tokens: { access_token: "t", refresh_token: "r" } },
+          config: toml,
+        }),
+      }),
+    );
+    expect(isSwitchable(p)).toBe(true);
+    expect(p.parseError).toBeUndefined();
+  });
+
+  test("codex with API key + leftover OAuth tokens but broken TOML keeps the real error", () => {
+    const p = parseProviderRow(
+      row({
+        id: "n3",
+        app_type: "codex",
+        name: "key-with-stale-tokens",
+        settings_config: JSON.stringify({
+          auth: { OPENAI_API_KEY: "sk-x", tokens: { access_token: "t", refresh_token: "r" } },
+          config: 'model = "gpt-5"\n',
+        }),
+      }),
+    );
+    expect(isSwitchable(p)).toBe(false);
+    expect(p.parseError).not.toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+
+  test("bare {env:{}} shell is classified as managed", () => {
+    const p = parseProviderRow(
+      row({ id: "o5", app_type: "claude", name: "shell", settings_config: JSON.stringify({ env: {} }) }),
+    );
+    expect(p.parseError).toBe(MANAGED_AUTH_PARSE_ERROR);
+  });
+});
+
+describe("grokbuild multi-block ambiguity guard", () => {
+  function grok(toml: string) {
+    return parseProviderRow(
+      row({ id: "g1", app_type: "grokbuild", name: "g", settings_config: JSON.stringify({ config: toml }) }),
+    );
+  }
+
+  test("distinct base_url across model blocks → parseError, never silently pick first", () => {
+    const p = grok(`
+[model."a"]
+base_url = "https://a.example.com"
+api_key = "k1"
+
+[model."b"]
+base_url = "https://b.example.com"
+api_key = "k1"
+`);
+    expect(isSwitchable(p)).toBe(false);
+    expect(p.parseError).toContain("base_url");
+  });
+
+  test("distinct api_key across blocks → parseError", () => {
+    const p = grok(`
+[model."a"]
+base_url = "https://a.example.com"
+api_key = "k1"
+
+[model."b"]
+base_url = "https://a.example.com"
+api_key = "k2"
+`);
+    expect(isSwitchable(p)).toBe(false);
+    expect(p.parseError).toContain("api_key");
+  });
+
+  test("same value repeated across blocks is fine", () => {
+    const p = grok(`
+default = "a"
+
+[model."a"]
+base_url = "https://a.example.com/"
+api_key = "k1"
+
+[model."b"]
+base_url = "https://a.example.com"
+api_key = "k1"
+`);
+    expect(isSwitchable(p)).toBe(true);
+    expect(p.baseUrl).toBe("https://a.example.com");
   });
 });

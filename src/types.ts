@@ -86,6 +86,28 @@ export interface RecentEntry {
   at: number;
 }
 
+/**
+ * Claude Code request-shape compat for relays that fingerprint clients
+ * (see src/compat/claude-code.ts). Default mode is `auto` (anyrouter hosts).
+ */
+export interface ClaudeCodeCompatConfig {
+  /** auto | always | never — default auto */
+  mode?: "auto" | "always" | "never";
+  /** Extra hostnames for auto mode (exact or parent domain). */
+  hosts?: string[];
+  /** claude-json (default) | generate | explicit */
+  deviceIdSource?: "claude-json" | "generate" | "explicit";
+  /** Explicit device_id override (64 hex preferred). */
+  deviceId?: string;
+  /** agent-sdk (default, anyrouter gate) | claude-code-cli | none */
+  systemPrefix?: "agent-sdk" | "claude-code-cli" | "none";
+  injectMetadata?: boolean;
+  injectSystemPrefix?: boolean;
+  injectHeaders?: boolean;
+  /** Pad tools[] with Claude Code tool-name stubs (default true; required by anyrouter). */
+  injectToolFingerprint?: boolean;
+}
+
 /** User config ~/.pi/agent/pi-switch.json */
 export interface PiSwitchConfig {
   tabs?: string[];
@@ -98,6 +120,11 @@ export interface PiSwitchConfig {
    * Use for fleet-wide relay-safe defaults (e.g. reasoning:false).
    */
   defaultModelMeta?: ModelMetaOverride;
+  /**
+   * Reshape anthropic-messages requests to match Claude Code fingerprints
+   * required by some relays (anyrouter 503 without metadata + Agent SDK prefix).
+   */
+  claudeCodeCompat?: ClaudeCodeCompatConfig;
   providerOverrides?: Record<
     string,
     {
@@ -121,6 +148,11 @@ export interface PiSwitchConfig {
        * `defaultModelMeta`. Most specific glob wins.
        */
       modelOverrides?: Record<string, ModelMetaOverride>;
+      /**
+       * Force Claude Code compat on/off for this provider.
+       * undefined = follow global claudeCodeCompat.mode rules.
+       */
+      claudeCodeCompat?: boolean;
     }
   >;
   /** Pinned provider/model shortcuts (local only). */

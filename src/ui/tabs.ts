@@ -1,4 +1,5 @@
 import type { CcProvider } from "../types.ts";
+import { getAppTypeIcon } from "./labels.ts";
 
 export interface TabInfo {
   appType: string;
@@ -38,7 +39,8 @@ export function buildTabs(
   return tabs;
 }
 
-/** Single-tab label — plain text, no ★/● markers. */
+/** Single-tab label with AppType Icon and count. */
 export function formatTabLabel(tab: TabInfo, _active?: boolean): string {
-  return `${tab.appType} ${tab.count}`;
+  const icon = getAppTypeIcon(tab.appType);
+  return `${icon} ${tab.appType} (${tab.count})`;
 }

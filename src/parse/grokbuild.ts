@@ -1,5 +1,6 @@
 import {
   asRecord,
+  extractAllTomlValues,
   extractTomlLoose,
   extractTomlValue,
   stripTrailingSlash,
@@ -15,13 +16,25 @@ export function parseGrokbuild(config: unknown, apiFormat?: string): ParsedCore 
     return err("missing config TOML", []);
   }
 
+  const models = uniqueModels(extractGrokModels(toml));
+
+  // extractTomlValue is section-blind and would silently pick the first block's
+  // value. Refuse ambiguous multi-endpoint configs instead of connecting wrong.
+  for (const key of ["base_url", "api_key"] as const) {
+    const distinct = new Set(
+      extractAllTomlValues(toml, key).map((v) => (key === "base_url" ? stripTrailingSlash(v) : v)),
+    );
+    if (distinct.size > 1) {
+      return err(`ambiguous config: ${distinct.size} distinct ${key} values across blocks`, models);
+    }
+  }
+
   const baseUrl = stripTrailingSlash(
     extractTomlValue(toml, "base_url") ?? findFirstModelField(toml, "base_url") ?? "",
   );
   const apiKey =
     extractTomlValue(toml, "api_key") ?? findFirstModelField(toml, "api_key") ?? "";
 
-  const models = uniqueModels(extractGrokModels(toml));
   const backend =
     extractTomlLoose(toml, "api_backend") ??
     findFirstModelField(toml, "api_backend") ??

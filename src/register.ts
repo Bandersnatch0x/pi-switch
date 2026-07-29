@@ -36,6 +36,18 @@ export function toModelConfig(
   };
 }
 
+export type BuiltModelConfig = ReturnType<typeof toModelConfig>;
+
+export type BuiltProviderConfig = {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  api: PiApi;
+  authHeader: boolean;
+  headers?: Record<string, string>;
+  models: BuiltModelConfig[];
+};
+
 export function buildProviderConfig(
   provider: CcProvider,
   modelIds: string[],
@@ -55,7 +67,7 @@ export function buildProviderConfig(
      */
     modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
   },
-): Record<string, unknown> | undefined {
+): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
   const models = ids.filter(Boolean).map((raw) => {

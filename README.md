@@ -23,6 +23,7 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 ## Features
 
 - Open the interactive switcher in Pi with `/ps-config` (optional alias: `/ccs`).
+- `/ps` quick switch: pins + recents on one screen, one Enter for the daily hot path.
 - Load provider configuration from the local cc-switch SQLite database in read-only mode.
 - Use a progressive three-level picker: provider type → provider name → model.
 - Search (`/`), manually enter model IDs, refresh remote lists, and pin favorites with `p` (scrollable list — **no** pagination).
@@ -166,6 +167,12 @@ Aliases:
 
 ```text
 /ccs
+```
+
+Quick switch for the hot path (pins + recents, one screen):
+
+```text
+/ps
 ```
 
 To edit model parameter overrides (for example disable `reasoning` for a Claude-protocol → GLM relay):

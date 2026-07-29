@@ -20,6 +20,7 @@ export type NodeIo = {
   readFileSync: typeof import("node:fs").readFileSync;
   writeFileSync: typeof import("node:fs").writeFileSync;
   renameSync: typeof import("node:fs").renameSync;
+  unlinkSync: typeof import("node:fs").unlinkSync;
   release: string;
   home: string;
 };
@@ -64,6 +65,7 @@ export class Runtime {
       readFileSync: this.io.readFileSync as FsLike["readFileSync"],
       writeFileSync: this.io.writeFileSync as FsLike["writeFileSync"],
       renameSync: this.io.renameSync,
+      unlinkSync: this.io.unlinkSync,
     };
   }
 

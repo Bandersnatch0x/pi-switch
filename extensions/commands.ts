@@ -1,5 +1,5 @@
 /**
- * Interactive slash-command handlers: /ps-config, /ps-override, /ps-doctor.
+ * Interactive slash-command handlers: /ps-config, /ps-override, /ps-info, /ps-doctor.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -14,15 +14,26 @@ import {
   resolveListedModel,
 } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
+import { buildQuickEntries } from "../src/ui/quick-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
+import {
+  createEffectiveConfigSummary,
+  formatEffectiveConfigSummary,
+} from "../src/effective-config.ts";
+import { isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
+import { buildProviderConfig } from "../src/register.ts";
 import type { ModelMetaDialogUi } from "../src/ui/model-meta-dialog.ts";
 import type { Runtime } from "./runtime.ts";
-import type { SwitchLifecycle } from "./switch-lifecycle.ts";
+import type {
+  SwitchLifecycle,
+  ActivationResult,
+  ActivationStageResult,
+} from "./switch-lifecycle.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -253,25 +264,93 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   });
 
   const text = formatDoctorReport(report);
-  console.log(text);
-  // Prefer multi-line notify when available; fall back to summary.
+  // Prefer multi-line notify when available; fall back to console.log so the
+  // report still surfaces in headless/RPC hosts. Avoids double-printing in
+  // hosts (like Orca) that surface both console.log and notify.
   if (typeof ctx.ui?.notify === "function") {
     const level =
       report.summary.fail > 0 ? "error" : report.summary.warn > 0 ? "warning" : "info";
-    ctx.ui.notify(
-      `pi-switch doctor · pass=${report.summary.pass} warn=${report.summary.warn} fail=${report.summary.fail}\n` +
-        report.checks
-          .map((c) => {
-            const tag = c.status === "pass" ? "PASS" : c.status === "warn" ? "WARN" : "FAIL";
-            return `[${tag}] ${c.title}: ${c.detail}`;
-          })
-          .join("\n"),
-      level,
-    );
+    ctx.ui.notify(text, level);
+  } else {
+    console.log(text);
   }
   ctx.ui?.setStatus?.(
     "pi-switch",
     `doctor p=${report.summary.pass} w=${report.summary.warn} f=${report.summary.fail}`,
+  );
+}
+
+/** /ps-info — readonly view of the config registration would currently use. */
+export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
+  rt.reloadConfig();
+  rt.reloadHeaderRules();
+  const { providers, error } = rt.refreshSnapshot();
+  if (error) ctx.ui?.notify?.(error, "warning");
+
+  const activePiName = activeProviderName(ctx);
+  const activeModelId =
+    typeof ctx.model?.id === "string" && ctx.model.id.trim()
+      ? ctx.model.id.trim()
+      : undefined;
+  let source: "active" | "saved" = "active";
+  let provider = activePiName
+    ? providers.find((candidate) => candidate.piName === activePiName)
+    : undefined;
+  let modelId = activeModelId;
+
+  if (!provider || !modelId) {
+    const selection = rt.state.readSelection();
+    provider = selection
+      ? providers.find((candidate) => candidate.id === selection.dbId)
+      : undefined;
+    modelId = selection?.model;
+    source = "saved";
+  }
+
+  if (!provider || !modelId) {
+    ctx.ui?.notify?.("没有可显示的当前或已保存 pi-switch 配置", "warning");
+    return;
+  }
+
+  const resolvedModelId =
+    resolveListedModel(provider.configModels, modelId) ?? modelId;
+  const config = buildProviderConfig(provider, [resolvedModelId], {
+    rules: rt.headerRules,
+    ...rt.headerOverrideOpts(provider),
+    vars: rt.headerVars(),
+    debug: rt.config.debug,
+    onReject: rt.rejectSink(),
+    modelMetaFor: (id) => rt.modelMetaFor(provider, id),
+  });
+  if (!config) {
+    ctx.ui?.notify?.(
+      `无法构建有效配置：${provider.parseError ?? provider.displayName}`,
+      "error",
+    );
+    return;
+  }
+
+  const override = resolveProviderOverride(rt.config.providerOverrides, provider);
+  const fingerprint =
+    typeof override?.fingerprint === "string" && isFingerprintPreset(override.fingerprint)
+      ? override.fingerprint
+      : undefined;
+  const summary = createEffectiveConfigSummary({
+    source,
+    provider,
+    modelId: resolvedModelId,
+    config,
+    fingerprint,
+  });
+  const text = formatEffectiveConfigSummary(summary);
+  if (ctx.ui?.notify) {
+    ctx.ui.notify(text, "info");
+  } else {
+    console.log(text);
+  }
+  ctx.ui?.setStatus?.(
+    "pi-switch",
+    `info ${summary.modelId} @ ${summary.appType}/${summary.providerName}`,
   );
 }
 
@@ -284,6 +363,8 @@ export async function runCommand(
 
   // Loop so `o` override returns to the picker (F contract). Esc at type-only exits.
   // First pass and each resume after override reloads config + DB snapshot once.
+  // Remote model lists live here so they survive picker re-entry after `o`.
+  const remoteCache = new Map<string, string[]>();
   while (true) {
     rt.reloadConfig();
     const { providers: live, error: snapErr } = rt.refreshSnapshot();
@@ -306,6 +387,7 @@ export async function runCommand(
       tabOrder: rt.config.tabs,
       pins: rt.config.pins,
       recent: rt.config.recent,
+      remoteCache,
       hasOverride: (provider, modelId) => rt.hasModelMetaOverride(provider, modelId),
       onTogglePin: (entry) => {
         const result = rt.state.togglePin(entry);
@@ -343,30 +425,91 @@ export async function runCommand(
       { provider, modelId, commit: "selection" },
       ctx,
     );
-
-    if (result.kind === "failed") {
-      ctx.ui.notify(`切换失败：${result.error}`, "error");
-      return;
-    }
-
-    if (result.persistence === "failed") {
-      ctx.ui.notify(
-        `已切换，本次选择未保存：${result.persistenceError}`,
-        "warning",
-      );
-    } else {
-      const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
-      ctx.ui.notify(
-        `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
-        "info",
-      );
-    }
-    ctx.ui.setStatus?.(
-      "pi-switch",
-      `${modelId} @ ${provider.appType}/${provider.displayName}`,
-    );
+    notifyActivation(rt, ctx, provider, modelId, result);
     return;
   }
+}
+
+/** Shared post-activate notifications (used by /ps-config and /ps). */
+function notifyActivation(
+  rt: Runtime,
+  ctx: PiSwitchCtx,
+  provider: CcProvider,
+  modelId: string,
+  result: ActivationResult,
+): void {
+  if (result.kind === "failed") {
+    const label =
+      result.failedStage === "providerRegistration" ? "Provider 注册" : "模型切换";
+    ctx.ui.notify(`切换失败（${label}）：${result.error}`, "error");
+    return;
+  }
+
+  const warnings = activationWarnings(result);
+  if (warnings.length) {
+    ctx.ui.notify(
+      `已切换，但部分阶段未完成：\n- ${warnings.join("\n- ")}`,
+      "warning",
+    );
+  } else {
+    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
+    ctx.ui.notify(
+      `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
+      "info",
+    );
+  }
+  ctx.ui.setStatus?.(
+    "pi-switch",
+    `${modelId} @ ${provider.appType}/${provider.displayName}`,
+  );
+}
+
+function stageIssue(
+  stage: ActivationStageResult,
+  failedLabel: string,
+  skippedLabel?: string,
+): string | undefined {
+  if (stage.status === "failed") return `${failedLabel}：${stage.error}`;
+  if (stage.status === "skipped" && skippedLabel && stage.reason) {
+    return `${skippedLabel}：${stage.reason}`;
+  }
+  return undefined;
+}
+
+export function activationWarnings(
+  result: Extract<ActivationResult, { kind: "activated" }>,
+): string[] {
+  return [
+    stageIssue(result.stages.providerCleanup, "旧 Provider 清理失败", "旧 Provider 清理跳过"),
+    stageIssue(result.stages.selectionPersistence, "selection 保存失败"),
+    stageIssue(result.stages.recentPersistence, "recent 保存失败"),
+  ].filter((item): item is string => Boolean(item));
+}
+
+/** /ps — one-screen quick switch across pinned + recent pairs (skips 3-level nav). */
+export async function runQuickSwitch(
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+  ctx: PiSwitchCtx,
+): Promise<void> {
+  rt.reloadConfig();
+  const { providers: live, error: snapErr } = rt.refreshSnapshot();
+  if (snapErr) ctx.ui.notify(snapErr, "warning");
+  const entries = buildQuickEntries(rt.config.pins ?? [], rt.config.recent ?? [], live);
+  if (!entries.length) {
+    ctx.ui.notify("没有可用的 pin / recent；先用 /ps-config 完成一次切换", "warning");
+    return;
+  }
+  const labels = entries.map((e) => e.label);
+  const pick = await ctx.ui.select("快速切换", labels);
+  if (!pick) return;
+  const entry = entries[labels.indexOf(pick)];
+  if (!entry) return;
+  const result = await lifecycle.activate(
+    { provider: entry.provider, modelId: entry.modelId, commit: "selection" },
+    ctx,
+  );
+  notifyActivation(rt, ctx, entry.provider, entry.modelId, result);
 }
 
 export function registerCommands(
@@ -378,6 +521,13 @@ export function registerCommands(
     description: "从 cc-switch 选择 Provider 与 Model 并切换（pin/recent 本地快捷）",
     handler: async (_args, ctx) => {
       await runCommand(rt, lifecycle, ctx);
+    },
+  });
+
+  pi.registerCommand("ps", {
+    description: "快速切换：pin + recent 一屏直达",
+    handler: async (_args, ctx) => {
+      await runQuickSwitch(rt, lifecycle, ctx);
     },
   });
 
@@ -401,6 +551,13 @@ export function registerCommands(
     description: "诊断 pi-switch 环境（sqlite3 / DB / 指纹 / modelMeta / pin）",
     handler: async (_args, ctx) => {
       await runDoctorCommand(rt, ctx);
+    },
+  });
+
+  pi.registerCommand("ps-info", {
+    description: "显示当前生效的 Provider、Model、参数与非敏感 Header 名称",
+    handler: async (_args, ctx) => {
+      runEffectiveConfigCommand(rt, ctx);
     },
   });
 }

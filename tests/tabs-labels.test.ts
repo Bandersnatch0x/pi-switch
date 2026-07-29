@@ -28,7 +28,7 @@ describe("tabs / labels", () => {
     expect(tabs.map((t) => t.appType)).toEqual(["codex", "claude", "hermes"]);
   });
 
-  test("formatTabLabel is plain vertical list item", () => {
+  test("formatTabLabel carries appType icon and count", () => {
     const tabs = buildTabs(
       [
         mk({ id: "1", displayName: "a", appType: "claude" }),
@@ -36,8 +36,8 @@ describe("tabs / labels", () => {
       ],
       ["claude", "codex"],
     );
-    expect(formatTabLabel(tabs[0], true)).toBe("claude 1");
-    expect(formatTabLabel(tabs[1], false)).toBe("codex 1");
+    expect(formatTabLabel(tabs[0], true)).toBe("C claude (1)");
+    expect(formatTabLabel(tabs[1], false)).toBe("O codex (1)");
   });
 
   test("sortProviders last-used by dbId first", () => {

@@ -155,3 +155,103 @@ describe("sortProviders pin preference", () => {
     expect(sorted.map((p) => p.id)).toEqual(["1", "3", "2"]);
   });
 });
+
+describe("remoteCache survives picker reopen (o-override loop)", () => {
+  const ENTER = "\r";
+  const ESC = "\x1b";
+
+  function tuiCtx(): { ctx: PiSwitchCtx; drive: (keys: string[]) => Promise<void> } {
+    let comp: any;
+    const pending: string[][] = [];
+    const ctx = {
+      mode: "tui",
+      ui: {
+        custom: async (factory: any) => {
+          let resolve!: (r: any) => void;
+          const p = new Promise<any>((res) => (resolve = res));
+          comp = factory(
+            { requestRender() {} },
+            { fg: (_c: string, s: string) => s, bold: (s: string) => s },
+            {},
+            (r: any) => resolve(r),
+          );
+          for (const keys of pending.splice(0)) {
+            for (const k of keys) {
+              comp.handleInput(k);
+              await new Promise((r) => setTimeout(r, 2));
+            }
+          }
+          return p;
+        },
+        notify() {},
+        setStatus() {},
+        select: async () => undefined,
+        input: async () => undefined,
+      },
+    } as unknown as PiSwitchCtx;
+    return {
+      ctx,
+      drive: async (keys: string[]) => {
+        pending.push(keys);
+      },
+    };
+  }
+
+  test("fetched models persist into a reopened picker via shared cache", async () => {
+    const provider = mk({ id: "p1", displayName: "alpha", appType: "claude", configModels: ["c1"] });
+    const cache = new Map<string, string[]>();
+    let fetchCalls = 0;
+
+    // --- first open: expand to model column, press f (fetch), then esc out ---
+    const first = tuiCtx();
+    await first.drive([ENTER, ENTER, "f", ESC, ESC, ESC]);
+    const r1 = await threeLevelPick(first.ctx, {
+      providers: [provider],
+      remoteCache: cache,
+      fetchRemote: async () => {
+        fetchCalls += 1;
+        return ["remote-1"];
+      },
+    });
+    expect(r1.kind).toBe("cancel");
+    expect(fetchCalls).toBe(1);
+    expect(cache.get("p1")).toEqual(["remote-1"]);
+
+    // --- second open with the SAME cache: model list already contains remote-1 ---
+    const second = tuiCtx();
+    let sawRemote = false;
+    const ctx2 = second.ctx as any;
+    const origCustom = ctx2.ui.custom.bind(ctx2.ui);
+    ctx2.ui.custom = async (factory: any) => {
+      let resolve!: (r: any) => void;
+      const p = new Promise<any>((res) => (resolve = res));
+      const comp = factory(
+        { requestRender() {} },
+        { fg: (_c: string, s: string) => s, bold: (s: string) => s },
+        {},
+        (r: any) => resolve(r),
+      );
+      for (const k of [ENTER, ENTER]) {
+        comp.handleInput(k);
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      sawRemote = comp.render(100).join("\n").includes("remote-1");
+      for (const k of [ESC, ESC, ESC]) {
+        comp.handleInput(k);
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      return p;
+    };
+    const r2 = await threeLevelPick(second.ctx, {
+      providers: [provider],
+      remoteCache: cache,
+      fetchRemote: async () => {
+        fetchCalls += 1;
+        return ["should-not-be-called"];
+      },
+    });
+    expect(r2.kind).toBe("cancel");
+    expect(fetchCalls).toBe(1);
+    expect(sawRemote).toBe(true);
+  });
+});

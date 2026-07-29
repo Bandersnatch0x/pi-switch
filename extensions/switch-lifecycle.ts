@@ -16,17 +16,58 @@ export type SwitchTarget = {
   commit: "selection" | "runtime-only";
 };
 
+export type ActivationStageResult =
+  | { status: "succeeded" }
+  | { status: "skipped"; reason?: string }
+  | { status: "failed"; error: string };
+
+export type ActivationStages = {
+  providerRegistration: ActivationStageResult;
+  modelSwitch: ActivationStageResult;
+  providerCleanup: ActivationStageResult;
+  selectionPersistence: ActivationStageResult;
+  recentPersistence: ActivationStageResult;
+};
+
 export type ActivationResult =
-  | { kind: "failed"; error: string }
+  | {
+      kind: "failed";
+      failedStage: "providerRegistration" | "modelSwitch";
+      error: string;
+      stages: ActivationStages;
+    }
   | {
       kind: "activated";
-      persistence: "saved" | "skipped" | "failed";
-      persistenceError?: string;
+      stages: ActivationStages;
     };
 
 export interface SwitchLifecycle {
   install(): void;
   activate(target: SwitchTarget, ctx: PiSwitchCtx): Promise<ActivationResult>;
+}
+
+const SUCCEEDED: ActivationStageResult = { status: "succeeded" };
+
+function skipped(reason?: string): ActivationStageResult {
+  return reason ? { status: "skipped", reason } : { status: "skipped" };
+}
+
+function failed(error: string): ActivationStageResult {
+  return { status: "failed", error };
+}
+
+function initialStages(): ActivationStages {
+  return {
+    providerRegistration: skipped("not attempted"),
+    modelSwitch: skipped("not attempted"),
+    providerCleanup: skipped("model not activated"),
+    selectionPersistence: skipped("model not activated"),
+    recentPersistence: skipped("model not activated"),
+  };
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function createSwitchLifecycle(
@@ -137,44 +178,105 @@ export function createSwitchLifecycle(
     ctx: PiSwitchCtx,
   ): Promise<ActivationResult> => {
     const { provider, modelId } = target;
-    if (!register(provider, modelId)) {
+    const start = initialStages();
+    let registered = false;
+    try {
+      registered = register(provider, modelId);
+    } catch (error) {
+      const message = formatError(error);
       return {
         kind: "failed",
-        error: provider.parseError ?? "cannot register provider",
+        failedStage: "providerRegistration",
+        error: message,
+        stages: { ...start, providerRegistration: failed(message) },
       };
     }
+    if (!registered) {
+      const message = provider.parseError ?? "cannot register provider";
+      return {
+        kind: "failed",
+        failedStage: "providerRegistration",
+        error: message,
+        stages: { ...start, providerRegistration: failed(message) },
+      };
+    }
+
+    const registeredStages: ActivationStages = {
+      ...start,
+      providerRegistration: SUCCEEDED,
+    };
 
     const model = findRegisteredModel(ctx, provider.piName, modelId);
     if (!model) {
+      const message = `model not found after register: ${provider.piName} / ${modelId}`;
       return {
         kind: "failed",
-        error: `model not found after register: ${provider.piName} / ${modelId}`,
+        failedStage: "providerRegistration",
+        error: message,
+        stages: { ...registeredStages, providerRegistration: failed(message) },
       };
     }
 
-    const activated = await pi.setModel(model as never);
-    if (!activated) {
+    let activated = false;
+    try {
+      activated = await pi.setModel(model as never);
+    } catch (error) {
+      const message = formatError(error);
       return {
         kind: "failed",
-        error: `setModel failed: ${provider.piName} / ${modelId}`,
+        failedStage: "modelSwitch",
+        error: message,
+        stages: { ...registeredStages, modelSwitch: failed(message) },
+      };
+    }
+    if (!activated) {
+      const message = `setModel failed: ${provider.piName} / ${modelId}`;
+      return {
+        kind: "failed",
+        failedStage: "modelSwitch",
+        error: message,
+        stages: { ...registeredStages, modelSwitch: failed(message) },
       };
     }
 
     const previousNames = rt.registeredPsNames;
+    const cleanupErrors: string[] = [];
+    const retainedNames: string[] = [];
     if (pi.unregisterProvider) {
       for (const name of previousNames) {
         if (name === provider.piName) continue;
         try {
           pi.unregisterProvider(name);
-        } catch {
-          // Cleanup is best-effort after activation has committed.
+        } catch (error) {
+          retainedNames.push(name);
+          cleanupErrors.push(`${name}: ${formatError(error)}`);
         }
       }
+    } else {
+      retainedNames.push(...previousNames.filter((name) => name !== provider.piName));
     }
-    rt.registeredPsNames = [provider.piName];
+    rt.registeredPsNames = [...new Set([provider.piName, ...retainedNames])];
+
+    const providerCleanup: ActivationStageResult = cleanupErrors.length
+      ? failed(cleanupErrors.join("; "))
+      : retainedNames.length
+        ? skipped("unregisterProvider is unavailable; old registrations were retained")
+        : SUCCEEDED;
+    const activatedStages: ActivationStages = {
+      ...registeredStages,
+      modelSwitch: SUCCEEDED,
+      providerCleanup,
+    };
 
     if (target.commit === "runtime-only") {
-      return { kind: "activated", persistence: "skipped" };
+      return {
+        kind: "activated",
+        stages: {
+          ...activatedStages,
+          selectionPersistence: skipped("runtime-only activation"),
+          recentPersistence: skipped("runtime-only activation"),
+        },
+      };
     }
 
     const selection: PiSwitchSelection = {
@@ -194,13 +296,18 @@ export function createSwitchLifecycle(
       console.warn("[pi-switch] write recent failed:", recentWritten.error);
     }
 
-    return persisted.ok
-      ? { kind: "activated", persistence: "saved" }
-      : {
-          kind: "activated",
-          persistence: "failed",
-          persistenceError: persisted.error,
-        };
+    return {
+      kind: "activated",
+      stages: {
+        ...activatedStages,
+        selectionPersistence: persisted.ok
+          ? SUCCEEDED
+          : failed(persisted.error ?? "unknown selection persistence error"),
+        recentPersistence: recentWritten.ok
+          ? SUCCEEDED
+          : failed(recentWritten.error ?? "unknown recent persistence error"),
+      },
+    };
   };
 
   return { install, activate };
