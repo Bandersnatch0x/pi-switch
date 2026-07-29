@@ -2,15 +2,32 @@ import { asRecord, asString, stripTrailingSlash, uniqueModels } from "./common.t
 import { resolveApi } from "./api-format.ts";
 import type { ParsedCore } from "./claude.ts";
 
+/**
+ * Pi's `google-generative-ai` client sets `httpOptions.apiVersion = ""` whenever
+ * a custom baseUrl is present (it assumes the version is already on the URL).
+ * Gemini CLI / cc-switch usually store host-only URLs like
+ * `https://generativelanguage.googleapis.com` or a third-party origin without
+ * `/v1beta`. Without the version segment, @google/genai requests
+ * `{base}/models/...:streamGenerateContent`, which many gateways answer with
+ * HTML — and the SDK then throws "Incomplete JSON segment at the end".
+ */
+export function normalizeGeminiBaseUrlForPi(baseUrl: string): string {
+  const base = stripTrailingSlash(baseUrl);
+  if (!base) return base;
+  if (/\/v\d+(?:alpha|beta)?$/i.test(base)) return base;
+  return `${base}/v1beta`;
+}
+
 export function parseGemini(config: unknown, apiFormat?: string): ParsedCore {
   const root = asRecord(config) ?? {};
   const env = asRecord(root.env) ?? {};
 
-  const baseUrl = stripTrailingSlash(
+  const rawBaseUrl = stripTrailingSlash(
     asString(env.GOOGLE_GEMINI_BASE_URL) ??
       asString(env.GEMINI_BASE_URL) ??
       "",
   );
+  const baseUrl = normalizeGeminiBaseUrlForPi(rawBaseUrl);
   const apiKey =
     asString(env.GEMINI_API_KEY) ??
     asString(env.GOOGLE_API_KEY) ??
@@ -23,7 +40,7 @@ export function parseGemini(config: unknown, apiFormat?: string): ParsedCore {
     typeof root.model === "string" ? root.model : "",
   ]);
 
-  if (!baseUrl) return err("missing GOOGLE_GEMINI_BASE_URL", models);
+  if (!rawBaseUrl) return err("missing GOOGLE_GEMINI_BASE_URL", models);
   if (!apiKey) return err("missing GEMINI_API_KEY / GOOGLE_API_KEY", models, baseUrl);
 
   const resolved = resolveApi({

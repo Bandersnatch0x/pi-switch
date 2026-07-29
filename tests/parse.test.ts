@@ -191,6 +191,21 @@ describe("parse gemini authHeader", () => {
   test("missing baseUrl defaults to Bearer", () => {
     expect(parseGemini({ env: { GEMINI_API_KEY: "k" } }).authHeader).toBe(true);
   });
+
+  test("appends /v1beta when host-only so Pi google client hits the API path", () => {
+    expect(gemini("https://elysia.h-e.top").baseUrl).toBe("https://elysia.h-e.top/v1beta");
+    expect(gemini("https://generativelanguage.googleapis.com").baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+  });
+
+  test("preserves an explicit version segment", () => {
+    expect(gemini("https://elysia.h-e.top/v1beta").baseUrl).toBe("https://elysia.h-e.top/v1beta");
+    expect(gemini("https://elysia.h-e.top/v1").baseUrl).toBe("https://elysia.h-e.top/v1");
+    expect(gemini("https://elysia.h-e.top/v1alpha/").baseUrl).toBe(
+      "https://elysia.h-e.top/v1alpha",
+    );
+  });
 });
 
 describe("managed auth (Official/OAuth) entries", () => {
