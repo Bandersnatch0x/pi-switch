@@ -9,6 +9,7 @@ import {
   getGeminiMajorVersion,
   hasEmptyToolCallArgs,
   isGeminiPayload,
+  parseGeminiToolCompatConfig,
   sanitizeForOpenApi,
   shouldApplyGeminiToolCompat,
   supportsValidatedMode,
@@ -272,8 +273,27 @@ describe("shouldApplyGeminiToolCompat", () => {
   test("never mode → false", () => {
     expect(shouldApplyGeminiToolCompat({ mode: "never", api: "google-generative-ai", baseUrl: "https://x.com" })).toBe(false);
   });
-  test("providerForce=true overrides everything", () => {
+  test("providerForce=true overrides mode never for Gemini API", () => {
     expect(shouldApplyGeminiToolCompat({ mode: "never", api: "google-generative-ai", baseUrl: null, providerForce: true })).toBe(true);
+  });
+  test("providerForce=true on non-Gemini API is a no-op", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        mode: "never",
+        api: "anthropic-messages",
+        baseUrl: "https://x.com",
+        providerForce: true,
+      }),
+    ).toBe(false);
+  });
+  test("providerForce=true with null api is a no-op", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: null,
+        baseUrl: "https://x.com",
+        providerForce: true,
+      }),
+    ).toBe(false);
   });
   test("providerForce=false overrides everything", () => {
     expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://x.com", providerForce: false })).toBe(false);
@@ -305,5 +325,45 @@ describe("shouldApplyGeminiToolCompat", () => {
   });
   test("null api → false", () => {
     expect(shouldApplyGeminiToolCompat({ api: null, baseUrl: "https://x.com" })).toBe(false);
+  });
+});
+
+// ─── parseGeminiToolCompatConfig ─────────────────────────────────────────
+
+describe("parseGeminiToolCompatConfig", () => {
+  test("parses full config", () => {
+    const c = parseGeminiToolCompatConfig({
+      mode: "always",
+      hosts: ["elysia", "", "  ", "h-e.top"],
+      forceToolConfigMode: "VALIDATED",
+      blockEmptyToolCalls: false,
+      convertSchema: false,
+    });
+    expect(c).toEqual({
+      mode: "always",
+      hosts: ["elysia", "h-e.top"],
+      forceToolConfigMode: "VALIDATED",
+      blockEmptyToolCalls: false,
+      convertSchema: false,
+    });
+  });
+  test("returns undefined for non-object", () => {
+    expect(parseGeminiToolCompatConfig(null)).toBeUndefined();
+    expect(parseGeminiToolCompatConfig("x")).toBeUndefined();
+    expect(parseGeminiToolCompatConfig([])).toBeUndefined();
+  });
+  test("drops invalid enums", () => {
+    const c = parseGeminiToolCompatConfig({
+      mode: "sometimes",
+      forceToolConfigMode: "STRICT",
+      hosts: [1, "ok"],
+    });
+    expect(c?.mode).toBeUndefined();
+    expect(c?.forceToolConfigMode).toBeUndefined();
+    expect(c?.hosts).toEqual(["ok"]);
+  });
+  test("empty hosts array becomes undefined", () => {
+    const c = parseGeminiToolCompatConfig({ hosts: [] });
+    expect(c?.hosts).toBeUndefined();
   });
 });

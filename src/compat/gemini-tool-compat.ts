@@ -215,9 +215,12 @@ export function shouldApplyGeminiToolCompat(opts: {
   baseUrl: string | null;
   providerForce?: boolean | null;
 }): boolean {
-  // Provider-level force takes precedence over mode
-  if (opts.providerForce === true) return true;
+  // Provider-level force takes precedence over mode, but still only for Gemini.
+  // Mirrors Claude Code compat: force=true on a non-target api is a no-op.
   if (opts.providerForce === false) return false;
+  if (opts.providerForce === true) {
+    return opts.api === "google-generative-ai";
+  }
 
   const mode = opts.mode ?? "auto";
   if (mode === "never") return false;
@@ -235,4 +238,31 @@ export function shouldApplyGeminiToolCompat(opts: {
   return hosts.some((h) =>
     opts.baseUrl!.toLowerCase().includes(h.toLowerCase()),
   );
+}
+
+/** Parse `geminiToolCompat` from pi-switch.json (unknown → undefined). */
+export function parseGeminiToolCompatConfig(
+  raw: unknown,
+): GeminiToolCompatConfig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const mode =
+    r.mode === "auto" || r.mode === "always" || r.mode === "never"
+      ? r.mode
+      : undefined;
+  const hosts = Array.isArray(r.hosts)
+    ? r.hosts.filter((h): h is string => typeof h === "string" && h.trim().length > 0)
+    : undefined;
+  const forceToolConfigMode =
+    r.forceToolConfigMode === "AUTO" || r.forceToolConfigMode === "VALIDATED"
+      ? r.forceToolConfigMode
+      : undefined;
+  return {
+    mode,
+    hosts: hosts?.length ? hosts : undefined,
+    forceToolConfigMode,
+    blockEmptyToolCalls:
+      typeof r.blockEmptyToolCalls === "boolean" ? r.blockEmptyToolCalls : undefined,
+    convertSchema: typeof r.convertSchema === "boolean" ? r.convertSchema : undefined,
+  };
 }
