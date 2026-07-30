@@ -1,4 +1,4 @@
-/** Supported Pi API protocols for registration. */
+﻿/** Supported Pi API protocols for registration. */
 export type PiApi =
   | "anthropic-messages"
   | "openai-responses"
@@ -108,6 +108,24 @@ export interface ClaudeCodeCompatConfig {
   injectToolFingerprint?: boolean;
 }
 
+/**
+ * Gemini tool-calling compat for third-party proxies that need
+ * explicit `toolConfig` to enforce parameter schemas.
+ * Default mode is `auto` (all Gemini API providers).
+ */
+export interface GeminiToolCompatConfig {
+  /** auto (default) | always | never */
+  mode?: "auto" | "always" | "never";
+  /** Restrict auto mode to these host substrings (empty = all Gemini). */
+  hosts?: string[];
+  /** Force toolConfig mode: AUTO (default) or VALIDATED (Gemini 3+). */
+  forceToolConfigMode?: "AUTO" | "VALIDATED";
+  /** Block tool calls with empty args so the model regenerates (default true). */
+  blockEmptyToolCalls?: boolean;
+  /** Convert parametersJsonSchema to parameters for proxy compatibility (default true). */
+  convertSchema?: boolean;
+}
+
 /** User config ~/.pi/agent/pi-switch.json */
 export interface PiSwitchConfig {
   tabs?: string[];
@@ -125,6 +143,11 @@ export interface PiSwitchConfig {
    * required by some relays (anyrouter 503 without metadata + Agent SDK prefix).
    */
   claudeCodeCompat?: ClaudeCodeCompatConfig;
+  /**
+   * Inject `toolConfig` + convert schema for Gemini proxies that
+   * need it to enforce parameter schemas (prevents `read({})`).
+   */
+  geminiToolCompat?: GeminiToolCompatConfig;
   providerOverrides?: Record<
     string,
     {
@@ -153,6 +176,11 @@ export interface PiSwitchConfig {
        * undefined = follow global claudeCodeCompat.mode rules.
        */
       claudeCodeCompat?: boolean;
+      /**
+       * Force Gemini tool compat on/off for this provider.
+       * undefined = follow global geminiToolCompat.mode rules.
+       */
+      geminiToolCompat?: boolean;
     }
   >;
   /** Pinned provider/model shortcuts (local only). */

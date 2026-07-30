@@ -1,4 +1,4 @@
-/**
+﻿/**
  * pi-switch extension entry.
  *
  * Pure logic lives under ../src; runtime IO and command wiring live in
@@ -14,6 +14,7 @@ import { Runtime } from "./runtime.ts";
 import { registerCommands } from "./commands.ts";
 import { createSwitchLifecycle } from "./switch-lifecycle.ts";
 import { installClaudeCodeCompat } from "./claude-code-compat.ts";
+import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
   const [cp, fs, osMod] = await Promise.all([
@@ -54,5 +55,6 @@ export default async function (pi: ExtensionAPI) {
   const lifecycle = createSwitchLifecycle(pi, rt);
   lifecycle.install();
   installClaudeCodeCompat(pi, rt);
+  installGeminiToolCompat(pi, rt);
   registerCommands(pi, rt, lifecycle);
 }
