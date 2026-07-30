@@ -208,6 +208,170 @@ describe("parse gemini authHeader", () => {
   });
 });
 
+describe("openai host-only baseUrl → /v1 normalization", () => {
+  test("claude + openai_chat host-only → /v1 (regression: ddddddd glm-5.2 404)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d1",
+        app_type: "claude",
+        name: "ddddddd",
+        settings_config: JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: "https://glm.ddddddd.cyou",
+            ANTHROPIC_AUTH_TOKEN: "test-token",
+            ANTHROPIC_MODEL: "glm-5.2",
+          },
+        }),
+        meta: JSON.stringify({ apiFormat: "openai_chat" }),
+      }),
+    );
+    expect(isSwitchable(p)).toBe(true);
+    expect(p.api).toBe("openai-completions");
+    expect(p.baseUrl).toBe("https://glm.ddddddd.cyou/v1");
+    expect(p.configModels).toContain("glm-5.2");
+  });
+
+  test("claude + openai_chat explicit /v1 is preserved", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d2",
+        app_type: "claude",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://glm.ddddddd.cyou/v1", ANTHROPIC_AUTH_TOKEN: "k", ANTHROPIC_MODEL: "glm-5.2" },
+        }),
+        meta: JSON.stringify({ apiFormat: "openai_chat" }),
+      }),
+    );
+    expect(p.baseUrl).toBe("https://glm.ddddddd.cyou/v1");
+  });
+
+  test("claude + openai_responses host-only then /v1", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d3",
+        app_type: "claude",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://api.example.com", ANTHROPIC_AUTH_TOKEN: "k" },
+        }),
+        meta: JSON.stringify({ apiFormat: "openai_responses" }),
+      }),
+    );
+    expect(p.api).toBe("openai-responses");
+    expect(p.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("claude anthropic-messages host-only stays unchanged (no /v1 injection)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d4",
+        app_type: "claude",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://x.example.com", ANTHROPIC_AUTH_TOKEN: "k" },
+        }),
+      }),
+    );
+    expect(p.api).toBe("anthropic-messages");
+    expect(p.baseUrl).toBe("https://x.example.com");
+  });
+
+  test("codex host-only base_url then /v1 (openai-responses default)", () => {
+    const toml = 'model = "gpt-5"\nmodel_provider = "custom"\nwire_api = "responses"\n\n[model_providers.custom]\nbase_url = "https://api.example.com"\n';
+    const p = parseProviderRow(
+      row({
+        id: "d5",
+        app_type: "codex",
+        name: "x",
+        settings_config: JSON.stringify({ auth: { OPENAI_API_KEY: "sk-test" }, config: toml }),
+      }),
+    );
+    expect(p.api).toBe("openai-responses");
+    expect(p.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("hermes host-only base_url then /v1 (responses api_mode)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d6",
+        app_type: "hermes",
+        name: "x",
+        settings_config: JSON.stringify({
+          base_url: "https://api.example.com",
+          api_key: "k",
+          api_mode: "responses",
+          models: [{ id: "m1" }],
+        }),
+      }),
+    );
+    expect(p.api).toBe("openai-responses");
+    expect(p.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("hermes host-only base_url then /v1 (default openai-completions)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d7",
+        app_type: "hermes",
+        name: "x",
+        settings_config: JSON.stringify({
+          base_url: "https://api.example.com",
+          api_key: "k",
+          models: [{ id: "m1" }],
+        }),
+      }),
+    );
+    expect(p.api).toBe("openai-completions");
+    expect(p.baseUrl).toBe("https://api.example.com/v1");
+  });
+
+  test("generic host-only env BASE_URL then /v1 (default openai-completions)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d8",
+        app_type: "openclaw",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { FOO_BASE_URL: "https://a.com", FOO_API_KEY: "k" },
+        }),
+      }),
+    );
+    expect(p.api).toBe("openai-completions");
+    expect(p.baseUrl).toBe("https://a.com/v1");
+  });
+
+  test("explicit /v2 version segment is preserved (not forced to /v1)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d9",
+        app_type: "claude",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://x.com/v2", ANTHROPIC_AUTH_TOKEN: "k" },
+        }),
+        meta: JSON.stringify({ apiFormat: "openai_chat" }),
+      }),
+    );
+    expect(p.baseUrl).toBe("https://x.com/v2");
+  });
+
+  test("custom path prefix is preserved (never guess /v1 placement)", () => {
+    const p = parseProviderRow(
+      row({
+        id: "d10",
+        app_type: "claude",
+        name: "x",
+        settings_config: JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://x.com/custom-prefix", ANTHROPIC_AUTH_TOKEN: "k" },
+        }),
+        meta: JSON.stringify({ apiFormat: "openai_chat" }),
+      }),
+    );
+    expect(p.baseUrl).toBe("https://x.com/custom-prefix");
+  });
+});
+
 describe("managed auth (Official/OAuth) entries", () => {
   test("claude Official: empty config object → human-readable reason", () => {
     const p = parseProviderRow(
@@ -368,6 +532,7 @@ base_url = "https://a.example.com"
 api_key = "k1"
 `);
     expect(isSwitchable(p)).toBe(true);
-    expect(p.baseUrl).toBe("https://a.example.com");
+    // grokbuild defaults to openai-responses → host-only baseUrl gets /v1 (SPEC §5.11).
+    expect(p.baseUrl).toBe("https://a.example.com/v1");
   });
 });

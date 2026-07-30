@@ -2,6 +2,7 @@ import {
   asRecord,
   asString,
   extractTomlValue,
+  normalizeBaseUrlForPi,
   stripTrailingSlash,
   uniqueModels,
 } from "./common.ts";
@@ -127,10 +128,11 @@ function finish(
     apiFormat,
     appTypeDefault: "openai-completions",
   });
+  const normBaseUrl = normalizeBaseUrlForPi(resolved.ok ? resolved.api : null, baseUrl);
   if (!resolved.ok) {
     return {
       api: null,
-      baseUrl,
+      baseUrl: normBaseUrl,
       apiKey,
       authHeader,
       configModels: models,
@@ -139,7 +141,7 @@ function finish(
   }
   return {
     api: resolved.api,
-    baseUrl,
+    baseUrl: normBaseUrl,
     apiKey,
     authHeader,
     configModels: models,

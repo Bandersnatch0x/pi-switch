@@ -1,5 +1,5 @@
 import type { PiApi } from "../types.ts";
-import { asRecord, asString, stripTrailingSlash, uniqueModels } from "./common.ts";
+import { asRecord, asString, normalizeBaseUrlForPi, stripTrailingSlash, uniqueModels } from "./common.ts";
 import { resolveApi } from "./api-format.ts";
 
 export interface ParsedCore {
@@ -37,10 +37,13 @@ export function parseClaude(
     apiFormat,
     appTypeDefault: "anthropic-messages",
   });
+  // Normalize per-protocol (OpenAI-family gets /v1 appended when host-only);
+  // anthropic-messages is left as-is (Anthropic SDK builds /v1/messages itself).
+  const normBaseUrl = normalizeBaseUrlForPi(resolved.ok ? resolved.api : null, baseUrl);
   if (!resolved.ok) {
     return {
       api: null,
-      baseUrl,
+      baseUrl: normBaseUrl,
       apiKey,
       authHeader: !!authToken && !apiKeyOnly,
       configModels: models,
@@ -50,7 +53,7 @@ export function parseClaude(
 
   return {
     api: resolved.api,
-    baseUrl,
+    baseUrl: normBaseUrl,
     apiKey,
     authHeader: !!authToken && !apiKeyOnly,
     configModels: models,
