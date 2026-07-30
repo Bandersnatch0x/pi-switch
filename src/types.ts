@@ -1,4 +1,8 @@
-﻿/** Supported Pi API protocols for registration. */
+﻿/** @see src/compat/gemini-tool-compat.ts — single source of truth */
+import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
+export type { GeminiToolCompatConfig };
+
+/** Supported Pi API protocols for registration. */
 export type PiApi =
   | "anthropic-messages"
   | "openai-responses"
@@ -106,24 +110,6 @@ export interface ClaudeCodeCompatConfig {
   injectHeaders?: boolean;
   /** Pad tools[] with Claude Code tool-name stubs (default true; required by anyrouter). */
   injectToolFingerprint?: boolean;
-}
-
-/**
- * Gemini tool-calling compat for third-party proxies that need
- * explicit `toolConfig` to enforce parameter schemas.
- * Default mode is `auto` (all Gemini API providers).
- */
-export interface GeminiToolCompatConfig {
-  /** auto (default) | always | never */
-  mode?: "auto" | "always" | "never";
-  /** Restrict auto mode to these host substrings (empty = all Gemini). */
-  hosts?: string[];
-  /** Force toolConfig mode: AUTO (default) or VALIDATED (Gemini 3+). */
-  forceToolConfigMode?: "AUTO" | "VALIDATED";
-  /** Block tool calls with empty args so the model regenerates (default true). */
-  blockEmptyToolCalls?: boolean;
-  /** Convert parametersJsonSchema to parameters for proxy compatibility (default true). */
-  convertSchema?: boolean;
 }
 
 /** User config ~/.pi/agent/pi-switch.json */

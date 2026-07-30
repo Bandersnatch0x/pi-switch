@@ -106,10 +106,10 @@ function resolveCompatTarget(rt: Runtime): {
   }
 
   if (!provider) {
-    return {
-      apply: (config.mode ?? "auto") === "always",
-      config,
-    };
+    // Without a resolved provider we cannot confirm google-generative-ai.
+    // Do not apply: payload rewrite is gated by isGeminiPayload, but tool_call
+    // blocking would incorrectly fire on non-Gemini sessions.
+    return { apply: false, config };
   }
 
   const force = rt.config.providerOverrides?.[provider.id]?.geminiToolCompat;

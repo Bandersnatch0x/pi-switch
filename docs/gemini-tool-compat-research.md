@@ -250,18 +250,21 @@ export function installGeminiToolCompat(pi: ExtensionAPI, rt: Runtime): void {
     "hosts": ["elysia.h-e.top", ...],
     "forceToolConfigMode": "AUTO" | "VALIDATED",
     "blockEmptyToolCalls": true,
-    "strictModeMinVersion": 3
+    "convertSchema": true
   },
   "providerOverrides": {
     "<dbId>": {
-      "geminiToolCompat": {
-        "mode": "always",
-        "forceToolConfigMode": "VALIDATED"
-      }
+      "geminiToolCompat": true
     }
   }
 }
 ```
+
+Mode semantics (aligned with Claude Code compat):
+- `auto` (default): all Gemini API providers; if `hosts` is non-empty, require a host substring match
+- `always`: every Gemini API provider (ignore `hosts`)
+- `never`: off unless per-provider `geminiToolCompat: true`
+- No resolved provider → do not apply (avoids `tool_call` blocking on non-Gemini sessions)
 
 ### Codex Compat Assessment
 
@@ -300,4 +303,4 @@ No changes needed.
 - **Low risk**: Injecting `toolConfig: AUTO` is a no-op for official Gemini API (it's the default)
 - **Medium risk**: `VALIDATED` mode may reject some tool schemas that don't comply with Gemini's strict requirements
 - **Medium risk**: `tool_call` blocking for empty args changes behavior — the model will see a "blocked" result and need to regenerate. This adds latency but prevents silent failures.
-- **Low risk**: The compat layer is opt-in (default mode: "auto" only for known problematic hosts)
+- **Low risk**: Default `auto` applies to all Gemini API providers (empty `hosts`); use `hosts` or per-provider force to narrow

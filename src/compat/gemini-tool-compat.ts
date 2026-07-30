@@ -15,10 +15,20 @@
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
+/**
+ * Gemini tool-calling compat for third-party proxies that need explicit
+ * `toolConfig` to enforce parameter schemas. Default mode is `auto`
+ * (all Gemini API providers when `hosts` is empty).
+ *
+ * Mode semantics (aligned with Claude Code compat):
+ * - `auto` — apply to Gemini API; if `hosts` is non-empty, require a host match
+ * - `always` — apply to every Gemini API provider (ignore `hosts`)
+ * - `never` — off (unless per-provider force)
+ */
 export interface GeminiToolCompatConfig {
-  /** auto (default) | always | never — default auto */
+  /** auto (default) | always | never */
   mode?: "auto" | "always" | "never";
-  /** Restrict auto mode to these host substrings (empty = all Gemini providers). */
+  /** Restrict *auto* mode to these host substrings (empty = all Gemini providers). */
   hosts?: string[];
   /** Force a specific toolConfig mode. Default: AUTO for non-Gemini-3, VALIDATED for Gemini 3+. */
   forceToolConfigMode?: "AUTO" | "VALIDATED";
@@ -85,11 +95,6 @@ export function isGeminiPayload(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
   const p = payload as Record<string, unknown>;
   return "contents" in p && "config" in p && "model" in p;
-}
-
-function deepClone<T>(value: T): T {
-  if (typeof structuredClone === "function") return structuredClone(value);
-  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /**
@@ -200,7 +205,8 @@ export function emptyToolCallReason(toolName: string): string {
 
 /**
  * Decide whether to apply Gemini tool compat based on config and the
- * current provider. Mirrors `shouldApplyClaudeCodeCompat` logic.
+ * current provider. Mode semantics mirror `shouldApplyClaudeCodeCompat`:
+ * `always` skips the host filter; `auto` honors `hosts`.
  */
 export function shouldApplyGeminiToolCompat(opts: {
   mode?: "auto" | "always" | "never";
@@ -209,20 +215,22 @@ export function shouldApplyGeminiToolCompat(opts: {
   baseUrl: string | null;
   providerForce?: boolean | null;
 }): boolean {
-  const mode = opts.mode ?? "auto";
   // Provider-level force takes precedence over mode
   if (opts.providerForce === true) return true;
   if (opts.providerForce === false) return false;
 
+  const mode = opts.mode ?? "auto";
   if (mode === "never") return false;
 
   // Only applies to Gemini API providers
   if (opts.api !== "google-generative-ai") return false;
 
+  // always: every Gemini provider, ignore hosts (same as Claude Code compat)
+  if (mode === "always") return true;
 
-  // auto / always: check host allowlist if provided
+  // auto: optional host allowlist (empty = all Gemini providers)
   const hosts = opts.hosts ?? [];
-  if (hosts.length === 0) return true; // no host filter → apply for all Gemini providers
+  if (hosts.length === 0) return true;
   if (!opts.baseUrl) return false;
   return hosts.some((h) =>
     opts.baseUrl!.toLowerCase().includes(h.toLowerCase()),

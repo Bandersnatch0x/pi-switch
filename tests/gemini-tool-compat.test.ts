@@ -239,7 +239,7 @@ describe("hasEmptyToolCallArgs", () => {
   test("false for non-empty on read", () => {
     expect(hasEmptyToolCallArgs({ file_path: "/foo" }, "read")).toBe(false);
   });
-  test("false for all-empty-value object on read", () => {
+  test("true for all-empty-value object on read", () => {
     expect(hasEmptyToolCallArgs({ file_path: "" }, "read")).toBe(true);
   });
   test("false for unknown tool", () => {
@@ -278,11 +278,30 @@ describe("shouldApplyGeminiToolCompat", () => {
   test("providerForce=false overrides everything", () => {
     expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://x.com", providerForce: false })).toBe(false);
   });
-  test("hosts filter matches", () => {
+  test("auto mode hosts filter matches", () => {
     expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://elysia.h-e.top/v1beta", hosts: ["elysia"] })).toBe(true);
   });
-  test("hosts filter no match", () => {
+  test("auto mode hosts filter no match", () => {
     expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://google.com", hosts: ["elysia"] })).toBe(false);
+  });
+  test("always mode ignores hosts filter", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        mode: "always",
+        api: "google-generative-ai",
+        baseUrl: "https://google.com",
+        hosts: ["elysia"],
+      }),
+    ).toBe(true);
+  });
+  test("always mode still requires Gemini API", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        mode: "always",
+        api: "anthropic-messages",
+        baseUrl: "https://x.com",
+      }),
+    ).toBe(false);
   });
   test("null api → false", () => {
     expect(shouldApplyGeminiToolCompat({ api: null, baseUrl: "https://x.com" })).toBe(false);
