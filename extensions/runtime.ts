@@ -4,6 +4,7 @@
  */
 
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
+import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { providerHeadersPath, type FsLike } from "../src/settings.ts";
@@ -13,6 +14,15 @@ import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
 import { resolveRoutingProbeUrl, ROUTING_PROBE_TIMEOUT_MS } from "../src/routing.ts";
+import {
+  CAPABILITIES_TTL_MS,
+  extractModelsDevCapabilities,
+  findModelsDevEntry,
+  MODELS_DEV_API_URL,
+  type ModelsDevCapabilities,
+} from "../src/capabilities/models-dev.ts";
+import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
+import { piSwitchCachePath } from "../src/settings.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -29,6 +39,8 @@ export type NodeIo = {
   snapshotPath: string;
   /** Probe an HTTP endpoint for reachability (W3 routing). Resolves true on any HTTP response. */
   probeHttp: (url: string, timeoutMs: number) => Promise<boolean>;
+  /** Fetch a URL and parse as JSON (W4 models.dev catalog). */
+  fetchJson: (url: string) => Promise<unknown>;
   release: string;
   home: string;
 };
@@ -37,6 +49,13 @@ export type NodeIo = {
 export interface FingerprintSnapshot {
   snapshotVersion: number;
   baselines: { codex?: string; claudeCode?: string; gemini?: string };
+}
+
+/** W4 capability-facts cache file shape (~/.pi/agent/pi-switch-cache.json). */
+interface CapabilitiesCache {
+  version: number;
+  updatedAt?: string;
+  capabilities: Record<string, ModelsDevCapabilities>;
 }
 
 export type VarsSummary = {
@@ -69,6 +88,8 @@ export class Runtime {
   private piVersionProbed = false;
   private cachedSnapshot: FingerprintSnapshot | undefined;
   private snapshotProbed = false;
+  private cachedCapabilities: CapabilitiesCache | undefined;
+  private capabilitiesInflight: Promise<void> | undefined;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -237,6 +258,95 @@ export class Runtime {
     if (!url) return undefined;
     const reachable = await this.io.probeHttp(url, ROUTING_PROBE_TIMEOUT_MS);
     return { url, reachable };
+  }
+
+  // -----------------------------------------------------------------------
+  // W4 capability facts (models.dev catalog cache + resolution)
+  // -----------------------------------------------------------------------
+
+  private cachePath(): string {
+    return piSwitchCachePath(this.io.home);
+  }
+
+  /** capabilitiesRefresh: "off" disables network refresh (default on). */
+  private capabilitiesRefreshEnabled(): boolean {
+    const v = (this.config as { capabilitiesRefresh?: string } | undefined)?.capabilitiesRefresh;
+    return v !== "off";
+  }
+
+  capabilitiesCache(): CapabilitiesCache {
+    if (this.cachedCapabilities) return this.cachedCapabilities;
+    try {
+      const raw = JSON.parse(this.io.readFileSync(this.cachePath(), "utf8")) as CapabilitiesCache;
+      this.cachedCapabilities =
+        raw && typeof raw === "object" && raw.capabilities
+          ? raw
+          : { version: 1, capabilities: {} };
+    } catch {
+      this.cachedCapabilities = { version: 1, capabilities: {} };
+    }
+    return this.cachedCapabilities;
+  }
+
+  isCapabilitiesStale(cap: ModelsDevCapabilities): boolean {
+    const t = Date.parse(cap.observedAt);
+    if (Number.isNaN(t)) return false;
+    return Date.now() - t > CAPABILITIES_TTL_MS;
+  }
+
+  /** Fetch the models.dev catalog once, extract model ids, persist cache. */
+  refreshCapabilities(modelIds: string[]): Promise<void> {
+    if (this.capabilitiesInflight) return this.capabilitiesInflight;
+    if (!this.capabilitiesRefreshEnabled()) return Promise.resolve();
+    this.capabilitiesInflight = (async () => {
+      try {
+        const catalog = await this.io.fetchJson(MODELS_DEV_API_URL);
+        const now = new Date().toISOString();
+        const cache = this.capabilitiesCache();
+        for (const id of modelIds) {
+          const hit = findModelsDevEntry(catalog, id);
+          if (hit) cache.capabilities[id] = extractModelsDevCapabilities(hit.model, now);
+        }
+        cache.updatedAt = now;
+        this.io.writeFileSync(this.cachePath(), JSON.stringify(cache, null, 2), "utf8");
+      } catch {
+        // network failure: keep last-good cache (never block doctor)
+      } finally {
+        this.capabilitiesInflight = undefined;
+      }
+    })();
+    return this.capabilitiesInflight;
+  }
+
+  /** Resolve capability facts for a provider/model (user > models.dev > cc-meta > default). */
+  capabilitiesFor(provider: CcProvider, modelId: string) {
+    const cache = this.capabilitiesCache().capabilities[modelId];
+    const user = this.modelMetaFor(provider, modelId);
+    const api = provider.api;
+    const tier = api ? API_MODEL_META[api] : undefined;
+    const defaults = tier
+      ? {
+          contextWindow: tier.contextWindow,
+          maxTokens: tier.maxTokens,
+          reasoning: tier.reasoning,
+          vision: tier.input?.includes("image"),
+        }
+      : undefined;
+    const meta = provider.meta ?? {};
+    const ccMeta =
+      typeof meta.contextWindow === "number" ||
+      typeof meta.maxTokens === "number" ||
+      typeof meta.reasoning === "boolean" ||
+      typeof meta.vision === "boolean"
+        ? {
+            contextWindow:
+              typeof meta.contextWindow === "number" ? meta.contextWindow : undefined,
+            maxTokens: typeof meta.maxTokens === "number" ? meta.maxTokens : undefined,
+            reasoning: typeof meta.reasoning === "boolean" ? meta.reasoning : undefined,
+            vision: typeof meta.vision === "boolean" ? meta.vision : undefined,
+          }
+        : undefined;
+    return resolveModelCapabilities({ user, modelsDev: cache, ccMeta, defaults });
   }
 
   get varsSummary(): VarsSummary | undefined {

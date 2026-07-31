@@ -21,6 +21,7 @@ import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
+import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
 import {
   createEffectiveConfigSummary,
   formatEffectiveConfigSummary,
@@ -249,6 +250,17 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   const dbPath = defaultDbPath(rt.home);
   const routingProbe = await rt.routingProbe();
 
+  // W4: refresh the selected model's capability fact when missing/stale, then resolve.
+  let capabilities: { modelId: string; resolved: ResolvedCapabilities } | undefined;
+  const selMatch = sel ? providers.find((p) => p.id === sel.dbId) : undefined;
+  if (sel && selMatch && isSwitchable(selMatch)) {
+    const cached = rt.capabilitiesCache().capabilities[sel.model];
+    if (!cached || rt.isCapabilitiesStale(cached)) {
+      await rt.refreshCapabilities([sel.model]);
+    }
+    capabilities = { modelId: sel.model, resolved: rt.capabilitiesFor(selMatch, sel.model) };
+  }
+
   const report = runDoctor({
     home: rt.home,
     dbPath,
@@ -267,6 +279,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     piMinVersion: PI_MIN_VERSION,
     fingerprintSnapshot: rt.fingerprintSnapshot(),
     routingProbe,
+    capabilities,
   });
 
   const text = formatDoctorReport(report);

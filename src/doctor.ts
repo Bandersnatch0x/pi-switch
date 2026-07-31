@@ -6,6 +6,7 @@
 import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEntry } from "./types.ts";
 import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
+import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
 import {
   countModelOverrides,
   resolveModelMetaLayers,
@@ -57,6 +58,8 @@ export interface DoctorInput {
   };
   /** Routing probe result (W3). Undefined when probing disabled. */
   routingProbe?: { url: string; reachable: boolean };
+  /** Resolved capability facts for the current model (W4). */
+  capabilities?: { modelId: string; resolved: ResolvedCapabilities };
 }
 
 export interface DoctorReport {
@@ -333,7 +336,46 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     });
   }
 
-  // 11. SDK (W6): Pi runtime version within compat window
+  // 11. capabilities (W4): provenance, conflicts, staleness for current model
+  if (input.capabilities) {
+    const cap = input.capabilities.resolved;
+    const fieldLine = (label: string, e: { value: number | boolean; source: CapabilitySource; fetchedAt?: string; stale?: boolean }) => {
+      const src =
+        e.source === "models-dev"
+          ? `models.dev@${e.fetchedAt ?? "?"}${e.stale ? "(过期)" : ""}`
+          : e.source;
+      return `${label}=${e.value}(${src})`;
+    };
+    const warnRows: string[] = [];
+    for (const c of cap.conflicts) {
+      warnRows.push(`${c.field}=${c.effective}(${c.effectiveSource}) vs ${c.overridden}(${c.overriddenSource})`);
+    }
+    for (const e of [cap.contextWindow, cap.maxTokens, cap.reasoning, cap.vision]) {
+      if (e.source === "models-dev" && e.stale) {
+        warnRows.push(`models.dev@${e.fetchedAt ?? "?"} 过期（保留 last-good）`);
+      }
+    }
+    const detail =
+      `${input.capabilities.modelId}: ` +
+      [
+        fieldLine("context", cap.contextWindow),
+        fieldLine("maxOutput", cap.maxTokens),
+        fieldLine("reasoning", cap.reasoning),
+        fieldLine("vision", cap.vision),
+      ].join(" · ") +
+      (warnRows.length ? `；${warnRows.join("；")}` : "");
+    checks.push({
+      id: "capabilities",
+      title: "模型能力元数据",
+      status: warnRows.length ? "warn" : "pass",
+      detail,
+      fix: warnRows.length
+        ? "冲突：可显式 override 钉值；过期：清缓存重拉（pi-switch-cache.json 或 config.capabilitiesRefresh）"
+        : undefined,
+    });
+  }
+
+  // 12. SDK (W6): Pi runtime version within compat window
   const min = input.piMinVersion ?? PI_MIN_VERSION;
   if (input.piVersion) {
     const below = compareSemver(input.piVersion, min) < 0;
