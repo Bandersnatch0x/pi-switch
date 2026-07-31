@@ -17,8 +17,9 @@ import { installClaudeCodeCompat } from "./claude-code-compat.ts";
 import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, fs, osMod] = await Promise.all([
+  const [cp, cryptoMod, fs, osMod] = await Promise.all([
     import("node:child_process"),
+    import("node:crypto"),
     import("node:fs"),
     import("node:os"),
   ]);
@@ -30,6 +31,7 @@ export default async function (pi: ExtensionAPI) {
     writeFileSync: fs.writeFileSync,
     renameSync: fs.renameSync,
     unlinkSync: fs.unlinkSync,
+    randomUUID: cryptoMod.randomUUID,
     release: osMod.release(),
     home: osMod.homedir(),
   });

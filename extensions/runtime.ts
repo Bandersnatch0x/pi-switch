@@ -21,6 +21,7 @@ export type NodeIo = {
   writeFileSync: typeof import("node:fs").writeFileSync;
   renameSync: typeof import("node:fs").renameSync;
   unlinkSync: typeof import("node:fs").unlinkSync;
+  randomUUID: typeof import("node:crypto").randomUUID;
   release: string;
   home: string;
 };
@@ -50,9 +51,11 @@ export class Runtime {
   private cachedVars: Record<string, string> | undefined;
   private cachedVarsSummary: VarsSummary | undefined;
   private selectionCache: { at: number; value: PiSwitchSelection | undefined } | undefined;
+  private readonly codexWindowId: string;
 
   constructor(io: NodeIo) {
     this.io = io;
+    this.codexWindowId = io.randomUUID();
     this.state = createLocalState({ fs: this.fsLike(), home: io.home });
   }
 
@@ -209,6 +212,7 @@ export class Runtime {
       anthropicVersion: vars.anthropicVersion,
       anthropicBeta: vars.anthropicBeta,
       codexOriginator: vars.codexOriginator,
+      codexWindowId: this.codexWindowId,
     };
     return this.cachedVars;
   }

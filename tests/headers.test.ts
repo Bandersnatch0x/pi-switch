@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
+import { applyCodexWindowId } from "../src/headers/codex.ts";
 import { mergeHeaders, filterAllowlisted } from "../src/headers/merge.ts";
 import { parseHeaderRulesFile } from "../src/headers/rules.ts";
 
@@ -162,5 +163,48 @@ describe("default rules inject CLI fingerprints (UA + beta/originator)", () => {
       overrideHeaders: { originator: "custom_originator" },
     });
     expect(out["originator"]).toBe("custom_originator");
+  });
+});
+
+describe("applyCodexWindowId guard rails", () => {
+  const codexHeaders: Record<string, string> = {
+    "User-Agent": "codex_cli_rs/0.146.0 (Windows 10.0; x64) Terminal",
+    originator: "codex_cli_rs",
+  };
+  const WINDOW = "019b4c56-ae8b-7e5d-a65a-c0b64a3ddf80";
+
+  test("injects window id when Codex UA + originator present", () => {
+    const out = applyCodexWindowId(codexHeaders, WINDOW);
+    expect(out["X-Codex-Window-ID"]).toBe(WINDOW);
+    expect(out["User-Agent"]).toBe(codexHeaders["User-Agent"]);
+  });
+
+  test("no-op for non-Codex user-agent", () => {
+    const out = applyCodexWindowId(
+      { "User-Agent": "claude-cli/2.1.190 (external, cli)", originator: "codex_cli_rs" },
+      WINDOW,
+    );
+    expect(out["X-Codex-Window-ID"]).toBeUndefined();
+  });
+
+  test("no-op when originator is not codex_cli_rs", () => {
+    const out = applyCodexWindowId(
+      { "User-Agent": "codex_cli_rs/0.146.0 Terminal", originator: "custom_originator" },
+      WINDOW,
+    );
+    expect(out["X-Codex-Window-ID"]).toBeUndefined();
+  });
+
+  test("preserves user-supplied X-Codex-Window-ID", () => {
+    const user = { ...codexHeaders, "X-Codex-Window-ID": "user-window" };
+    const out = applyCodexWindowId(user, WINDOW);
+    expect(out["X-Codex-Window-ID"]).toBe("user-window");
+  });
+
+  test("no-op when no window id available", () => {
+    const out = applyCodexWindowId(codexHeaders, undefined);
+    expect(out["X-Codex-Window-ID"]).toBeUndefined();
+    const blank = applyCodexWindowId(codexHeaders, "   ");
+    expect(blank["X-Codex-Window-ID"]).toBeUndefined();
   });
 });

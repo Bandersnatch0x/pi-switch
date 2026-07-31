@@ -29,7 +29,7 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 - Search (`/`), manually enter model IDs, refresh remote lists, and pin favorites with `p` (scrollable list — **no** pagination).
 - Remember last-N successful switches locally (no expose / multi-tool config center).
 - Parse and map common API protocols: Anthropic Messages, OpenAI Responses, OpenAI Chat Completions, and Google Generative AI.
-- Inject CLI-like fingerprints by default (Codex UA + `originator`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
+- Inject CLI-like fingerprints by default (Codex UA + `originator` + `X-Codex-Window-ID`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
 - Override model parameters via presets or a native dialog (`/ps-override` or picker key `o`) — e.g. **中转兼容** sets `reasoning=false` when a relay rejects thinking.
 - Run structured health checks with `/ps-doctor` (PASS/WARN/FAIL + fix hints).
 - Persist the latest selection so the next switcher session can highlight and reuse it.
@@ -307,7 +307,7 @@ Optional `fingerprint` field forces a CLI disguise preset regardless of protocol
 | Value | Effect |
 | --- | --- |
 | `claude-code` | `claude-cli/<ver> (external, cli)` + anthropic version/beta |
-| `codex` | `codex_cli_rs/<ver> (...)` + `originator` |
+| `codex` | `codex_cli_rs/<ver> (...)` + `originator` + per-process `X-Codex-Window-ID` |
 | `gemini` | `GeminiCLI/<ver>` + `x-goog-api-client` |
 | `none` | Skip default/api-matched rule injection; only explicit `headers` (if any) remain |
 
@@ -350,6 +350,7 @@ pi-switch only merges allowlisted headers to avoid injecting arbitrary sensitive
 | `anthropic-version` | yes (claude) | Protocol-required for Anthropic Messages |
 | `anthropic-beta` | yes (claude) | Claude Code beta flags (template via `vars.anthropicBeta`) |
 | `originator` | yes (codex) | Codex CLI private header (template via `vars.codexOriginator`) |
+| `X-Codex-Window-ID` | yes (codex) | Per-process UUID required by official-client relay gates |
 | `x-goog-api-client` | yes (gemini) | Gemini CLI client id (`gemini-cli/<ver>`) |
 
 `Authorization` / `x-api-key` / `Host` / etc. are **never** injectable via rules or overrides.
