@@ -72,6 +72,15 @@ export interface PiSwitchVars {
 /** Force a CLI fingerprint preset regardless of api-matched default rules. */
 export type FingerprintPreset = "claude-code" | "codex" | "gemini" | "none";
 
+/**
+ * One-shot identity migration marker (issue #16 D2). Written to both
+ * settings.json and pi-switch.json; version >= 1 skips re-migration.
+ */
+export interface PiSwitchMigrationMarker {
+  version: number;
+  migratedAt: string;
+}
+
 /** Per-provider model registration overrides (Pi model config fields). */
 export interface ModelMetaOverride {
   reasoning?: boolean;
@@ -84,6 +93,7 @@ export interface ModelMetaOverride {
 export interface PinEntry {
   dbId: string;
   model: string;
+  appType?: string;
   label?: string;
 }
 
@@ -91,6 +101,7 @@ export interface PinEntry {
 export interface RecentEntry {
   dbId: string;
   model: string;
+  appType?: string;
   at: number;
 }
 
@@ -180,6 +191,8 @@ export interface PiSwitchConfig {
   /** Max recent entries to keep (default 8). */
   recentLimit?: number;
   debug?: boolean;
+  /** Identity migration marker (issue #16); presence with version >= 1 skips migration. */
+  piSwitchMigration?: PiSwitchMigrationMarker;
 }
 
 /** Pi SDK thinkingFormat literals (model-config.d.ts). Invalid values are rejected. */

@@ -396,13 +396,24 @@ export function writeProviderModelMeta(
   return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
 }
 
+/** Legacy pin key (pre-identity-migration); still used for back-compat matching. */
 export function pinKey(dbId: string, model: string): string {
   return `${dbId}::${model.trim()}`;
 }
 
-export function isPinned(pins: PinEntry[] | undefined, dbId: string, model: string): boolean {
-  const key = pinKey(dbId, model);
-  return (pins ?? []).some((p) => pinKey(p.dbId, p.model) === key);
+/** Identity-aware pin key (issue #16): appType::dbId::model. */
+export function entryKey(p: { dbId: string; model: string; appType?: string }): string {
+  return p.appType ? `${p.appType}::${p.dbId}::${p.model.trim()}` : pinKey(p.dbId, p.model);
+}
+
+export function isPinned(
+  pins: PinEntry[] | undefined,
+  dbId: string,
+  model: string,
+  appType?: string,
+): boolean {
+  const key = entryKey({ dbId, model, appType });
+  return (pins ?? []).some((p) => entryKey(p) === key);
 }
 
 /** Toggle a pin entry. Returns the new pins array. */
@@ -411,8 +422,8 @@ export function togglePinEntry(
   entry: PinEntry,
 ): { pins: PinEntry[]; pinned: boolean } {
   const list = [...(pins ?? [])];
-  const key = pinKey(entry.dbId, entry.model);
-  const idx = list.findIndex((p) => pinKey(p.dbId, p.model) === key);
+  const key = entryKey(entry);
+  const idx = list.findIndex((p) => entryKey(p) === key);
   if (idx >= 0) {
     list.splice(idx, 1);
     return { pins: list, pinned: false };
@@ -420,6 +431,7 @@ export function togglePinEntry(
   list.unshift({
     dbId: entry.dbId,
     model: entry.model.trim(),
+    appType: entry.appType,
     label: entry.label,
   });
   return { pins: list, pinned: true };
@@ -433,10 +445,11 @@ export function pushRecentEntry(
   const next: RecentEntry = {
     dbId: entry.dbId,
     model: entry.model.trim(),
+    appType: entry.appType,
     at: entry.at ?? Date.now(),
   };
-  const key = pinKey(next.dbId, next.model);
-  const filtered = (recent ?? []).filter((r) => pinKey(r.dbId, r.model) !== key);
+  const key = entryKey(next);
+  const filtered = (recent ?? []).filter((r) => entryKey(r) !== key);
   return [next, ...filtered].slice(0, Math.max(1, limit));
 }
 

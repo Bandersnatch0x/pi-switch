@@ -33,25 +33,36 @@ export function providerOverrideKeys(
 
 /**
  * Resolve per-provider parameter overrides from pi-switch.json.
- * Match order: dbId → piName → displayName → slug(displayName).
- * Case-insensitive fallback for name-like keys.
+ * Match order (issue #16): nested [appType][id] -> top-level dbId -> piName
+ * -> displayName -> slug(displayName). Case-insensitive fallback for
+ * name-like keys. Top-level legacy keys still match (back-compat).
  */
 export function resolveProviderOverride(
   overrides: PiSwitchConfig["providerOverrides"] | undefined,
-  provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+  provider: Pick<CcProvider, "id" | "piName" | "displayName"> & { appType?: string },
 ): ProviderOverrideEntry | undefined {
   if (!overrides) return undefined;
 
+  // 1. nested composite [appType][id] (canonical post-migration shape)
+  if (provider.appType) {
+    const appGroup = overrides[provider.appType];
+    if (appGroup && typeof appGroup === "object") {
+      const hit = (appGroup as Record<string, unknown>)[provider.id];
+      if (hit && typeof hit === "object") return hit as ProviderOverrideEntry;
+    }
+  }
+
+  // 2. top-level legacy chain: dbId -> piName -> displayName -> slug
   for (const key of providerOverrideKeys(provider)) {
     if (Object.prototype.hasOwnProperty.call(overrides, key)) {
-      return overrides[key];
+      return overrides[key] as ProviderOverrideEntry;
     }
   }
 
   // Case-insensitive match for human-written name keys
   const wanted = new Set(providerOverrideKeys(provider).map((k) => k.toLowerCase()));
   for (const [key, value] of Object.entries(overrides)) {
-    if (wanted.has(key.toLowerCase())) return value;
+    if (wanted.has(key.toLowerCase())) return value as ProviderOverrideEntry;
   }
   return undefined;
 }
