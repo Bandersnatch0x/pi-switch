@@ -58,6 +58,35 @@ function isManagedAuthEntry(configRaw: unknown): boolean {
   );
 }
 
+/** Direct reusable credentials present in the config (any app-type convention). */
+function hasDirectCredentials(configRaw: unknown): boolean {
+  const root = asRecord(configRaw);
+  if (!root) return false;
+  if (asString(root.api_key) || asString(root.apiKey)) return true;
+  const auth = asRecord(root.auth);
+  if (auth && asString(auth.OPENAI_API_KEY)) return true;
+  const env = asRecord(root.env);
+  if (env) {
+    return Boolean(
+      asString(env.ANTHROPIC_API_KEY) ||
+        asString(env.ANTHROPIC_AUTH_TOKEN) ||
+        asString(env.GEMINI_API_KEY) ||
+        asString(env.GOOGLE_API_KEY),
+    );
+  }
+  return false;
+}
+
+/**
+ * CC Switch `category == "official"` marks built-in managed-login entries:
+ * credentials live in cc-switch (OAuth/token store), not as reusable keys.
+ * Consulted only when the row already failed to parse and carries no direct
+ * key, so a broken-but-keyed official entry keeps its real, fixable error.
+ */
+function isOfficialManagedAuth(row: ProviderRow, configRaw: unknown): boolean {
+  return row.category === "official" && !hasDirectCredentials(configRaw);
+}
+
 /** Convert one DB row into a CcProvider (never returns null 鈥?failures become parseError). */
 export function parseProviderRow(row: ProviderRow): CcProvider {
   const meta = parseMeta(row.meta ?? undefined);
@@ -114,7 +143,7 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
         ? "missing baseUrl"
         : "missing apiKey";
   }
-  if (parseError && isManagedAuthEntry(configRaw)) {
+  if (parseError && (isManagedAuthEntry(configRaw) || isOfficialManagedAuth(row, configRaw))) {
     parseError = MANAGED_AUTH_PARSE_ERROR;
   }
 
@@ -130,6 +159,7 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
     configModels: core.configModels,
     apiFormat,
     meta,
+    category: row.category ?? undefined,
     isCurrentInCc: Boolean(row.is_current),
     parseError,
     websiteUrl: row.website_url ?? undefined,
