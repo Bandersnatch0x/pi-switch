@@ -325,6 +325,7 @@ v0.1 **仅允许**以下名称（大小写不敏感）：
 - `User-Agent`
 - `x-goog-api-client`
 - `originator`
+- `X-Codex-Window-ID`
 - `anthropic-version`
 - `anthropic-beta`
 
@@ -586,7 +587,7 @@ session_start(startup)
 | 8 | 显式未知协议禁止切换；缺省才用类型默认 | grilling Q8 |
 | 9 | baseUrl 不改写；OpenAI 系（completions/responses）host-only 自动补 `/v1`、gemini 补 `/v1beta`、anthropic 不动（见 §5.11 例外） | grilling Q9 + research + 0.83.0 源码确认 |
 | 10 | Header 不覆盖认证字段 | grilling Q10 |
-| 11 | 白名单仅 4 字段：UA / originator / anthropic-version / anthropic-beta | grilling Q11 |
+| 11 | 白名单仅允许客户端指纹字段：UA / originator / X-Codex-Window-ID / anthropic-version / anthropic-beta / x-goog-api-client | grilling Q11 + Codex relay regression |
 | 12 | 不设计旧扩展共存/冲突保护 | grilling Q12 |
 | 13 | v0.1 正式支持 Windows x64 | grilling Q13 |
 | 14 | macOS 同路径理论兼容，未验收；保留 `CC_SWITCH_DB` | grilling Q14 |

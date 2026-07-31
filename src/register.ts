@@ -4,6 +4,7 @@ import {
   applyAnyrouterHeaders,
   applyAnyrouterModelMeta,
 } from "./headers/anyrouter.ts";
+import { applyCodexWindowId } from "./headers/codex.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
@@ -91,6 +92,7 @@ export function buildProviderConfig(
   // anyrouter.top anthropic: merge official context-1m beta (Claude Code parity).
   // fingerprint:"none" is an explicit request to keep only user headers.
   if (!opts.skipRules) {
+    headers = applyCodexWindowId(headers, opts.vars?.codexWindowId);
     headers = applyAnyrouterHeaders(provider.api, provider.baseUrl, headers);
   }
 

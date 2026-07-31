@@ -258,13 +258,15 @@ export const API_MODEL_META: Record<PiApi, ApiModelMeta> = {
  * Header allowlist — the ONLY header names pi-switch may inject or override.
  *
  * Defaults include fingerprint fields via defaults/headers.json templates:
- * originator (codex), anthropic-version/beta (claude-code), x-goog-api-client
- * (gemini). Overridable via providerOverrides.fingerprint / .headers / vars.
+ * originator/x-codex-window-id (codex), anthropic-version/beta (claude-code),
+ * x-goog-api-client (gemini). Overridable via providerOverrides.fingerprint /
+ * .headers / vars.
  */
 export const HEADER_ALLOWLIST = new Set(
   [
     "user-agent",
     "originator",
+    "x-codex-window-id",
     "anthropic-version",
     "anthropic-beta",
     "x-goog-api-client",
@@ -275,6 +277,7 @@ export const HEADER_ALLOWLIST = new Set(
 export const HEADER_CANONICAL: Record<string, string> = {
   "user-agent": "User-Agent",
   originator: "originator",
+  "x-codex-window-id": "X-Codex-Window-ID",
   "anthropic-version": "anthropic-version",
   "anthropic-beta": "anthropic-beta",
   "x-goog-api-client": "x-goog-api-client",

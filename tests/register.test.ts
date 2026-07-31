@@ -18,6 +18,35 @@ function mk(partial: Partial<CcProvider> & Pick<CcProvider, "id" | "appType">): 
 }
 
 describe("buildProviderConfig", () => {
+  test("adds the Codex window fingerprint required by official-client relays", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "codex", appType: "codex", api: "openai-responses" }),
+      ["gpt-5.6-sol"],
+      {
+        rules: [
+          {
+            name: "codex-cli",
+            apis: ["openai-responses"],
+            headers: {
+              "User-Agent": "codex_cli_rs/{codexVersion} ({osInfo}) Terminal",
+              originator: "{codexOriginator}",
+            },
+          },
+        ],
+        vars: {
+          codexVersion: "0.146.0",
+          osInfo: "Windows 10.0; x64",
+          codexOriginator: "codex_cli_rs",
+          codexWindowId: "019b4c56-ae8b-7e5d-a65a-c0b64a3ddf80",
+        },
+      },
+    );
+
+    expect(cfg?.headers?.["X-Codex-Window-ID"]).toBe(
+      "019b4c56-ae8b-7e5d-a65a-c0b64a3ddf80",
+    );
+  });
+
   test("switchable provider yields config with models", () => {
     const cfg = buildProviderConfig(mk({ id: "1", appType: "claude" }), ["gpt"], {
       rules: [],

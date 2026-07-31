@@ -29,7 +29,7 @@ pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会�
 - 支持搜索（`/`）、手动输入模型 ID、远程刷新，以及快捷键 `p` 本地 pin 常用模型（可滚动列表，**不做**分页/跳页）。
 - 本地记录 last-N 最近切换（不做 expose 配置中心）。
 - 自动解析并映射常见协议：Anthropic Messages、OpenAI Responses、OpenAI Chat Completions、Google Generative AI。
-- 默认注入类官方 CLI 指纹（Codex UA+`originator`、Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`、GeminiCLI UA + `x-goog-api-client`）。
+- 默认注入类官方 CLI 指纹（Codex UA + `originator` + `X-Codex-Window-ID`、Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`、GeminiCLI UA + `x-goog-api-client`）。
 - 通过预设或原生弹窗覆写模型参数（`/ps-override` 或快捷键 `o`），例如 **中转兼容** 关闭被拒的 `reasoning`。
 - `/ps-doctor` 结构化体检（PASS/WARN/FAIL + 修复建议）。
 - 选中后注册 Pi Provider，并持久化最近一次选择，方便下次高亮与复用。
@@ -305,7 +305,7 @@ defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides
 | 值 | 效果 |
 | --- | --- |
 | `claude-code` | `claude-cli/<ver> (external, cli)` + anthropic version/beta |
-| `codex` | `codex_cli_rs/<ver> (...)` + `originator` |
+| `codex` | `codex_cli_rs/<ver> (...)` + `originator` + 进程级 `X-Codex-Window-ID` |
 | `gemini` | `GeminiCLI/<ver>` + `x-goog-api-client` |
 | `none` | 跳过默认/按 api 匹配的规则注入；仅保留显式 `headers`（可为空） |
 
@@ -348,6 +348,7 @@ pi-switch 只合并白名单内 Header，避免把任意敏感字段注入 Provi
 | `anthropic-version` | 是（claude） | Anthropic Messages 协议必需 |
 | `anthropic-beta` | 是（claude） | Claude Code beta flags（`vars.anthropicBeta`） |
 | `originator` | 是（codex） | Codex CLI 私有头（`vars.codexOriginator`） |
+| `X-Codex-Window-ID` | 是（codex） | 官方客户端限制网关要求的进程级 UUID |
 | `x-goog-api-client` | 是（gemini） | Gemini CLI 客户端标识（`gemini-cli/<ver>`） |
 
 `Authorization` / `x-api-key` / `Host` 等**永远不能**通过规则或 override 注入。
