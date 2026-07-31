@@ -12,6 +12,7 @@ import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
+import { resolveRoutingProbeUrl, ROUTING_PROBE_TIMEOUT_MS } from "../src/routing.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -26,6 +27,8 @@ export type NodeIo = {
   resolvePackageVersion: (name: string) => string | undefined;
   /** Absolute path to defaults/fingerprint-snapshot.json (W5 snapshot baselines). */
   snapshotPath: string;
+  /** Probe an HTTP endpoint for reachability (W3 routing). Resolves true on any HTTP response. */
+  probeHttp: (url: string, timeoutMs: number) => Promise<boolean>;
   release: string;
   home: string;
 };
@@ -219,6 +222,21 @@ export class Runtime {
       this.cachedSnapshot = undefined;
     }
     return this.cachedSnapshot;
+  }
+
+  /**
+   * W3 routing probe (fresh per call; doctor is on-demand).
+   * Undefined when probing is explicitly disabled via routingProbeUrl: "".
+   */
+  async routingProbe(): Promise<{ url: string; reachable: boolean } | undefined> {
+    // routingProbeUrl lives outside PiSwitchConfig to keep this work off the
+    // in-flight capability-probe edits to src/types.ts; read it structurally.
+    const url = resolveRoutingProbeUrl(
+      this.config as { routingProbeUrl?: string } | undefined,
+    );
+    if (!url) return undefined;
+    const reachable = await this.io.probeHttp(url, ROUTING_PROBE_TIMEOUT_MS);
+    return { url, reachable };
   }
 
   get varsSummary(): VarsSummary | undefined {
