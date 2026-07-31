@@ -442,4 +442,40 @@ describe("runDoctor", () => {
     expect(check?.status).toBe("warn");
     expect(check?.detail).toContain("过期");
   });
+
+  test("tier W2: per-app-type row with direct/visible/routed counts", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [
+        mk({ id: "1", displayName: "a", appType: "claude" }),
+        mk({ id: "2", displayName: "b", appType: "claude", parseError: "managed auth", apiKey: undefined, baseUrl: undefined }),
+      ],
+      config: {},
+      headerRuleCount: 1,
+    });
+    const check = report.checks.find((c) => c.id === "tier-claude");
+    expect(check).toBeDefined();
+    expect(check?.detail).toContain("direct=1");
+    expect(check?.detail).toContain("visible=1");
+  });
+
+  test("tier W2: app type with nothing switchable warns", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [
+        mk({ id: "1", displayName: "o", appType: "openclaw", parseError: "managed auth", apiKey: undefined, baseUrl: undefined }),
+      ],
+      config: {},
+      headerRuleCount: 1,
+    });
+    const check = report.checks.find((c) => c.id === "tier-openclaw");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("routed=1");
+  });
 });
