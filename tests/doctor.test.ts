@@ -478,4 +478,84 @@ describe("runDoctor", () => {
     expect(check?.status).toBe("warn");
     expect(check?.detail).toContain("routed=1");
   });
+
+  const KNOWN_COLS = [
+    "id", "app_type", "name", "settings_config", "website_url", "category",
+    "created_at", "sort_index", "notes", "icon", "icon_color", "meta",
+    "is_current", "in_failover_queue", "cost_multiplier", "limit_daily_usd",
+    "limit_monthly_usd", "provider_type",
+  ];
+
+  test("schema W1: windowed schema passes with facts", () => {
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "codex" })],
+      config: {}, headerRuleCount: 1,
+      schemaCapabilities: {
+        columns: KNOWN_COLS, hasCategory: true, hasProviderType: true,
+        compositeId: true, userVersion: 16,
+      },
+    });
+    const check = report.checks.find((c) => c.id === "schema");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("userVersion=16");
+    expect(check?.detail).toContain("compositeId=true");
+  });
+
+  test("schema W1: newer-than-window user_version warns", () => {
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "codex" })],
+      config: {}, headerRuleCount: 1,
+      schemaCapabilities: {
+        columns: KNOWN_COLS, hasCategory: true, hasProviderType: true,
+        compositeId: true, userVersion: 17,
+      },
+    });
+    const check = report.checks.find((c) => c.id === "schema");
+    expect(check?.status).toBe("warn");
+    expect(check?.fix).toContain("升级 pi-switch");
+  });
+
+  test("schema W1: older-than-window user_version warns with cc-switch upgrade", () => {
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "codex" })],
+      config: {}, headerRuleCount: 1,
+      schemaCapabilities: {
+        columns: KNOWN_COLS, hasCategory: false, hasProviderType: true,
+        compositeId: false, userVersion: 9,
+      },
+    });
+    const check = report.checks.find((c) => c.id === "schema");
+    expect(check?.status).toBe("warn");
+    expect(check?.fix).toContain("3.14.0");
+  });
+
+  test("schema W1: unknown column warns", () => {
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "codex" })],
+      config: {}, headerRuleCount: 1,
+      schemaCapabilities: {
+        columns: [...KNOWN_COLS, "mystery_col"], hasCategory: true,
+        hasProviderType: true, compositeId: true, userVersion: 16,
+      },
+    });
+    const check = report.checks.find((c) => c.id === "schema");
+    expect(check?.status).toBe("warn");
+    expect(check?.fix).toContain("mystery_col");
+  });
+
+  test("schema W1: failed probe on readable db warns with core-column fallback note", () => {
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "codex" })],
+      config: {}, headerRuleCount: 1,
+      schemaCapabilities: undefined,
+    });
+    const check = report.checks.find((c) => c.id === "schema");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("探测失败");
+  });
 });

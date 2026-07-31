@@ -92,6 +92,7 @@ export class Runtime {
   private cachedCapabilities: CapabilitiesCache | undefined;
   private capabilitiesInflight: Promise<void> | undefined;
   private identityMigration: IdentityMigrationSummary | undefined;
+  private lastSchemaCapabilities: import("../src/db.ts").DbCapabilities | undefined;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -171,23 +172,33 @@ export class Runtime {
     return this.headerRules;
   }
 
-  refreshSnapshot(): { providers: CcProvider[]; error?: string } {
+  refreshSnapshot(): {
+    providers: CcProvider[];
+    error?: string;
+    capabilities?: import("../src/db.ts").DbCapabilities;
+  } {
     const result = readProviders({      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
       existsSync: this.io.existsSync,
       sqlite3Path: this.sqlite3Path,
       dbPath: defaultDbPath(this.home),
     });
+    this.lastSchemaCapabilities = result.capabilities;
     if (result.ok) {
       this.lastGoodProviders = result.providers;
-      return { providers: result.providers };
+      return { providers: result.providers, capabilities: result.capabilities };
     }
     if (this.lastGoodProviders.length) {
       return {
         providers: this.lastGoodProviders,
         error: result.error ?? "read failed; using last good snapshot",
+        capabilities: result.capabilities,
       };
     }
-    return { providers: [], error: result.error ?? "failed to read database" };
+    return {
+      providers: [],
+      error: result.error ?? "failed to read database",
+      capabilities: result.capabilities,
+    };
   }
 
   /**

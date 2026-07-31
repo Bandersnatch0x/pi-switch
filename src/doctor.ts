@@ -6,6 +6,12 @@
 import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEntry } from "./types.ts";
 import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
+import {
+  CC_SWITCH_SCHEMA_LATEST,
+  CC_SWITCH_SCHEMA_MIN,
+  KNOWN_PROVIDERS_COLUMNS,
+  type DbCapabilities,
+} from "./db.ts";
 import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
 import type { IdentityMigrationSummary } from "./migration.ts";
 import { summarizeTiers } from "./tier.ts";
@@ -64,6 +70,8 @@ export interface DoctorInput {
   capabilities?: { modelId: string; resolved: ResolvedCapabilities };
   /** Identity migration outcome (issue #16); present only on this run. */
   migrationSummary?: IdentityMigrationSummary;
+  /** Probed CC Switch schema capabilities (W1). Undefined when not available. */
+  schemaCapabilities?: DbCapabilities;
 }
 
 export interface DoctorReport {
@@ -157,6 +165,43 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       status: "fail",
       detail: `不存在: ${input.dbPath}`,
       fix: "先用 cc-switch 创建 Provider，或设置 CC_SWITCH_DB 指向正确路径",
+    });
+  }
+
+  // 2.5 schema capabilities (W1): probed column set / composite key / version
+  if (input.schemaCapabilities) {
+    const cap = input.schemaCapabilities;
+    const unknown = cap.columns.filter((c) => !KNOWN_PROVIDERS_COLUMNS.has(c));
+    const facts =
+      `columns=${cap.columns.length} category=${cap.hasCategory} ` +
+      `provider_type=${cap.hasProviderType} compositeId=${cap.compositeId}` +
+      (cap.userVersion !== undefined ? ` userVersion=${cap.userVersion}` : " userVersion=?");
+    let status: DoctorStatus = "pass";
+    let fix: string | undefined;
+    if (cap.userVersion !== undefined && cap.userVersion > CC_SWITCH_SCHEMA_LATEST) {
+      status = "warn";
+      fix = "SCHEMA_VERSION 过新：升级 pi-switch 获取新列契约";
+    } else if (cap.userVersion !== undefined && cap.userVersion < CC_SWITCH_SCHEMA_MIN) {
+      status = "warn";
+      fix = "SCHEMA_VERSION 过旧：升级 CC Switch 到窗口内版本（≥3.14.0）";
+    } else if (unknown.length) {
+      status = "warn";
+      fix = `探测到未知列（${unknown.join(", ")}）：升级 pi-switch`;
+    }
+    checks.push({
+      id: "schema",
+      title: "CC Switch 数据契约",
+      status,
+      detail: `${input.providers.length} providers · ${facts}`,
+      fix,
+    });
+  } else if (input.dbExists) {
+    checks.push({
+      id: "schema",
+      title: "CC Switch 数据契约",
+      status: "warn",
+      detail: "schema 探测失败（按核心列尽力读取）",
+      fix: "检查 sqlite3 可执行文件与 DB 只读权限；身份配对将按 dbId 尽力匹配",
     });
   }
 

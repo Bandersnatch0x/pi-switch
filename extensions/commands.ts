@@ -245,7 +245,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   rt.invalidateVarsCache();
   rt.headerVars();
 
-  const { providers, error } = rt.refreshSnapshot();
+  const { providers, error, capabilities: schemaCapabilities } = rt.refreshSnapshot();
   const sel = rt.state.readSelection();
   const dbPath = defaultDbPath(rt.home);
   const routingProbe = await rt.routingProbe();
@@ -285,6 +285,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     routingProbe,
     capabilities,
     migrationSummary: rt.migrationSummary,
+    schemaCapabilities,
   });
 
   const text = formatDoctorReport(report);
