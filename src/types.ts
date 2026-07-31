@@ -1,3 +1,7 @@
+/** @see src/compat/gemini-tool-compat.ts — single source of truth */
+import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
+export type { GeminiToolCompatConfig };
+
 /** Supported Pi API protocols for registration. */
 export type PiApi =
   | "anthropic-messages"
@@ -125,6 +129,11 @@ export interface PiSwitchConfig {
    * required by some relays (anyrouter 503 without metadata + Agent SDK prefix).
    */
   claudeCodeCompat?: ClaudeCodeCompatConfig;
+  /**
+   * Inject `toolConfig` + convert schema for Gemini proxies that
+   * need it to enforce parameter schemas (prevents `read({})`).
+   */
+  geminiToolCompat?: GeminiToolCompatConfig;
   providerOverrides?: Record<
     string,
     {
@@ -153,6 +162,11 @@ export interface PiSwitchConfig {
        * undefined = follow global claudeCodeCompat.mode rules.
        */
       claudeCodeCompat?: boolean;
+      /**
+       * Force Gemini tool compat on/off for this provider.
+       * undefined = follow global geminiToolCompat.mode rules.
+       */
+      geminiToolCompat?: boolean;
     }
   >;
   /** Pinned provider/model shortcuts (local only). */

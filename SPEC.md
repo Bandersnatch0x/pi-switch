@@ -301,6 +301,13 @@ piName = slug(displayName)                // 优先：人类可读，出现在 P
 - **不**删除 `/v1`，不猜测自定义前缀。
 - 模型列表请求使用 §8.4 的 cc-switch 候选逻辑，**不改写**注册 baseUrl。
 
+> **例外（解析层协议自适应补版本段）**：
+> - `openai-completions` / `openai-responses`：host-only（无 `/{ver}` 段）baseUrl 自动补 `/v1`；保留显式版本段（`/v1`、`/v2`、`/v1alpha` 等）。原因：Pi 的 OpenAI 客户端 `new OpenAI({ baseURL })`，OpenAI SDK 在 baseURL 末尾直接拼 `/chat/completions`、`/responses`，**不插入** `/v1`，host-only 在第三方 relay 上会 404。
+> - `google-generative-ai`：`parseGemini` 内补 `/v1beta`（见 `gemini.ts` 的 `normalizeGeminiBaseUrlForPi`）。
+> - `anthropic-messages`：**不改写**——`@anthropic-ai/sdk` 自行拼 `/v1/messages`，host-only 即正确。
+>
+> 统一入口见 `src/parse/common.ts` 的 `normalizeBaseUrlForPi(api, baseUrl)`。
+
 ---
 
 ## 6. Headers 规范
@@ -577,7 +584,7 @@ session_start(startup)
 | 6 | **取消**全部余量展示与查询 | grilling 用户指令 |
 | 7 | Model 列表先 configModels；用户点击才拉远端 | grilling Q7 |
 | 8 | 显式未知协议禁止切换；缺省才用类型默认 | grilling Q8 |
-| 9 | baseUrl 不改写；模型发现对齐 cc-switch | grilling Q9 + research |
+| 9 | baseUrl 不改写；OpenAI 系（completions/responses）host-only 自动补 `/v1`、gemini 补 `/v1beta`、anthropic 不动（见 §5.11 例外） | grilling Q9 + research + 0.83.0 源码确认 |
 | 10 | Header 不覆盖认证字段 | grilling Q10 |
 | 11 | 白名单仅 4 字段：UA / originator / anthropic-version / anthropic-beta | grilling Q11 |
 | 12 | 不设计旧扩展共存/冲突保护 | grilling Q12 |

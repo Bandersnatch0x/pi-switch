@@ -1,4 +1,5 @@
 /** Shared pure helpers for parsers. No IO. */
+import type { PiApi } from "../types.ts";
 
 /** Trim only — never strip brackets, case-fold, or slug model ids (SPEC §5.10). */
 export function trimModelId(raw: string): string {
@@ -17,6 +18,58 @@ export function isBracket1mModelId(id: string): boolean {
 
 export function stripTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "").trim();
+}
+
+/**
+ * Append `/v1` to host-only OpenAI-style baseUrls.
+ *
+ * Pi's `openai-completions`/`openai-responses` clients do `new OpenAI({ baseURL })`.
+ * The OpenAI SDK appends `/chat/completions` (or `/responses`) directly to baseURL;
+ * unlike the official OpenAI default (`https://api.openai.com/v1`) it never inserts
+ * `/v1`. Third-party relays that expect `/v1/chat/completions` 404 on host-only
+ * baseUrls (e.g. `https://glm.ddddddd.cyou` → `POST /chat/completions` → 404).
+ *
+ * Append `/v1` only when the URL is host-only (pathname empty or `/`). Preserve
+ * every explicit path — version segments (`/v1`, `/v2`) and custom prefixes alike —
+ * because pi-switch must not guess where `/v1` belongs inside a configured path.
+ */
+export function normalizeOpenAiBaseUrlForPi(baseUrl: string): string {
+  const base = stripTrailingSlash(baseUrl);
+  if (!base) return base;
+
+  try {
+    const url = new URL(base);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (path) return base;
+    url.pathname = "/v1";
+    return url.toString();
+  } catch {
+    // Invalid/non-absolute values are preserved rather than guessing a prefix.
+    return base;
+  }
+}
+
+/**
+ * Normalize a baseUrl for the given Pi api protocol.
+ *
+ * - `openai-completions` / `openai-responses`: append `/v1` when host-only
+ *   (OpenAI SDK doesn't insert it; see `normalizeOpenAiBaseUrlForPi`).
+ * - `anthropic-messages`: unchanged — the Anthropic SDK builds `/v1/messages`
+ *   itself from a host-only base, so a `/v1` is already correct-as-is.
+ * - `google-generative-ai`: unchanged — `parseGemini` already appends `/v1beta`
+ *   via `normalizeGeminiBaseUrlForPi`; passing it through avoids double-append.
+ * - `null`/unknown: unchanged.
+ */
+export function normalizeBaseUrlForPi(api: PiApi | null, baseUrl: string): string {
+  switch (api) {
+    case "openai-completions":
+    case "openai-responses":
+      return normalizeOpenAiBaseUrlForPi(baseUrl);
+    case "anthropic-messages":
+    case "google-generative-ai":
+    default:
+      return baseUrl;
+  }
 }
 
 export function escapeRegExp(s: string): string {

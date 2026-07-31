@@ -231,6 +231,36 @@ describe("provider modelMeta overrides", () => {
     expect(cfg.vars?.claudeCodeVersion).toBe("1.2.3");
     expect(cfg.debug).toBe(true);
   });
+
+  test("readPiSwitchConfig parses geminiToolCompat", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        geminiToolCompat: {
+          mode: "never",
+          hosts: ["elysia.h-e.top"],
+          forceToolConfigMode: "AUTO",
+          blockEmptyToolCalls: false,
+          convertSchema: false,
+        },
+      }),
+    });
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    expect(cfg.geminiToolCompat).toEqual({
+      mode: "never",
+      hosts: ["elysia.h-e.top"],
+      forceToolConfigMode: "AUTO",
+      blockEmptyToolCalls: false,
+      convertSchema: false,
+    });
+  });
+
+  test("readPiSwitchConfig ignores invalid geminiToolCompat", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({ geminiToolCompat: "on" }),
+    });
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    expect(cfg.geminiToolCompat).toBeUndefined();
+  });
 });
 
 describe("pins and recent", () => {

@@ -20,6 +20,7 @@ import {
   type ProviderOverrideEntry,
 } from "./provider-override.ts";
 import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
+import { parseGeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 import {
   readJsonObjectLenient,
   updateJsonObjectAtomic,
@@ -211,6 +212,7 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
       : undefined,
     defaultModelMeta: parseModelMeta(raw.defaultModelMeta),
     claudeCodeCompat: parseClaudeCodeCompatConfig(raw.claudeCodeCompat),
+    geminiToolCompat: parseGeminiToolCompatConfig(raw.geminiToolCompat),
     providerOverrides:
       raw.providerOverrides && typeof raw.providerOverrides === "object"
         ? (raw.providerOverrides as PiSwitchConfig["providerOverrides"])

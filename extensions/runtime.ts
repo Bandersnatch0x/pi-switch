@@ -3,7 +3,7 @@
  * Populated after dynamic node:* imports in the extension factory.
  */
 
-import type { CcProvider, HeaderRule, PiSwitchConfig } from "../src/types.ts";
+import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { providerHeadersPath, type FsLike } from "../src/settings.ts";
@@ -49,6 +49,7 @@ export class Runtime {
 
   private cachedVars: Record<string, string> | undefined;
   private cachedVarsSummary: VarsSummary | undefined;
+  private selectionCache: { at: number; value: PiSwitchSelection | undefined } | undefined;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -67,6 +68,22 @@ export class Runtime {
       renameSync: this.io.renameSync,
       unlinkSync: this.io.unlinkSync,
     };
+  }
+
+  /**
+   * `readSelection` with a short TTL cache. Compat hooks fire on every
+   * provider request AND every tool call; without this each firing hits the
+   * settings.json file. Selection writes happen out-of-process (CLI), so a
+   * 1s window is the staleness bound after an external switch.
+   */
+  readSelectionCached(ttlMs = 1000): PiSwitchSelection | undefined {
+    const now = Date.now();
+    if (this.selectionCache && now - this.selectionCache.at < ttlMs) {
+      return this.selectionCache.value;
+    }
+    const value = this.state.readSelection();
+    this.selectionCache = { at: now, value };
+    return value;
   }
 
   loadConfig(): PiSwitchConfig {

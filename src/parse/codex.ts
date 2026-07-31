@@ -3,6 +3,7 @@ import {
   asRecord,
   asString,
   extractTomlValue,
+  normalizeBaseUrlForPi,
   stripTrailingSlash,
   uniqueModels,
   escapeRegExp,
@@ -35,10 +36,11 @@ export function parseCodex(config: unknown, apiFormat?: string): ParsedCore {
     typeHint: rawWire,
     appTypeDefault: "openai-responses",
   });
+  const normBaseUrl = normalizeBaseUrlForPi(resolved.ok ? resolved.api : null, baseUrl);
   if (!resolved.ok) {
     return {
       api: null,
-      baseUrl,
+      baseUrl: normBaseUrl,
       apiKey,
       authHeader: true,
       configModels: models,
@@ -48,7 +50,7 @@ export function parseCodex(config: unknown, apiFormat?: string): ParsedCore {
 
   return {
     api: resolved.api,
-    baseUrl,
+    baseUrl: normBaseUrl,
     apiKey,
     authHeader: true,
     configModels: models,

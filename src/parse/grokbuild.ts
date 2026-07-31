@@ -3,6 +3,7 @@ import {
   extractAllTomlValues,
   extractTomlLoose,
   extractTomlValue,
+  normalizeBaseUrlForPi,
   stripTrailingSlash,
   uniqueModels,
 } from "./common.ts";
@@ -48,10 +49,11 @@ export function parseGrokbuild(config: unknown, apiFormat?: string): ParsedCore 
     typeHint: backend,
     appTypeDefault: "openai-responses",
   });
+  const normBaseUrl = normalizeBaseUrlForPi(resolved.ok ? resolved.api : null, baseUrl);
   if (!resolved.ok) {
     return {
       api: null,
-      baseUrl,
+      baseUrl: normBaseUrl,
       apiKey,
       authHeader: true,
       configModels: models,
@@ -61,7 +63,7 @@ export function parseGrokbuild(config: unknown, apiFormat?: string): ParsedCore 
 
   return {
     api: resolved.api,
-    baseUrl,
+    baseUrl: normBaseUrl,
     apiKey,
     authHeader: true,
     configModels: models,

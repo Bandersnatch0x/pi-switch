@@ -1,4 +1,4 @@
-import { asRecord, asString, stripTrailingSlash, uniqueModels } from "./common.ts";
+import { asRecord, asString, normalizeBaseUrlForPi, stripTrailingSlash, uniqueModels } from "./common.ts";
 import { apiFromOpencodeNpm, resolveApi } from "./api-format.ts";
 import type { ParsedCore } from "./claude.ts";
 
@@ -40,7 +40,7 @@ export function parseOpencode(config: unknown, apiFormat?: string): ParsedCore {
       if (!resolved.ok) {
         return {
           api: null,
-          baseUrl,
+          baseUrl: normalizeBaseUrlForPi(null, baseUrl),
           apiKey,
           authHeader: true,
           configModels: models,
@@ -49,7 +49,7 @@ export function parseOpencode(config: unknown, apiFormat?: string): ParsedCore {
       }
       return {
         api: resolved.api,
-        baseUrl,
+        baseUrl: normalizeBaseUrlForPi(resolved.api, baseUrl),
         apiKey,
         authHeader: true,
         configModels: models,

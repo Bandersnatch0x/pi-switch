@@ -1,4 +1,4 @@
-import { asRecord, asString, stripTrailingSlash, uniqueModels } from "./common.ts";
+import { asRecord, asString, normalizeBaseUrlForPi, stripTrailingSlash, uniqueModels } from "./common.ts";
 import { resolveApi } from "./api-format.ts";
 import type { ParsedCore } from "./claude.ts";
 
@@ -23,10 +23,11 @@ export function parseHermes(config: unknown, apiFormat?: string): ParsedCore {
     typeHint: apiMode,
     appTypeDefault: "openai-completions",
   });
+  const normBaseUrl = normalizeBaseUrlForPi(resolved.ok ? resolved.api : null, baseUrl);
   if (!resolved.ok) {
     return {
       api: null,
-      baseUrl,
+      baseUrl: normBaseUrl,
       apiKey,
       authHeader: true,
       configModels: models,
@@ -36,7 +37,7 @@ export function parseHermes(config: unknown, apiFormat?: string): ParsedCore {
 
   return {
     api: resolved.api,
-    baseUrl,
+    baseUrl: normBaseUrl,
     apiKey,
     authHeader: true,
     configModels: models,
