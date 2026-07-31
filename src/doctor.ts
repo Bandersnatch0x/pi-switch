@@ -8,6 +8,7 @@ import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
 import type { IdentityMigrationSummary } from "./migration.ts";
+import { summarizeTiers } from "./tier.ts";
 import {
   countModelOverrides,
   resolveModelMetaLayers,
@@ -115,6 +116,30 @@ export function runDoctor(input: DoctorInput): DoctorReport {
           ? "stale：dbId 已不在 DB；ambiguous：同 id 跨 app type，未猜测；迁移前备份为 settings.json/pi-switch.json .bak-<ts>"
           : undefined,
     });
+  }
+
+  // 1.6 app-type support tiers (W2): direct / visible-only / routed summary
+  if (input.providers.length) {
+    for (const row of summarizeTiers(input.providers)) {
+      const reasons = Object.entries(row.reasonDistribution)
+        .map(([k, n]) => `${k}=${n}`)
+        .join(", ");
+      const nothingSwitchable = row.total > 0 && row.direct === 0;
+      checks.push({
+        id: `tier-${row.appType}`,
+        title: `app type ${row.appType}`,
+        status: nothingSwitchable ? "warn" : "pass",
+        detail:
+          `direct=${row.direct} visible=${row.visible} routed=${row.routed}` +
+          (reasons ? `（${reasons}）` : "") +
+          (row.routed
+            ? "；routed 后备仅应用级启用（客户端指向 CC Switch 代理时）"
+            : ""),
+        fix: nothingSwitchable
+          ? "该 app type 无静态凭据条目；managed-auth 条目可见不可切换（SPEC §11），或用 CC Switch 路由（应用级）"
+          : undefined,
+      });
+    }
   }
 
   // 2. DB file
