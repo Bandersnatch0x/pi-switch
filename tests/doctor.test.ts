@@ -353,4 +353,93 @@ describe("runDoctor", () => {
     });
     expect(report.checks.find((c) => c.id === "routing")).toBeUndefined();
   });
+
+  test("capabilities W4: clean resolution passes with per-field sources", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "m1",
+        resolved: {
+          contextWindow: { value: 200000, source: "protocol-default" },
+          maxTokens: { value: 64000, source: "protocol-default" },
+          reasoning: { value: true, source: "protocol-default" },
+          vision: { value: true, source: "protocol-default" },
+          conflicts: [],
+        },
+      },
+    });
+    const check = report.checks.find((c) => c.id === "capabilities");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("context=200000(protocol-default)");
+  });
+
+  test("capabilities W4: conflict warns with effective vs overridden", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "m1",
+        resolved: {
+          contextWindow: { value: 1000000, source: "models-dev", fetchedAt: "2026-04-24" },
+          maxTokens: { value: 384000, source: "models-dev", fetchedAt: "2026-04-24" },
+          reasoning: { value: true, source: "protocol-default" },
+          vision: { value: true, source: "protocol-default" },
+          conflicts: [
+            {
+              field: "contextWindow",
+              effective: "1000000",
+              overridden: "128000",
+              effectiveSource: "models-dev",
+              overriddenSource: "cc-meta",
+            },
+          ],
+        },
+      },
+    });
+    const check = report.checks.find((c) => c.id === "capabilities");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("vs 128000(cc-meta)");
+    expect(check?.fix).toContain("override");
+  });
+
+  test("capabilities W4: stale models.dev fact warns and keeps last-good", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "m1",
+        resolved: {
+          contextWindow: {
+            value: 1000000,
+            source: "models-dev",
+            fetchedAt: "2020-01-01",
+            stale: true,
+          },
+          maxTokens: { value: 384000, source: "models-dev", fetchedAt: "2020-01-01", stale: true },
+          reasoning: { value: true, source: "protocol-default" },
+          vision: { value: true, source: "protocol-default" },
+          conflicts: [],
+        },
+      },
+    });
+    const check = report.checks.find((c) => c.id === "capabilities");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("过期");
+  });
 });

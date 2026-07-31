@@ -66,6 +66,11 @@ export default async function (pi: ExtensionAPI) {
     resolvePackageVersion,
     snapshotPath,
     probeHttp,
+    fetchJson: async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch ${url}: HTTP ${res.status}`);
+      return res.json();
+    },
     release: osMod.release(),
     home: osMod.homedir(),
   });
