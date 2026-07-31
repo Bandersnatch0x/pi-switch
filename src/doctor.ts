@@ -50,6 +50,11 @@ export interface DoctorInput {
   piVersion?: string;
   /** Minimum supported Pi version (W6). Defaults to PI_MIN_VERSION. */
   piMinVersion?: string;
+  /** Fingerprint snapshot baselines (W5). Undefined when not packaged. */
+  fingerprintSnapshot?: {
+    snapshotVersion: number;
+    baselines: { codex?: string; claudeCode?: string; gemini?: string };
+  };
 }
 
 export interface DoctorReport {
@@ -183,26 +188,51 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     fix: input.headerRuleCount ? undefined : "检查包内 defaults/headers.json 是否随安装发布",
   });
 
-  // 6. fingerprint vars
+  // 6. fingerprint vars (W5: fallback + out-of-snapshot detection)
   if (input.varsSummary) {
     const v = input.varsSummary;
+    const snap = input.fingerprintSnapshot;
     const fallbacks = [
       v.codexVersionSource === "fallback" ? "codex" : null,
       v.claudeCodeVersionSource === "fallback" ? "claude" : null,
       v.geminiVersionSource === "fallback" ? "gemini" : null,
     ].filter(Boolean);
+    // Locally probed CLI versions that drift from the fixture-verified
+    // snapshot baseline are outside the fingerprint contract (W5).
+    // config-pinned versions are the documented resolution, so they do not warn.
+    const outOfSnapshot: string[] = [];
+    const baseline = (cli: "codex" | "claudeCode" | "gemini", ver: string) => {
+      const base = snap?.baselines[cli];
+      if (base && ver !== base) outOfSnapshot.push(`${cli}:${ver}(local)≠${base}`);
+    };
+    if (snap) {
+      if (v.codexVersionSource === "local") baseline("codex", v.codexVersion);
+      if (v.claudeCodeVersionSource === "local") baseline("claudeCode", v.claudeCodeVersion);
+      if (v.geminiVersionSource === "local") baseline("gemini", v.geminiVersion);
+    }
+    const status: DoctorStatus = fallbacks.length || outOfSnapshot.length ? "warn" : "pass";
+    const fixes: string[] = [];
+    if (fallbacks.length) {
+      fixes.push(
+        `未探测到本机 CLI（${fallbacks.join(", ")}），使用兜底版本；可安装 CLI 或在 pi-switch.json.vars 显式指定`,
+      );
+    }
+    if (outOfSnapshot.length) {
+      fixes.push(
+        `本机版本超出快照契约（${outOfSnapshot.join("; ")}）；升级 pi-switch 得新快照，或 pi-switch.json.vars 显式钉版本`,
+      );
+    }
     checks.push({
       id: "fingerprint",
       title: "客户端伪装指纹",
-      status: fallbacks.length ? "warn" : "pass",
+      status,
       detail:
         `codex=${v.codexVersion}(${v.codexVersionSource}) · ` +
         `claude=${v.claudeCodeVersion}(${v.claudeCodeVersionSource}) · ` +
         `gemini=${v.geminiVersion}(${v.geminiVersionSource}) · ` +
-        `originator=${v.codexOriginator} · beta=${v.anthropicBeta}`,
-      fix: fallbacks.length
-        ? `未探测到本机 CLI（${fallbacks.join(", ")}），使用兜底版本；可安装 CLI 或在 pi-switch.json.vars 显式指定`
-        : undefined,
+        `originator=${v.codexOriginator} · beta=${v.anthropicBeta}` +
+        (snap ? ` · snapshot=v${snap.snapshotVersion}` : ""),
+      fix: fixes.length ? fixes.join("；") : undefined,
     });
   }
 

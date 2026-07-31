@@ -17,16 +17,19 @@ import { installClaudeCodeCompat } from "./claude-code-compat.ts";
 import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod] = await Promise.all([
+  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod, urlMod] = await Promise.all([
     import("node:child_process"),
     import("node:crypto"),
     import("node:fs"),
     import("node:os"),
     import("node:module"),
     import("node:path"),
+    import("node:url"),
   ]);
 
   const require = moduleMod.createRequire(import.meta.url);
+  const extensionDir = pathMod.dirname(urlMod.fileURLToPath(import.meta.url));
+  const snapshotPath = pathMod.join(extensionDir, "..", "defaults", "fingerprint-snapshot.json");
   const resolvePackageVersion = (name: string): string | undefined => {
     try {
       const entry = require.resolve(name);
@@ -47,6 +50,7 @@ export default async function (pi: ExtensionAPI) {
     unlinkSync: fs.unlinkSync,
     randomUUID: cryptoMod.randomUUID,
     resolvePackageVersion,
+    snapshotPath,
     release: osMod.release(),
     home: osMod.homedir(),
   });

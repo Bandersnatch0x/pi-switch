@@ -195,4 +195,116 @@ describe("runDoctor", () => {
     expect(compareSemver("0.83.0", "0.83.1")).toBe(-1);
     expect(compareSemver("1.0.0", "0.99.99")).toBe(1);
   });
+
+  test("fingerprint W5: local probed version matching snapshot baseline passes", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      fingerprintSnapshot: {
+        snapshotVersion: 1,
+        baselines: { codex: "0.141.0", claudeCode: "2.1.178", gemini: "0.9.0" },
+      },
+      varsSummary: {
+        codexVersion: "0.141.0",
+        codexVersionSource: "local",
+        claudeCodeVersion: "2.1.178",
+        claudeCodeVersionSource: "local",
+        geminiVersion: "0.9.0",
+        geminiVersionSource: "local",
+        anthropicBeta: "b",
+        codexOriginator: "codex_cli_rs",
+      },
+    });
+    const check = report.checks.find((c) => c.id === "fingerprint");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("snapshot=v1");
+  });
+
+  test("fingerprint W5: local version drifting from snapshot baseline warns", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      fingerprintSnapshot: {
+        snapshotVersion: 1,
+        baselines: { codex: "0.141.0", claudeCode: "2.1.178", gemini: "0.9.0" },
+      },
+      varsSummary: {
+        codexVersion: "0.144.6",
+        codexVersionSource: "local",
+        claudeCodeVersion: "2.1.178",
+        claudeCodeVersionSource: "local",
+        geminiVersion: "0.9.0",
+        geminiVersionSource: "local",
+        anthropicBeta: "b",
+        codexOriginator: "codex_cli_rs",
+      },
+    });
+    const check = report.checks.find((c) => c.id === "fingerprint");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("codex=0.144.6(local)");
+    expect(check?.fix).toContain("快照");
+  });
+
+  test("fingerprint W5: config-pinned version never warns (documented resolution)", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      fingerprintSnapshot: {
+        snapshotVersion: 1,
+        baselines: { codex: "0.141.0", claudeCode: "2.1.178", gemini: "0.9.0" },
+      },
+      varsSummary: {
+        codexVersion: "9.9.9",
+        codexVersionSource: "config",
+        claudeCodeVersion: "2.1.178",
+        claudeCodeVersionSource: "local",
+        geminiVersion: "0.9.0",
+        geminiVersionSource: "local",
+        anthropicBeta: "b",
+        codexOriginator: "codex_cli_rs",
+      },
+    });
+    const check = report.checks.find((c) => c.id === "fingerprint");
+    expect(check?.status).toBe("pass");
+    expect(check?.fix).toBeUndefined();
+  });
+
+  test("fingerprint W5: no snapshot packaged -> no out-of-snapshot warn", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      varsSummary: {
+        codexVersion: "0.144.6",
+        codexVersionSource: "local",
+        claudeCodeVersion: "2.1.178",
+        claudeCodeVersionSource: "local",
+        geminiVersion: "0.9.0",
+        geminiVersionSource: "local",
+        anthropicBeta: "b",
+        codexOriginator: "codex_cli_rs",
+      },
+    });
+    const check = report.checks.find((c) => c.id === "fingerprint");
+    expect(check?.status).toBe("pass");
+  });
 });

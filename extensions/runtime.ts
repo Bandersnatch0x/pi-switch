@@ -24,9 +24,17 @@ export type NodeIo = {
   randomUUID: typeof import("node:crypto").randomUUID;
   /** Resolve a package's version from its installed package.json (W6 SDK check). */
   resolvePackageVersion: (name: string) => string | undefined;
+  /** Absolute path to defaults/fingerprint-snapshot.json (W5 snapshot baselines). */
+  snapshotPath: string;
   release: string;
   home: string;
 };
+
+/** W5 fingerprint snapshot facts (subset of defaults/fingerprint-snapshot.json). */
+export interface FingerprintSnapshot {
+  snapshotVersion: number;
+  baselines: { codex?: string; claudeCode?: string; gemini?: string };
+}
 
 export type VarsSummary = {
   codexVersion: string;
@@ -56,6 +64,8 @@ export class Runtime {
   private readonly codexWindowId: string;
   private cachedPiVersion: string | undefined;
   private piVersionProbed = false;
+  private cachedSnapshot: FingerprintSnapshot | undefined;
+  private snapshotProbed = false;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -172,6 +182,43 @@ export class Runtime {
       "@earendil-works/pi-coding-agent",
     );
     return this.cachedPiVersion;
+  }
+
+  /**
+   * Fingerprint snapshot baselines (W5). Probed once; undefined when the
+   * packaged snapshot is missing or malformed.
+   */
+  fingerprintSnapshot(): FingerprintSnapshot | undefined {
+    if (this.snapshotProbed) return this.cachedSnapshot;
+    this.snapshotProbed = true;
+    try {
+      const raw = JSON.parse(this.io.readFileSync(this.io.snapshotPath, "utf8")) as {
+        snapshotVersion?: unknown;
+        upstream?: {
+          codex?: { version?: unknown };
+          claudeCode?: { version?: unknown };
+          gemini?: { version?: unknown };
+        };
+      };
+      const v = raw.snapshotVersion;
+      const up = raw.upstream;
+      if (typeof v !== "number" || !up) {
+        this.cachedSnapshot = undefined;
+        return undefined;
+      }
+      this.cachedSnapshot = {
+        snapshotVersion: v,
+        baselines: {
+          codex: typeof up.codex?.version === "string" ? up.codex.version : undefined,
+          claudeCode:
+            typeof up.claudeCode?.version === "string" ? up.claudeCode.version : undefined,
+          gemini: typeof up.gemini?.version === "string" ? up.gemini.version : undefined,
+        },
+      };
+    } catch {
+      this.cachedSnapshot = undefined;
+    }
+    return this.cachedSnapshot;
   }
 
   get varsSummary(): VarsSummary | undefined {
