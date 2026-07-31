@@ -252,7 +252,11 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
 
   // W4: refresh the selected model's capability fact when missing/stale, then resolve.
   let capabilities: { modelId: string; resolved: ResolvedCapabilities } | undefined;
-  const selMatch = sel ? providers.find((p) => p.id === sel.dbId) : undefined;
+  const selMatch = sel
+    ? providers.find(
+        (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
+      )
+    : undefined;
   if (sel && selMatch && isSwitchable(selMatch)) {
     const cached = rt.capabilitiesCache().capabilities[sel.model];
     if (!cached || rt.isCapabilitiesStale(cached)) {
@@ -280,6 +284,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     fingerprintSnapshot: rt.fingerprintSnapshot(),
     routingProbe,
     capabilities,
+    migrationSummary: rt.migrationSummary,
   });
 
   const text = formatDoctorReport(report);

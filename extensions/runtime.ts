@@ -22,7 +22,8 @@ import {
   type ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
-import { piSwitchCachePath } from "../src/settings.ts";
+import { piSettingsPath, piSwitchConfigPath, piSwitchCachePath } from "../src/settings.ts";
+import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -90,6 +91,7 @@ export class Runtime {
   private snapshotProbed = false;
   private cachedCapabilities: CapabilitiesCache | undefined;
   private capabilitiesInflight: Promise<void> | undefined;
+  private identityMigration: IdentityMigrationSummary | undefined;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -170,8 +172,7 @@ export class Runtime {
   }
 
   refreshSnapshot(): { providers: CcProvider[]; error?: string } {
-    const result = readProviders({
-      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
+    const result = readProviders({      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
       existsSync: this.io.existsSync,
       sqlite3Path: this.sqlite3Path,
       dbPath: defaultDbPath(this.home),
@@ -187,6 +188,27 @@ export class Runtime {
       };
     }
     return { providers: [], error: result.error ?? "failed to read database" };
+  }
+
+  /**
+   * One-shot identity migration (issue #16) + backup. Runs once; the
+   * piSwitchMigration marker makes later calls a no-op. Never migrates
+   * without a usable provider snapshot. Result surfaces in doctor.
+   */
+  migrateIdentity(providers: CcProvider[]): IdentityMigrationSummary | undefined {
+    if (this.identityMigration) return this.identityMigration;
+    this.identityMigration = migrateIdentityState({
+      fs: this.fsLike(),
+      settingsPath: piSettingsPath(this.io.home),
+      configPath: piSwitchConfigPath(this.io.home),
+      providers,
+      pid: process.pid,
+    });
+    return this.identityMigration;
+  }
+
+  get migrationSummary(): IdentityMigrationSummary | undefined {
+    return this.identityMigration;
   }
 
   /** Drop cached fingerprint probe (used by doctor). */

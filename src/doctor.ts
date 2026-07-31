@@ -7,6 +7,7 @@ import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEnt
 import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
+import type { IdentityMigrationSummary } from "./migration.ts";
 import {
   countModelOverrides,
   resolveModelMetaLayers,
@@ -60,6 +61,8 @@ export interface DoctorInput {
   routingProbe?: { url: string; reachable: boolean };
   /** Resolved capability facts for the current model (W4). */
   capabilities?: { modelId: string; resolved: ResolvedCapabilities };
+  /** Identity migration outcome (issue #16); present only on this run. */
+  migrationSummary?: IdentityMigrationSummary;
 }
 
 export interface DoctorReport {
@@ -94,6 +97,23 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       status: "fail",
       detail: `未找到 sqlite3。tried: ${(input.sqlite3Tried ?? []).join(", ") || "(none)"}`,
       fix: "安装 sqlite3 并加入 PATH，或设置 SQLITE3_PATH / pi-switch.json.sqlitePath",
+    });
+  }
+
+  // 1.5 identity migration outcome (issue #16)
+  if (input.migrationSummary) {
+    const m = input.migrationSummary;
+    checks.push({
+      id: "identity-migration",
+      title: "身份迁移",
+      status: m.ambiguous || m.stale ? "warn" : "pass",
+      detail: m.skipped
+        ? `已跳过（${m.skipped}）`
+        : `migrated=${m.migrated} stale=${m.stale} ambiguous=${m.ambiguous}`,
+      fix:
+        m.ambiguous || m.stale
+          ? "stale：dbId 已不在 DB；ambiguous：同 id 跨 app type，未猜测；迁移前备份为 settings.json/pi-switch.json .bak-<ts>"
+          : undefined,
     });
   }
 
@@ -157,13 +177,15 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       fix: "运行 /ps-config 选择一次 Provider/Model",
     });
   } else {
-    const match = input.providers.find((p) => p.id === sel.dbId);
+    const match = input.providers.find(
+      (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
+    );
     if (!match) {
       checks.push({
         id: "selection",
         title: "已保存选择",
         status: "fail",
-        detail: `dbId=${sel.dbId} model=${sel.model} 在当前 DB 中不存在`,
+        detail: `dbId=${sel.dbId}${sel.appType ? ` appType=${sel.appType}` : ""} model=${sel.model} 在当前 DB 中不存在`,
         fix: "运行 /ps-config 重新选择；旧选择会在成功后覆盖",
       });
     } else if (!isSwitchable(match)) {
@@ -243,7 +265,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   // 7. effective modelMeta for current selection (layer-aware)
   if (sel) {
-    const match = input.providers.find((p) => p.id === sel.dbId);
+    const match = input.providers.find(
+      (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
+    );
     if (match) {
       const layers = resolveModelMetaLayers(input.config, match, sel.model);
       const sources: string[] = [];

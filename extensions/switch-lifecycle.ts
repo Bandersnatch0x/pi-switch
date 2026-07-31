@@ -104,10 +104,18 @@ export function createSwitchLifecycle(
     if (installed) return;
     installed = true;
     const { providers } = rt.refreshSnapshot();
+    // One-shot identity migration to { appType, id } (issue #16); no-op once
+    // the marker is present. Runs before selection resolution so migrated
+    // entries carry appType for pairing.
+    rt.migrateIdentity(providers);
     const selection = rt.state.readOrMigrateSelection(providers);
 
     if (selection) {
-      const provider = providers.find((item) => item.id === selection.dbId);
+      const provider = providers.find(
+        (item) =>
+          item.id === selection.dbId &&
+          (!selection.appType || item.appType === selection.appType),
+      );
       if (provider && isSwitchable(provider)) {
         const modelId =
           resolveListedModel(provider.configModels, selection.model) ?? selection.model;
@@ -141,7 +149,9 @@ export function createSwitchLifecycle(
       const current = rt.state.readSelection();
       if (!current) return;
       const provider = rt.lastGoodProviders.find(
-        (item) => item.id === current.dbId,
+        (item) =>
+          item.id === current.dbId &&
+          (!current.appType || item.appType === current.appType),
       );
       if (!provider || !isSwitchable(provider)) {
         warnMissingSelection(ctx as PiSwitchCtx);

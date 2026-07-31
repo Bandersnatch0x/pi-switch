@@ -129,6 +129,8 @@ function setup(options?: {
     lastGoodProviders: providers,
     fsLike: () => fs,
     refreshSnapshot: () => ({ providers }),
+    migrateIdentity: () => undefined,
+    migrationSummary: undefined,
     reloadConfig: () => config,
     headerOverrideOpts: () => ({}),
     headerVars: () => ({}),
