@@ -13,6 +13,7 @@ import {
   type ClaudeCodeCompatConfig,
 } from "../src/compat/claude-code.ts";
 import type { CcProvider } from "../src/types.ts";
+import { appendCappedJsonLog, redactUrlCredentials } from "./compat-log.ts";
 import type { Runtime } from "./runtime.ts";
 
 export function installClaudeCodeCompat(pi: ExtensionAPI, rt: Runtime): void {
@@ -42,7 +43,7 @@ export function installClaudeCodeCompat(pi: ExtensionAPI, rt: Runtime): void {
       apply: true,
       deviceSource: device.source,
       provider: target.provider?.displayName ?? target.provider?.piName ?? null,
-      baseUrl: target.provider?.baseUrl ?? null,
+      baseUrl: redactUrlCredentials(target.provider?.baseUrl ?? null),
       ...summary,
     });
     // Dump last transformed body for offline replay/debug.
@@ -81,7 +82,7 @@ function resolveCompatTarget(rt: Runtime): {
     }
   }
 
-  const selection = rt.state.readSelection();
+  const selection = rt.readSelectionCached();
   let provider = selection
     ? rt.lastGoodProviders.find((p) => p.id === selection.dbId)
     : undefined;
@@ -200,19 +201,6 @@ function logCompat(
   rt: Runtime,
   entry: Record<string, unknown>,
 ): void {
-  try {
-    const path = `${rt.home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch-compat.log`;
-    const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + "\n";
-    const fs = rt.fsLike();
-    let prev = "";
-    try {
-      if (fs.existsSync(path)) prev = fs.readFileSync(path, "utf8");
-    } catch {
-      prev = "";
-    }
-    const lines = (prev + line).split("\n").filter(Boolean).slice(-50);
-    fs.writeFileSync(path, lines.join("\n") + "\n", "utf8");
-  } catch {
-    /* ignore logging failures */
-  }
+  const path = `${rt.home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch-compat.log`;
+  appendCappedJsonLog(rt.fsLike(), path, entry);
 }

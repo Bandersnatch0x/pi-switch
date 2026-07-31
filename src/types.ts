@@ -1,4 +1,4 @@
-﻿/** @see src/compat/gemini-tool-compat.ts — single source of truth */
+/** @see src/compat/gemini-tool-compat.ts — single source of truth */
 import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 export type { GeminiToolCompatConfig };
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * pi-switch extension entry.
  *
  * Pure logic lives under ../src; runtime IO and command wiring live in

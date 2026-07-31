@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Gemini tool-calling compatibility for third-party proxies that don't
  * enforce parameter schemas without explicit toolConfig.
  *
@@ -9,42 +9,48 @@
  * to enforce schema validation — without it, the model returns `read({})`.
  *
  * Two-layer defence:
- * 1. Request layer: inject `toolConfig` + convert `parametersJsonSchema` → `parameters`
+ * 1. Request layer: inject `toolConfig` + rename `parametersJsonSchema` → `parameters`
  * 2. Tool layer: block empty-args tool calls so the model regenerates
  */
+
+import { hostMatches } from "./claude-code.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
 /**
  * Gemini tool-calling compat for third-party proxies that need explicit
- * `toolConfig` to enforce parameter schemas. Default mode is `auto`
- * (all Gemini API providers when `hosts` is empty).
+ * `toolConfig` to enforce parameter schemas.
  *
- * Mode semantics (aligned with Claude Code compat):
- * - `auto` — apply to Gemini API; if `hosts` is non-empty, require a host match
- * - `always` — apply to every Gemini API provider (ignore `hosts`)
+ * Mode semantics (same philosophy as Claude Code compat — `auto` targets
+ * only the known-problem scope):
+ * - `auto` (default) — non-official Gemini endpoints (proxies). Official
+ *   `*.googleapis.com` and the default endpoint are left untouched.
+ *   If `hosts` is non-empty, only those hosts (exact or parent domain).
+ * - `always` — every Gemini API provider (ignore `hosts`)
  * - `never` — off (unless per-provider force)
  */
 export interface GeminiToolCompatConfig {
   /** auto (default) | always | never */
   mode?: "auto" | "always" | "never";
-  /** Restrict *auto* mode to these host substrings (empty = all Gemini providers). */
+  /** Restrict *auto* mode to these hostnames (exact or parent domain). */
   hosts?: string[];
-  /** Force a specific toolConfig mode. Default: AUTO for non-Gemini-3, VALIDATED for Gemini 3+. */
+  /**
+   * toolConfig mode to inject. Default AUTO — VALIDATED proved unreliable
+   * through proxies (docs/gemini-tool-call-compat-research.md repro #4).
+   */
   forceToolConfigMode?: "AUTO" | "VALIDATED";
   /** Block tool calls with empty args so the model regenerates (default true). */
   blockEmptyToolCalls?: boolean;
-  /** Convert parametersJsonSchema → parameters for proxy compatibility (default true). */
+  /** Rename parametersJsonSchema → parameters for proxy compatibility (default true). */
   convertSchema?: boolean;
 }
 
 export interface GeminiCompatOptions {
   forceToolConfigMode?: "AUTO" | "VALIDATED";
   convertSchema?: boolean;
-  modelId?: string;
 }
 
-// ─── JSON Schema → OpenAPI 3.0 sanitization ──────────────────────────────
+// ─── JSON Schema meta-key stripping ──────────────────────────────────────
 
 /** JSON Schema meta-declarations not supported by OpenAPI 3.0. */
 const JSON_SCHEMA_META_KEYS = new Set([
@@ -59,8 +65,11 @@ const JSON_SCHEMA_META_KEYS = new Set([
 ]);
 
 /**
- * Strip JSON Schema meta-declarations from a schema object.
- * Mirrors pi-ai's `sanitizeForOpenApi` in google-shared.js.
+ * Strip JSON Schema meta-declarations from a schema object. This is a
+ * meta-key strip only — `$ref` is NOT resolved, so a `$ref` into a stripped
+ * `$defs` would dangle. Mirrors pi-ai's `sanitizeForOpenApi` in
+ * google-shared.js byte-for-byte; pi's built-in tool schemas are flat, so
+ * the dangling-`$ref` case never triggers for them.
  */
 export function sanitizeForOpenApi(schema: unknown): unknown {
   if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
@@ -72,20 +81,6 @@ export function sanitizeForOpenApi(schema: unknown): unknown {
     result[key] = sanitizeForOpenApi(value);
   }
   return result;
-}
-
-// ─── Gemini version detection ────────────────────────────────────────────
-
-/** Extract the Gemini major version from a model ID (e.g. "gemini-3.5-flash" → 3). */
-export function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.match(/gemini-(\d+)/i);
-  return match ? parseInt(match[1], 10) : undefined;
-}
-
-/** Check if a model supports VALIDATED function calling mode (Gemini 3+). */
-export function supportsValidatedMode(modelId: string): boolean {
-  const v = getGeminiMajorVersion(modelId);
-  return v !== undefined && v >= 3;
 }
 
 // ─── Payload detection & transformation ──────────────────────────────────
@@ -101,9 +96,12 @@ export function isGeminiPayload(payload: unknown): boolean {
  * Transform a Gemini payload to fix tool-calling compatibility:
  *
  * 1. Inject `toolConfig.functionCallingConfig.mode` when tools exist but
- *    `toolConfig` is missing (root cause fix — proxies need this to enforce schemas).
- * 2. Convert `parametersJsonSchema` → `parameters` (OpenAPI 3.0.3 format)
- *    so proxies that don't understand the JSON Schema extension field can
+ *    `toolConfig` is missing (root cause fix — proxies need this to enforce
+ *    schemas). Injects AUTO unless `forceToolConfigMode: "VALIDATED"` is
+ *    configured: VALIDATED proved unreliable through proxies
+ *    (docs/gemini-tool-call-compat-research.md repro #4).
+ * 2. Rename `parametersJsonSchema` → `parameters`, stripping JSON Schema
+ *    meta keys, so proxies that don't understand the extension field can
  *    still read the required-parameter list.
  *
  * Returns the original payload unchanged if it's not a Gemini request or
@@ -127,20 +125,16 @@ export function applyGeminiToolCompatToPayload(
   const config: Record<string, unknown> = { ...config0, tools };
   const p: Record<string, unknown> = { ...p0, config };
 
-
   // 1. Inject toolConfig if missing
   if (!config.toolConfig) {
-    const modelId =
-      opts.modelId ?? (typeof p.model === "string" ? p.model : "");
-    const useValidated =
-      opts.forceToolConfigMode === "VALIDATED" ||
-      (opts.forceToolConfigMode === undefined && supportsValidatedMode(modelId));
     config.toolConfig = {
-      functionCallingConfig: { mode: useValidated ? "VALIDATED" : "AUTO" },
+      functionCallingConfig: {
+        mode: opts.forceToolConfigMode === "VALIDATED" ? "VALIDATED" : "AUTO",
+      },
     };
   }
 
-  // 2. Convert parametersJsonSchema → parameters (OpenAPI 3.0.3)
+  // 2. Rename parametersJsonSchema → parameters (meta keys stripped)
   if (opts.convertSchema !== false) {
     for (const toolSet of tools) {
       if (!toolSet || typeof toolSet !== "object") continue;
@@ -164,8 +158,14 @@ export function applyGeminiToolCompatToPayload(
 
 // ─── Empty tool call detection ───────────────────────────────────────────
 
-/** Built-in tool names that always require at least one parameter. */
-const TOOLS_WITH_REQUIRED_PARAMS = new Set([
+/**
+ * Built-in tool names guarded against all-empty argument objects.
+ * Scope: this guard only catches fully-empty calls (`read({})`,
+ * `read({file_path:""})`). Partially-missing required params (e.g.
+ * `read({limit:100})` without `file_path`) are left to pi-ai's own
+ * `validateToolArguments`, which errors back to the model.
+ */
+const EMPTY_ARGS_GUARDED_TOOLS = new Set([
   "read",
   "edit",
   "write",
@@ -182,7 +182,7 @@ export function hasEmptyToolCallArgs(
   input: unknown,
   toolName: string,
 ): boolean {
-  if (!TOOLS_WITH_REQUIRED_PARAMS.has(toolName)) return false;
+  if (!EMPTY_ARGS_GUARDED_TOOLS.has(toolName)) return false;
   if (input === null || input === undefined) return true;
   if (typeof input !== "object") return false;
   const obj = input as Record<string, unknown>;
@@ -204,9 +204,29 @@ export function emptyToolCallReason(toolName: string): string {
 // ─── Apply decision ──────────────────────────────────────────────────────
 
 /**
+ * Official Google endpoints don't need the compat fix — missing toolConfig
+ * already means AUTO there. Empty baseUrl means pi falls back to the
+ * official default endpoint. Unparseable URLs are treated as proxies
+ * (fail-open is harmless: injecting AUTO matches official semantics).
+ */
+export function isOfficialGoogleBaseUrl(
+  baseUrl: string | null | undefined,
+): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) return true;
+  try {
+    const hostname = new URL(trimmed).hostname.toLowerCase();
+    return hostname === "googleapis.com" || hostname.endsWith(".googleapis.com");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Decide whether to apply Gemini tool compat based on config and the
- * current provider. Mode semantics mirror `shouldApplyClaudeCodeCompat`:
- * `always` skips the host filter; `auto` honors `hosts`.
+ * current provider. Same philosophy as `shouldApplyClaudeCodeCompat`:
+ * `auto` targets only the known-problem scope (here: non-official
+ * endpoints), `always` skips the host filter, per-provider force wins.
  */
 export function shouldApplyGeminiToolCompat(opts: {
   mode?: "auto" | "always" | "never";
@@ -231,13 +251,11 @@ export function shouldApplyGeminiToolCompat(opts: {
   // always: every Gemini provider, ignore hosts (same as Claude Code compat)
   if (mode === "always") return true;
 
-  // auto: optional host allowlist (empty = all Gemini providers)
+  // auto: explicit host allowlist wins; otherwise only non-official
+  // endpoints — the official API treats missing toolConfig as AUTO already.
   const hosts = opts.hosts ?? [];
-  if (hosts.length === 0) return true;
-  if (!opts.baseUrl) return false;
-  return hosts.some((h) =>
-    opts.baseUrl!.toLowerCase().includes(h.toLowerCase()),
-  );
+  if (hosts.length > 0) return hostMatches(opts.baseUrl, hosts);
+  return !isOfficialGoogleBaseUrl(opts.baseUrl);
 }
 
 /** Parse `geminiToolCompat` from pi-switch.json (unknown → undefined). */

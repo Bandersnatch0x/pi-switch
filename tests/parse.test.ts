@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { parseProviderRow, makePiName, trimModelId, isSwitchable, uniquifyPiNames, MANAGED_AUTH_PARSE_ERROR } from "../src/parse/index.ts";
 import { parseGemini } from "../src/parse/gemini.ts";
+import { normalizeOpenAiBaseUrlForPi } from "../src/parse/common.ts";
 import type { ProviderRow } from "../src/types.ts";
 
 function row(partial: Partial<ProviderRow> & Pick<ProviderRow, "id" | "app_type" | "name" | "settings_config">): ProviderRow {
@@ -534,5 +535,38 @@ api_key = "k1"
     expect(isSwitchable(p)).toBe(true);
     // grokbuild defaults to openai-responses → host-only baseUrl gets /v1 (SPEC §5.11).
     expect(p.baseUrl).toBe("https://a.example.com/v1");
+  });
+});
+
+describe("normalizeOpenAiBaseUrlForPi", () => {
+  test("appends /v1 to host-only URLs", () => {
+    expect(normalizeOpenAiBaseUrlForPi("https://glm.example.cyou")).toBe("https://glm.example.cyou/v1");
+    expect(normalizeOpenAiBaseUrlForPi("https://glm.example.cyou/")).toBe("https://glm.example.cyou/v1");
+  });
+
+  test("preserves explicit version and custom prefixes", () => {
+    expect(normalizeOpenAiBaseUrlForPi("https://api.example.com/v1")).toBe("https://api.example.com/v1");
+    expect(normalizeOpenAiBaseUrlForPi("https://api.example.com/v2")).toBe("https://api.example.com/v2");
+    expect(normalizeOpenAiBaseUrlForPi("https://api.example.com/openai/v1")).toBe("https://api.example.com/openai/v1");
+    expect(normalizeOpenAiBaseUrlForPi("https://api.example.com/custom-prefix")).toBe("https://api.example.com/custom-prefix");
+  });
+
+  test("empty string stays empty", () => {
+    expect(normalizeOpenAiBaseUrlForPi("")).toBe("");
+    expect(normalizeOpenAiBaseUrlForPi("   ")).toBe("");
+  });
+
+  test("invalid URL preserved as-is (no prefix guessing)", () => {
+    expect(normalizeOpenAiBaseUrlForPi("not a url")).toBe("not a url");
+    expect(normalizeOpenAiBaseUrlForPi("example.com/v1")).toBe("example.com/v1");
+  });
+
+  test("host-only with port gets /v1, port preserved", () => {
+    expect(normalizeOpenAiBaseUrlForPi("https://relay.local:8080")).toBe("https://relay.local:8080/v1");
+    expect(normalizeOpenAiBaseUrlForPi("http://127.0.0.1:3000/")).toBe("http://127.0.0.1:3000/v1");
+  });
+
+  test("query on host-only URL survives the append", () => {
+    expect(normalizeOpenAiBaseUrlForPi("https://relay.example.com?team=a")).toBe("https://relay.example.com/v1?team=a");
   });
 });

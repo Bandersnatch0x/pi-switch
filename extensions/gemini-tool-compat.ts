@@ -1,10 +1,10 @@
-﻿/**
+/**
  * Install Pi hooks that fix Gemini tool-calling compatibility for
  * third-party proxies that don't enforce parameter schemas without
  * explicit `toolConfig`.
  *
  * Two hooks:
- * 1. `before_provider_request`: inject `toolConfig` + convert `parametersJsonSchema` -> `parameters`
+ * 1. `before_provider_request`: inject `toolConfig` + rename `parametersJsonSchema` -> `parameters`
  * 2. `tool_call`: block empty-args tool calls so the model regenerates
  *
  * Mirrors the structure of `claude-code-compat.ts`.
@@ -19,6 +19,7 @@ import {
   type GeminiToolCompatConfig,
 } from "../src/compat/gemini-tool-compat.ts";
 import type { CcProvider } from "../src/types.ts";
+import { appendCappedJsonLog, redactUrlCredentials } from "./compat-log.ts";
 import type { Runtime } from "./runtime.ts";
 
 export function installGeminiToolCompat(pi: ExtensionAPI, rt: Runtime): void {
@@ -30,7 +31,6 @@ export function installGeminiToolCompat(pi: ExtensionAPI, rt: Runtime): void {
     const next = applyGeminiToolCompatToPayload(event.payload, {
       forceToolConfigMode: config.forceToolConfigMode,
       convertSchema: config.convertSchema,
-      modelId: target.modelId,
     });
 
     const modified = next !== event.payload;
@@ -39,7 +39,7 @@ export function installGeminiToolCompat(pi: ExtensionAPI, rt: Runtime): void {
       logGeminiCompat(rt, {
         phase: "request",
         provider: target.provider?.displayName ?? target.provider?.piName ?? null,
-        baseUrl: target.provider?.baseUrl ?? null,
+        baseUrl: redactUrlCredentials(target.provider?.baseUrl ?? null),
         modelId: target.modelId ?? null,
         ...summary,
       });
@@ -96,7 +96,7 @@ function resolveCompatTarget(rt: Runtime): {
     }
   }
 
-  const selection = rt.state.readSelection();
+  const selection = rt.readSelectionCached();
   let provider = selection
     ? rt.lastGoodProviders.find((p) => p.id === selection.dbId)
     : undefined;
@@ -144,7 +144,7 @@ function summarizePayload(payload: unknown): {
   const p = payload as Record<string, unknown>;
   const config = p.config as Record<string, unknown> | undefined;
   const tools = Array.isArray(config?.tools) ? config!.tools : [];
-  let toolNames: string[] = [];
+  const toolNames: string[] = [];
   for (const ts of tools) {
     if (ts && typeof ts === "object") {
       const fd = (ts as Record<string, unknown>).functionDeclarations;
@@ -175,19 +175,6 @@ function summarizePayload(payload: unknown): {
 }
 
 function logGeminiCompat(rt: Runtime, entry: Record<string, unknown>): void {
-  try {
-    const path = `${rt.home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch-gemini-compat.log`;
-    const line = JSON.stringify({ t: new Date().toISOString(), ...entry }) + "\n";
-    const fs = rt.fsLike();
-    let prev = "";
-    try {
-      if (fs.existsSync(path)) prev = fs.readFileSync(path, "utf8");
-    } catch {
-      prev = "";
-    }
-    const lines = (prev + line).split("\n").filter(Boolean).slice(-50);
-    fs.writeFileSync(path, lines.join("\n") + "\n", "utf8");
-  } catch {
-    /* ignore logging failures */
-  }
+  const path = `${rt.home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch-gemini-compat.log`;
+  appendCappedJsonLog(rt.fsLike(), path, entry);
 }

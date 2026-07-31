@@ -1,4 +1,4 @@
-﻿import {
+import {
   describe,
   expect,
   test,
@@ -6,13 +6,12 @@
 import {
   applyGeminiToolCompatToPayload,
   emptyToolCallReason,
-  getGeminiMajorVersion,
   hasEmptyToolCallArgs,
   isGeminiPayload,
+  isOfficialGoogleBaseUrl,
   parseGeminiToolCompatConfig,
   sanitizeForOpenApi,
   shouldApplyGeminiToolCompat,
-  supportsValidatedMode,
 } from "../src/compat/gemini-tool-compat.ts";
 
 // ─── isGeminiPayload ────────────────────────────────────────────────────
@@ -74,22 +73,6 @@ describe("sanitizeForOpenApi", () => {
   });
 });
 
-// ─── Gemini version detection ───────────────────────────────────────────
-
-describe("Gemini version detection", () => {
-  test("getGeminiMajorVersion", () => {
-    expect(getGeminiMajorVersion("gemini-2.0-flash")).toBe(2);
-    expect(getGeminiMajorVersion("gemini-3.5-flash")).toBe(3);
-    expect(getGeminiMajorVersion("gemini-1.5-pro")).toBe(1);
-    expect(getGeminiMajorVersion("gpt-4")).toBeUndefined();
-  });
-  test("supportsValidatedMode", () => {
-    expect(supportsValidatedMode("gemini-3.5-flash")).toBe(true);
-    expect(supportsValidatedMode("gemini-2.0-flash")).toBe(false);
-    expect(supportsValidatedMode("gpt-4")).toBe(false);
-  });
-});
-
 // ─── applyGeminiToolCompatToPayload ─────────────────────────────────────
 
 describe("applyGeminiToolCompatToPayload", () => {
@@ -119,31 +102,27 @@ describe("applyGeminiToolCompatToPayload", () => {
     },
   };
 
-  test("injects toolConfig when missing", () => {
-    const result = applyGeminiToolCompatToPayload(geminiPayload) as Record<string, unknown>;
-    const config = result.config as Record<string, unknown>;
+  function injectedMode(result: unknown): unknown {
+    const config = (result as Record<string, unknown>).config as Record<string, unknown>;
     const toolConfig = config.toolConfig as Record<string, unknown>;
-    expect(toolConfig).toBeDefined();
     const fcConfig = toolConfig.functionCallingConfig as Record<string, unknown>;
-    expect(fcConfig.mode).toBe("AUTO"); // gemini-2.0 → AUTO
+    return fcConfig.mode;
+  }
+
+  test("injects AUTO toolConfig when missing", () => {
+    expect(injectedMode(applyGeminiToolCompatToPayload(geminiPayload))).toBe("AUTO");
   });
 
-  test("uses VALIDATED for Gemini 3+ when no explicit mode", () => {
+  test("defaults to AUTO for Gemini 3+ too (VALIDATED unreliable through proxies)", () => {
     const payload = { ...geminiPayload, model: "gemini-3.5-flash" };
-    const result = applyGeminiToolCompatToPayload(payload) as Record<string, unknown>;
-    const config = result.config as Record<string, unknown>;
-    const toolConfig = config.toolConfig as Record<string, unknown>;
-    const fcConfig = toolConfig.functionCallingConfig as Record<string, unknown>;
-    expect(fcConfig.mode).toBe("VALIDATED");
+    expect(injectedMode(applyGeminiToolCompatToPayload(payload))).toBe("AUTO");
   });
 
-  test("respects forceToolConfigMode over version detection", () => {
-    const payload = { ...geminiPayload, model: "gemini-3.5-flash" };
-    const result = applyGeminiToolCompatToPayload(payload, { forceToolConfigMode: "AUTO" }) as Record<string, unknown>;
-    const config = result.config as Record<string, unknown>;
-    const toolConfig = config.toolConfig as Record<string, unknown>;
-    const fcConfig = toolConfig.functionCallingConfig as Record<string, unknown>;
-    expect(fcConfig.mode).toBe("AUTO");
+  test("forceToolConfigMode VALIDATED is honored", () => {
+    const result = applyGeminiToolCompatToPayload(geminiPayload, {
+      forceToolConfigMode: "VALIDATED",
+    });
+    expect(injectedMode(result)).toBe("VALIDATED");
   });
 
   test("converts parametersJsonSchema to parameters", () => {
@@ -205,11 +184,31 @@ describe("applyGeminiToolCompatToPayload", () => {
         toolConfig: { functionCallingConfig: { mode: "NONE" } },
       },
     };
+    expect(injectedMode(applyGeminiToolCompatToPayload(payload))).toBe("NONE"); // not overwritten
+  });
+
+  test("tolerates malformed tools entries without throwing", () => {
+    const payload = {
+      model: "gemini-2.0-flash",
+      contents: [],
+      config: {
+        tools: [
+          null,
+          "not-an-object",
+          {},
+          { functionDeclarations: "not-an-array" },
+          { functionDeclarations: [null, 42, { name: "ok", parametersJsonSchema: { type: "object" } }] },
+        ],
+      },
+    };
     const result = applyGeminiToolCompatToPayload(payload) as Record<string, unknown>;
     const config = result.config as Record<string, unknown>;
-    const toolConfig = config.toolConfig as Record<string, unknown>;
-    const fcConfig = toolConfig.functionCallingConfig as Record<string, unknown>;
-    expect(fcConfig.mode).toBe("NONE"); // not overwritten
+    expect(config.toolConfig).toBeDefined();
+    const tools = config.tools as Array<unknown>;
+    const lastFd = (tools[4] as Record<string, unknown>).functionDeclarations as Array<unknown>;
+    const decl = lastFd[2] as Record<string, unknown>;
+    expect("parameters" in decl).toBe(true);
+    expect("parametersJsonSchema" in decl).toBe(false);
   });
 
   test("returns original payload if not Gemini", () => {
@@ -243,6 +242,10 @@ describe("hasEmptyToolCallArgs", () => {
   test("true for all-empty-value object on read", () => {
     expect(hasEmptyToolCallArgs({ file_path: "" }, "read")).toBe(true);
   });
+  test("false when optional param present but required missing (pi-ai validation covers it)", () => {
+    // Documented scope limit: the guard only catches fully-empty calls.
+    expect(hasEmptyToolCallArgs({ limit: 100 }, "read")).toBe(false);
+  });
   test("false for unknown tool", () => {
     expect(hasEmptyToolCallArgs({}, "custom_tool")).toBe(false);
   });
@@ -261,11 +264,49 @@ describe("emptyToolCallReason", () => {
   });
 });
 
+// ─── isOfficialGoogleBaseUrl ─────────────────────────────────────────────
+
+describe("isOfficialGoogleBaseUrl", () => {
+  test("true for official endpoints", () => {
+    expect(isOfficialGoogleBaseUrl("https://generativelanguage.googleapis.com")).toBe(true);
+    expect(isOfficialGoogleBaseUrl("https://generativelanguage.googleapis.com/v1beta")).toBe(true);
+    expect(isOfficialGoogleBaseUrl("https://googleapis.com")).toBe(true);
+  });
+  test("true for empty/null (pi falls back to the official default)", () => {
+    expect(isOfficialGoogleBaseUrl(null)).toBe(true);
+    expect(isOfficialGoogleBaseUrl(undefined)).toBe(true);
+    expect(isOfficialGoogleBaseUrl("")).toBe(true);
+    expect(isOfficialGoogleBaseUrl("   ")).toBe(true);
+  });
+  test("false for proxies", () => {
+    expect(isOfficialGoogleBaseUrl("https://elysia.h-e.top/v1beta")).toBe(false);
+    expect(isOfficialGoogleBaseUrl("https://api.siliconflow.cn")).toBe(false);
+  });
+  test("false for lookalike hosts", () => {
+    expect(isOfficialGoogleBaseUrl("https://googleapis.com.evil.net")).toBe(false);
+    expect(isOfficialGoogleBaseUrl("https://notgoogleapis.com")).toBe(false);
+  });
+  test("false for unparseable URLs (fail-open toward applying compat)", () => {
+    expect(isOfficialGoogleBaseUrl("not a url")).toBe(false);
+  });
+});
+
 // ─── shouldApplyGeminiToolCompat ────────────────────────────────────────
 
 describe("shouldApplyGeminiToolCompat", () => {
-  test("auto mode + Gemini API → true", () => {
-    expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://x.com" })).toBe(true);
+  test("auto mode + Gemini API + proxy baseUrl → true", () => {
+    expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://elysia.h-e.top/v1beta" })).toBe(true);
+  });
+  test("auto mode + official googleapis baseUrl → false (no fix needed there)", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      }),
+    ).toBe(false);
+  });
+  test("auto mode + null baseUrl → false (pi uses the official default endpoint)", () => {
+    expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: null })).toBe(false);
   });
   test("auto mode + non-Gemini API → false", () => {
     expect(shouldApplyGeminiToolCompat({ api: "anthropic-messages", baseUrl: "https://x.com" })).toBe(false);
@@ -298,19 +339,58 @@ describe("shouldApplyGeminiToolCompat", () => {
   test("providerForce=false overrides everything", () => {
     expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://x.com", providerForce: false })).toBe(false);
   });
-  test("auto mode hosts filter matches", () => {
-    expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://elysia.h-e.top/v1beta", hosts: ["elysia"] })).toBe(true);
+  test("auto mode hosts filter: exact hostname matches", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://elysia.h-e.top/v1beta",
+        hosts: ["elysia.h-e.top"],
+      }),
+    ).toBe(true);
   });
-  test("auto mode hosts filter no match", () => {
-    expect(shouldApplyGeminiToolCompat({ api: "google-generative-ai", baseUrl: "https://google.com", hosts: ["elysia"] })).toBe(false);
+  test("auto mode hosts filter: parent domain matches", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://elysia.h-e.top/v1beta",
+        hosts: ["h-e.top"],
+      }),
+    ).toBe(true);
   });
-  test("always mode ignores hosts filter", () => {
+  test("auto mode hosts filter: substring no longer matches (hostMatches semantics)", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://elysia.h-e.top/v1beta",
+        hosts: ["elysia"],
+      }),
+    ).toBe(false);
+  });
+  test("auto mode hosts filter: lookalike suffix does not match", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://google.com.evil.net",
+        hosts: ["google.com"],
+      }),
+    ).toBe(false);
+  });
+  test("auto mode hosts filter: non-listed proxy → false (hosts is an allowlist)", () => {
+    expect(
+      shouldApplyGeminiToolCompat({
+        api: "google-generative-ai",
+        baseUrl: "https://other-proxy.example.com",
+        hosts: ["elysia.h-e.top"],
+      }),
+    ).toBe(false);
+  });
+  test("always mode ignores hosts filter and official-host check", () => {
     expect(
       shouldApplyGeminiToolCompat({
         mode: "always",
         api: "google-generative-ai",
-        baseUrl: "https://google.com",
-        hosts: ["elysia"],
+        baseUrl: "https://generativelanguage.googleapis.com",
+        hosts: ["elysia.h-e.top"],
       }),
     ).toBe(true);
   });

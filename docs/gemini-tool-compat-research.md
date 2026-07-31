@@ -1,4 +1,4 @@
-﻿# Gemini Tool Calling Compatibility Research & Thin Adapter Design
+# Gemini Tool Calling Compatibility Research & Thin Adapter Design
 
 ## Executive Summary
 
@@ -260,11 +260,12 @@ export function installGeminiToolCompat(pi: ExtensionAPI, rt: Runtime): void {
 }
 ```
 
-Mode semantics (aligned with Claude Code compat):
-- `auto` (default): all Gemini API providers; if `hosts` is non-empty, require a host substring match
+Mode semantics (same philosophy as Claude Code compat — `auto` targets the known-problem scope only):
+- `auto` (default): non-official Gemini endpoints (proxies) only; official `*.googleapis.com` and the default endpoint are untouched. If `hosts` is non-empty, require a hostname match (exact or parent domain, `hostMatches` semantics)
 - `always`: every Gemini API provider (ignore `hosts`)
 - `never`: off unless per-provider `geminiToolCompat: true`
 - No resolved provider → do not apply (avoids `tool_call` blocking on non-Gemini sessions)
+- Injected `toolConfig` mode defaults to `AUTO`; `VALIDATED` only via explicit `forceToolConfigMode` (repro #4 in gemini-tool-call-compat-research.md: VALIDATED unreliable through proxies)
 
 ### Codex Compat Assessment
 
