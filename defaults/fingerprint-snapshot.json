@@ -1,0 +1,36 @@
+{
+  "snapshotVersion": 1,
+  "observedAt": "2026-07-31",
+  "upstream": {
+    "codex": {
+      "version": "0.141.0",
+      "source": "npm:@openai/codex@0.141.0 (fallback baseline)"
+    },
+    "claudeCode": {
+      "version": "2.1.178",
+      "source": "npm:@anthropic-ai/claude-code@2.1.178 (fallback baseline)"
+    },
+    "gemini": {
+      "version": "0.9.0",
+      "source": "npm:@google/gemini-cli@0.9.0 (fallback baseline)"
+    },
+    "anthropicVersion": "2023-06-01",
+    "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+    "originator": "codex_cli_rs"
+  },
+  "shapes": {
+    "codex": {
+      "User-Agent": "codex_cli_rs/0.141.0 ({osInfo}) Terminal",
+      "originator": "codex_cli_rs"
+    },
+    "claudeCode": {
+      "User-Agent": "claude-cli/2.1.178 (external, cli)",
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+    },
+    "gemini": {
+      "User-Agent": "GeminiCLI/0.9.0 ({osInfo})",
+      "x-goog-api-client": "gemini-cli/0.9.0"
+    }
+  }
+}
