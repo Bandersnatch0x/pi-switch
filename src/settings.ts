@@ -29,7 +29,7 @@ import {
 
 export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
-export type { FsLike } from "./json-file.ts";
+export type { FsLike };
 
 /**
  * Minimum supported Pi runtime (issue #11 D1, compat-window-policy).

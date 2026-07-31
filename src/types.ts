@@ -20,6 +20,8 @@ export interface ProviderRow {
   notes?: string | null;
   meta?: string | null;
   provider_type?: string | null;
+  /** 3.19+ provider classification (official/third_party/custom/aggregator/…). */
+  category?: string | null;
   sort_index?: number | null;
 }
 
@@ -37,6 +39,8 @@ export interface CcProvider {
   configModels: string[];
   apiFormat?: string;
   meta: Record<string, unknown>;
+  /** CC Switch category (official/third_party/custom/…); informational for tier/doctor. */
+  category?: string | null;
   isCurrentInCc: boolean;
   parseError?: string;
   websiteUrl?: string;
