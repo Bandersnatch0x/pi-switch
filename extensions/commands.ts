@@ -264,6 +264,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     recent: rt.config.recent,
     piVersion: rt.piVersion(),
     piMinVersion: PI_MIN_VERSION,
+    fingerprintSnapshot: rt.fingerprintSnapshot(),
   });
 
   const text = formatDoctorReport(report);
