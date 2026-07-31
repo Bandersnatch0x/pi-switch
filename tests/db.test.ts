@@ -38,15 +38,19 @@ function makeDeps(opts: {
   select?: string;
   probeFails?: boolean;
   selectFails?: boolean;
+  userVersion?: string;
 }): DbReaderDeps {
   let calls = 0;
-  const { tableInfo = V16_TABLE_INFO, select, probeFails, selectFails } = opts;
+  const { tableInfo = V16_TABLE_INFO, select, probeFails, selectFails, userVersion } = opts;
   return {
     execFileSync(file, args, _o) {
       const isProbe = args.includes("PRAGMA table_info(providers)");
       if (isProbe) {
         if (probeFails) throw new Error("probe boom");
         return tableInfo;
+      }
+      if (args.includes("PRAGMA user_version")) {
+        return userVersion ?? JSON.stringify([{ user_version: 16 }]);
       }
       calls += 1;
       if (selectFails) throw new Error("select boom");
@@ -123,6 +127,7 @@ describe("readProviders schema probing", () => {
     expect(r.capabilities?.hasProviderType).toBe(false);
     expect(r.capabilities?.compositeId).toBe(true);
     expect(r.capabilities?.columns).toContain("category");
+    expect(r.capabilities?.userVersion).toBe(16);
     expect(r.providers).toHaveLength(2);
     // Same id across app types is kept distinct (composite identity read path).
     expect(r.providers.map((p) => `${p.appType}/${p.id}`).sort()).toEqual([
@@ -168,6 +173,14 @@ describe("readProviders schema probing", () => {
     expect(r.capabilities?.compositeId).toBe(false);
     expect(r.providers[0]?.category).toBeUndefined();
     expect(r.providers[0]?.baseUrl).toBe("https://a.example");
+  });
+
+  test("user_version probe failure keeps capabilities (informational only)", () => {
+    const deps = makeDeps({ select: V16_SELECT, userVersion: "not-json" });
+    const r = readProviders(deps);
+    expect(r.ok).toBe(true);
+    expect(r.capabilities?.hasCategory).toBe(true);
+    expect(r.capabilities?.userVersion).toBeUndefined();
   });
 
   test("probe failure falls back to core columns and still reads", () => {

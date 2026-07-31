@@ -18,7 +18,38 @@ export interface DbCapabilities {
   hasProviderType: boolean;
   /** Primary key spans both id and app_type (3.19+ composite identity). */
   compositeId: boolean;
+  /** PRAGMA user_version = CC Switch SCHEMA_VERSION; undefined when unreadable. */
+  userVersion?: number;
 }
+
+/**
+ * Known providers-table columns (core + optional + CC Switch extras observed
+ * across v10..v16). Doctor W1 warns on anything outside this set.
+ */
+export const KNOWN_PROVIDERS_COLUMNS = new Set([
+  "id",
+  "app_type",
+  "name",
+  "settings_config",
+  "website_url",
+  "notes",
+  "meta",
+  "sort_index",
+  "is_current",
+  "category",
+  "provider_type",
+  "created_at",
+  "icon",
+  "icon_color",
+  "in_failover_queue",
+  "cost_multiplier",
+  "limit_daily_usd",
+  "limit_monthly_usd",
+]);
+
+/** CC Switch schema window (issue #11): 3.14.0=v10, 3.19=v16. */
+export const CC_SWITCH_SCHEMA_MIN = 10;
+export const CC_SWITCH_SCHEMA_LATEST = 16;
 
 /** Columns required for pi-switch parsing; probe failures fall back to these. */
 export const PROVIDERS_CORE_COLUMNS = [
@@ -67,22 +98,39 @@ export function hasCompositeId(raw: string): boolean {
 }
 
 function probeCapabilities(deps: DbReaderDeps): DbCapabilities | undefined {
+  let columns: string[] = [];
+  let compositeId = false;
   try {
     const raw = deps.execFileSync(
       deps.sqlite3Path,
       ["-cmd", ".timeout 3000", "-readonly", "-json", deps.dbPath, "PRAGMA table_info(providers)"],
       { encoding: "utf8", timeout: deps.timeoutMs ?? 15_000, maxBuffer: deps.maxBuffer ?? 64 * 1024 * 1024 },
     );
-    const columns = parseTableInfo(raw);
-    return {
-      columns,
-      hasCategory: columns.includes("category"),
-      hasProviderType: columns.includes("provider_type"),
-      compositeId: hasCompositeId(raw),
-    };
+    columns = parseTableInfo(raw);
+    compositeId = hasCompositeId(raw);
   } catch {
     return undefined;
   }
+  let userVersion: number | undefined;
+  try {
+    const raw = deps.execFileSync(
+      deps.sqlite3Path,
+      ["-cmd", ".timeout 3000", "-readonly", "-json", deps.dbPath, "PRAGMA user_version"],
+      { encoding: "utf8", timeout: deps.timeoutMs ?? 15_000, maxBuffer: deps.maxBuffer ?? 64 * 1024 * 1024 },
+    );
+    const parsed = JSON.parse(raw) as Array<{ user_version?: unknown }>;
+    const uv = parsed?.[0]?.user_version;
+    if (typeof uv === "number") userVersion = uv;
+  } catch {
+    // user_version is informational; absence does not fail the probe
+  }
+  return {
+    columns,
+    hasCategory: columns.includes("category"),
+    hasProviderType: columns.includes("provider_type"),
+    compositeId,
+    userVersion,
+  };
 }
 
 function buildProvidersSql(cap: DbCapabilities | undefined): string {
