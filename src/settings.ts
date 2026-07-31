@@ -31,6 +31,26 @@ export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
 export type { FsLike } from "./json-file.ts";
 
+/**
+ * Minimum supported Pi runtime (issue #11 D1, compat-window-policy).
+ * Must match `peerDependencies["@earendil-works/pi-coding-agent"]` in package.json.
+ */
+export const PI_MIN_VERSION = "0.78.1";
+
+/** Compare dotted numeric semver strings (no prerelease handling). Returns -1/0/1. */
+export function compareSemver(a: string, b: string): number {
+  const pa = a.trim().split(".").map(Number);
+  const pb = b.trim().split(".").map(Number);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
 export function piSettingsPath(home: string): string {
   return `${home.replace(/[\\/]+$/, "")}/.pi/agent/settings.json`;
 }

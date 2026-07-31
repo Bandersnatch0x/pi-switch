@@ -4,6 +4,7 @@
  */
 
 import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEntry } from "./types.ts";
+import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
 import {
   countModelOverrides,
@@ -45,6 +46,10 @@ export interface DoctorInput {
   };
   pins?: PinEntry[];
   recent?: RecentEntry[];
+  /** Detected Pi runtime version (W6 SDK). Undefined when not detectable. */
+  piVersion?: string;
+  /** Minimum supported Pi version (W6). Defaults to PI_MIN_VERSION. */
+  piMinVersion?: string;
 }
 
 export interface DoctorReport {
@@ -280,6 +285,28 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     status: "pass",
     detail: recent.length ? `保留 ${recent.length} 条 last-N` : "尚无 recent 记录",
   });
+
+  // 10. SDK (W6): Pi runtime version within compat window
+  const min = input.piMinVersion ?? PI_MIN_VERSION;
+  if (input.piVersion) {
+    const below = compareSemver(input.piVersion, min) < 0;
+    checks.push({
+      id: "sdk",
+      title: "Pi 运行版本",
+      status: below ? "fail" : "pass",
+      detail: below
+        ? `Pi ${input.piVersion} < 最低 ${min}（peer range ≥${min}，本进程越界加载）`
+        : `Pi ${input.piVersion} ≥ 最低 ${min}`,
+      fix: below ? "升级 Pi（pi 自更新或 npm i -g @earendil-works/pi-coding-agent）" : undefined,
+    });
+  } else {
+    checks.push({
+      id: "sdk",
+      title: "Pi 运行版本",
+      status: "pass",
+      detail: `未探测到（安装期 peer range ≥${min} 已拦截窗口外版本）`,
+    });
+  }
 
   const summary = countBy(checks);
   const icon = (s: DoctorStatus) => (s === "pass" ? "PASS" : s === "warn" ? "WARN" : "FAIL");

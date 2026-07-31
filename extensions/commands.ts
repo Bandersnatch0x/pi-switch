@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, ModelMetaOverride } from "../src/types.ts";
 import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
+import { PI_MIN_VERSION } from "../src/settings.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
@@ -261,6 +262,8 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     varsSummary: rt.varsSummary,
     pins: rt.config.pins,
     recent: rt.config.recent,
+    piVersion: rt.piVersion(),
+    piMinVersion: PI_MIN_VERSION,
   });
 
   const text = formatDoctorReport(report);
