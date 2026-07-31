@@ -55,6 +55,8 @@ export interface DoctorInput {
     snapshotVersion: number;
     baselines: { codex?: string; claudeCode?: string; gemini?: string };
   };
+  /** Routing probe result (W3). Undefined when probing disabled. */
+  routingProbe?: { url: string; reachable: boolean };
 }
 
 export interface DoctorReport {
@@ -316,7 +318,22 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     detail: recent.length ? `保留 ${recent.length} 条 last-N` : "尚无 recent 记录",
   });
 
-  // 10. SDK (W6): Pi runtime version within compat window
+  // 10. routing (W3): CC Switch Local Routing proxy reachability
+  if (input.routingProbe) {
+    checks.push({
+      id: "routing",
+      title: "CC Switch 路由服务",
+      status: input.routingProbe.reachable ? "pass" : "warn",
+      detail: input.routingProbe.reachable
+        ? `可达 ${input.routingProbe.url}`
+        : `不可达 ${input.routingProbe.url}（Direct 路径不受影响）`,
+      fix: input.routingProbe.reachable
+        ? undefined
+        : "在 CC Switch 应用内检查代理/切换状态（设置 → 代理）；仅 routed 应用需要它",
+    });
+  }
+
+  // 11. SDK (W6): Pi runtime version within compat window
   const min = input.piMinVersion ?? PI_MIN_VERSION;
   if (input.piVersion) {
     const below = compareSemver(input.piVersion, min) < 0;

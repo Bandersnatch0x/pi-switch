@@ -307,4 +307,50 @@ describe("runDoctor", () => {
     const check = report.checks.find((c) => c.id === "fingerprint");
     expect(check?.status).toBe("pass");
   });
+
+  test("routing W3: reachable proxy passes with url fact", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      routingProbe: { url: "http://127.0.0.1:15721", reachable: true },
+    });
+    const check = report.checks.find((c) => c.id === "routing");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("15721");
+  });
+
+  test("routing W3: unreachable proxy warns with recovery and direct-path note", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      routingProbe: { url: "http://127.0.0.1:15721", reachable: false },
+    });
+    const check = report.checks.find((c) => c.id === "routing");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("不可达");
+    expect(check?.fix).toContain("代理");
+  });
+
+  test("routing W3: no probe configured -> no routing check", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+    });
+    expect(report.checks.find((c) => c.id === "routing")).toBeUndefined();
+  });
 });

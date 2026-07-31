@@ -247,6 +247,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   const { providers, error } = rt.refreshSnapshot();
   const sel = rt.state.readSelection();
   const dbPath = defaultDbPath(rt.home);
+  const routingProbe = await rt.routingProbe();
 
   const report = runDoctor({
     home: rt.home,
@@ -265,6 +266,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     piVersion: rt.piVersion(),
     piMinVersion: PI_MIN_VERSION,
     fingerprintSnapshot: rt.fingerprintSnapshot(),
+    routingProbe,
   });
 
   const text = formatDoctorReport(report);

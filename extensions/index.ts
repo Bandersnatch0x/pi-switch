@@ -17,7 +17,7 @@ import { installClaudeCodeCompat } from "./claude-code-compat.ts";
 import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod, urlMod] = await Promise.all([
+  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod, urlMod, httpMod] = await Promise.all([
     import("node:child_process"),
     import("node:crypto"),
     import("node:fs"),
@@ -25,7 +25,21 @@ export default async function (pi: ExtensionAPI) {
     import("node:module"),
     import("node:path"),
     import("node:url"),
+    import("node:http"),
   ]);
+
+  const probeHttp = (url: string, timeoutMs: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      const req = httpMod.get(url, (res) => {
+        res.resume();
+        resolve(true);
+      });
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.on("error", () => resolve(false));
+    });
 
   const require = moduleMod.createRequire(import.meta.url);
   const extensionDir = pathMod.dirname(urlMod.fileURLToPath(import.meta.url));
@@ -51,6 +65,7 @@ export default async function (pi: ExtensionAPI) {
     randomUUID: cryptoMod.randomUUID,
     resolvePackageVersion,
     snapshotPath,
+    probeHttp,
     release: osMod.release(),
     home: osMod.homedir(),
   });
