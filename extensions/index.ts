@@ -17,12 +17,26 @@ import { installClaudeCodeCompat } from "./claude-code-compat.ts";
 import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, cryptoMod, fs, osMod] = await Promise.all([
+  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod] = await Promise.all([
     import("node:child_process"),
     import("node:crypto"),
     import("node:fs"),
     import("node:os"),
+    import("node:module"),
+    import("node:path"),
   ]);
+
+  const require = moduleMod.createRequire(import.meta.url);
+  const resolvePackageVersion = (name: string): string | undefined => {
+    try {
+      const entry = require.resolve(name);
+      const pkgPath = pathMod.join(pathMod.dirname(entry), "..", "package.json");
+      const version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version;
+      return typeof version === "string" && version.trim() ? version.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   const rt = new Runtime({
     execFileSync: cp.execFileSync,
@@ -32,6 +46,7 @@ export default async function (pi: ExtensionAPI) {
     renameSync: fs.renameSync,
     unlinkSync: fs.unlinkSync,
     randomUUID: cryptoMod.randomUUID,
+    resolvePackageVersion,
     release: osMod.release(),
     home: osMod.homedir(),
   });

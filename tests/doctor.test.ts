@@ -1,4 +1,5 @@
 import { test, expect, describe } from "bun:test";
+import { compareSemver } from "../src/settings.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import type { CcProvider } from "../src/types.ts";
 
@@ -138,5 +139,60 @@ describe("runDoctor", () => {
       },
     });
     expect(report.checks.find((c) => c.id === "fingerprint")?.status).toBe("warn");
+  });
+
+  test("sdk check passes inside window and defaults min to PI_MIN_VERSION", () => {
+    const base = {
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+    };
+    const report = runDoctor({ ...base, piVersion: "0.83.0" });
+    const check = report.checks.find((c) => c.id === "sdk");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("0.78.1");
+  });
+
+  test("sdk check fails when Pi below minimum with recovery action", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      piVersion: "0.77.0",
+    });
+    const check = report.checks.find((c) => c.id === "sdk");
+    expect(check?.status).toBe("fail");
+    expect(check?.fix).toContain("升级 Pi");
+    expect(report.summary.fail).toBeGreaterThanOrEqual(1);
+  });
+
+  test("sdk check passes when version undetectable (peer range already gates install)", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+    });
+    const check = report.checks.find((c) => c.id === "sdk");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("未探测到");
+  });
+
+  test("compareSemver handles dotted numeric versions", () => {
+    expect(compareSemver("0.78.1", "0.78.1")).toBe(0);
+    expect(compareSemver("0.78.1", "0.83.0")).toBe(-1);
+    expect(compareSemver("0.83.0", "0.83.1")).toBe(-1);
+    expect(compareSemver("1.0.0", "0.99.99")).toBe(1);
   });
 });

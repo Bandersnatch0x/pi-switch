@@ -22,6 +22,8 @@ export type NodeIo = {
   renameSync: typeof import("node:fs").renameSync;
   unlinkSync: typeof import("node:fs").unlinkSync;
   randomUUID: typeof import("node:crypto").randomUUID;
+  /** Resolve a package's version from its installed package.json (W6 SDK check). */
+  resolvePackageVersion: (name: string) => string | undefined;
   release: string;
   home: string;
 };
@@ -52,6 +54,8 @@ export class Runtime {
   private cachedVarsSummary: VarsSummary | undefined;
   private selectionCache: { at: number; value: PiSwitchSelection | undefined } | undefined;
   private readonly codexWindowId: string;
+  private cachedPiVersion: string | undefined;
+  private piVersionProbed = false;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -155,6 +159,19 @@ export class Runtime {
   invalidateVarsCache(): void {
     this.cachedVars = undefined;
     this.cachedVarsSummary = undefined;
+  }
+
+  /**
+   * Running Pi version (W6 SDK window check). Probed once; undefined when the
+   * hosting pi-coding-agent package cannot be resolved (e.g. odd bundling).
+   */
+  piVersion(): string | undefined {
+    if (this.piVersionProbed) return this.cachedPiVersion;
+    this.piVersionProbed = true;
+    this.cachedPiVersion = this.io.resolvePackageVersion(
+      "@earendil-works/pi-coding-agent",
+    );
+    return this.cachedPiVersion;
   }
 
   get varsSummary(): VarsSummary | undefined {
