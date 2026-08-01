@@ -63,6 +63,29 @@ describe("buildQuickEntries", () => {
     const entries = buildQuickEntries([], recent, providers);
     expect(entries.length).toBe(10);
   });
+
+  test("composite identity: same dbId across app types stays distinct", () => {
+    const shared = [
+      mk({ id: "dup", displayName: "one", appType: "codex", api: "openai-responses" }),
+      mk({ id: "dup", displayName: "two", appType: "claude" }),
+    ];
+    const pins: PinEntry[] = [
+      { dbId: "dup", model: "gpt-5", appType: "codex" },
+      { dbId: "dup", model: "gpt-5", appType: "claude" },
+    ];
+    const entries = buildQuickEntries(pins, [], shared);
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.provider.appType).sort()).toEqual(["claude", "codex"]);
+    expect(entries.every((e) => e.pinned)).toBe(true);
+  });
+
+  test("legacy pins without appType still resolve via dbId fallback", () => {
+    const pins: PinEntry[] = [{ dbId: "a", model: "gpt-5" }]; // pre-migration
+    const entries = buildQuickEntries(pins, [], providers);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].provider.id).toBe("a");
+    expect(entries[0].pinned).toBe(true);
+  });
 });
 
 describe("runQuickSwitch", () => {

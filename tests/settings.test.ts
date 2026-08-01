@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import {
   clearAllModelMetaOverrides,
+  isPinned,
   migrateLegacySelection,
   pushRecentEntry,
   readPiSwitchConfig,
@@ -271,6 +272,27 @@ describe("pins and recent", () => {
     const b = togglePinEntry(a.pins, { dbId: "1", model: "m1" });
     expect(b.pinned).toBe(false);
     expect(b.pins).toEqual([]);
+  });
+
+  test("togglePinEntry with appType unpins a migrated pin (no duplicate)", () => {
+    // Regression: pre-fix, toggling an appType-less entry on a migrated pin
+    // created a duplicate instead of removing it.
+    const migrated = [{ dbId: "1", model: "m1", appType: "codex" }];
+    // Correct appType entry removes the migrated pin cleanly.
+    const removed = togglePinEntry(migrated, { dbId: "1", model: "m1", appType: "codex" });
+    expect(removed.pinned).toBe(false);
+    expect(removed.pins).toEqual([]);
+    // Legacy (no appType) entry against a migrated pin must NOT match → still adds
+    // (the picker always passes appType post-fix; this documents the key gap).
+    const dup = togglePinEntry(migrated, { dbId: "1", model: "m1" });
+    expect(dup.pinned).toBe(true);
+    expect(dup.pins).toHaveLength(2);
+  });
+
+  test("isPinned matches appType-aware key (post-migration)", () => {
+    const pins = [{ dbId: "1", model: "m1", appType: "codex" }];
+    expect(isPinned(pins, "1", "m1")).toBe(false); // legacy key misses migrated pin
+    expect(isPinned(pins, "1", "m1", "codex")).toBe(true); // composite key matches
   });
 
   test("pushRecentEntry de-dupes and respects limit", () => {
