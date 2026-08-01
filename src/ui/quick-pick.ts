@@ -33,10 +33,12 @@ export function buildQuickEntries(
 
   const push = (appType: string, dbId: string, modelId: string, pinned: boolean): void => {
     if (out.length >= QUICK_LIMIT) return;
-    const key = `${appType}\n${dbId}\n${modelId}`;
-    if (seen.has(key)) return;
     const provider = byId.get(`${appType}\n${dbId}`) ?? byIdAny.get(dbId);
     if (!provider || !isSwitchable(provider)) return;
+    // Key on the *resolved* provider identity so an appType-less legacy entry
+    // and its migrated twin collapse to one row.
+    const key = `${provider.appType}\n${provider.id}\n${modelId}`;
+    if (seen.has(key)) return;
     seen.add(key);
     const icon = getAppTypeIcon(provider.appType);
     const badge = pinned ? "* " : "  ";

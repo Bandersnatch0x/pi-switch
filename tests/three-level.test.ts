@@ -255,3 +255,64 @@ describe("remoteCache survives picker reopen (o-override loop)", () => {
     expect(sawRemote).toBe(true);
   });
 });
+
+describe("resume after override (o loop returns to model column)", () => {
+  const ENTER = "\r";
+  const ESC = "\x1b";
+
+  function tuiCtx(): { ctx: PiSwitchCtx; drive: (keys: string[]) => Promise<void> } {
+    let comp: any;
+    const pending: string[][] = [];
+    const ctx = {
+      mode: "tui",
+      ui: {
+        custom: async (factory: any) => {
+          let resolve!: (r: any) => void;
+          const p = new Promise<any>((res) => (resolve = res));
+          comp = factory(
+            { requestRender() {} },
+            { fg: (_c: string, s: string) => s, bold: (s: string) => s },
+            {},
+            (r: any) => resolve(r),
+          );
+          for (const keys of pending.splice(0)) {
+            for (const k of keys) {
+              comp.handleInput(k);
+              await new Promise((r) => setTimeout(r, 2));
+            }
+          }
+          return p;
+        },
+        notify() {},
+        setStatus() {},
+        select: async () => undefined,
+        input: async () => undefined,
+      },
+    } as unknown as PiSwitchCtx;
+    return {
+      ctx,
+      drive: async (keys: string[]) => {
+        pending.push(keys);
+      },
+    };
+  }
+
+  test("resume opts reopen the picker at the model column with the model focused", async () => {
+    const providers = [
+      mk({ id: "p0", displayName: "other", appType: "codex", api: "openai-responses", configModels: ["g1"] }),
+      mk({ id: "p1", displayName: "alpha", appType: "claude", configModels: ["c1", "c2"] }),
+    ];
+    const t = tuiCtx();
+    // With resume state the first enter should confirm the focused model directly.
+    await t.drive([ENTER, ESC, ESC, ESC, ESC]);
+    const r = await threeLevelPick(t.ctx, {
+      providers,
+      resume: { appType: "claude", dbId: "p1", model: "c2" },
+    });
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.provider.id).toBe("p1");
+      expect(r.modelId).toBe("c2");
+    }
+  });
+});

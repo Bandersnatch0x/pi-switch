@@ -86,6 +86,18 @@ describe("buildQuickEntries", () => {
     expect(entries[0].provider.id).toBe("a");
     expect(entries[0].pinned).toBe(true);
   });
+
+  test("appType-less duplicate of a migrated pin collapses to one row", () => {
+    // The appType-stripping bug left files with the same pin both with and
+    // without appType; both resolve to the same provider → one row.
+    const pins: PinEntry[] = [
+      { dbId: "a", model: "gpt-5", appType: "claude" },
+      { dbId: "a", model: "gpt-5" },
+    ];
+    const entries = buildQuickEntries(pins, [], providers);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].pinned).toBe(true);
+  });
 });
 
 describe("runQuickSwitch", () => {

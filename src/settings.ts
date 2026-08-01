@@ -191,7 +191,9 @@ function parsePins(raw: unknown): PinEntry[] | undefined {
     if (!dbId || !model) continue;
     const label =
       typeof rec.label === "string" && rec.label.trim() ? rec.label.trim() : undefined;
-    out.push({ dbId, model, label });
+    const appType =
+      typeof rec.appType === "string" && rec.appType.trim() ? rec.appType.trim() : undefined;
+    out.push({ dbId, model, appType, label });
   }
   return out;
 }
@@ -207,7 +209,9 @@ function parseRecent(raw: unknown): RecentEntry[] | undefined {
     const at =
       typeof rec.at === "number" && Number.isFinite(rec.at) ? Math.floor(rec.at) : 0;
     if (!dbId || !model) continue;
-    out.push({ dbId, model, at });
+    const appType =
+      typeof rec.appType === "string" && rec.appType.trim() ? rec.appType.trim() : undefined;
+    out.push({ dbId, model, appType, at });
   }
   return out;
 }
@@ -291,6 +295,67 @@ function entryIsEmpty(entry: MutableOverrideEntry): boolean {
   return !entry.modelMeta && !entry.headers && !entry.fingerprint && modelCount === 0;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Mutate the override entry where resolveProviderOverride will read it.
+ *
+ * With appType, the canonical slot is nested [appType][id]; a shadowed
+ * top-level [id] entry (left by the old flat write path) is absorbed into
+ * the nested slot first — nested values win per key — so edits are never
+ * written somewhere the resolver ignores. Without appType, the legacy
+ * top-level slot is used as before.
+ */
+function updateOverrideEntry(
+  raw: Record<string, unknown>,
+  provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
+  mutate: (prev: MutableOverrideEntry) => MutableOverrideEntry,
+): Record<string, unknown> {
+  const overrides = isPlainObject(raw.providerOverrides)
+    ? { ...(raw.providerOverrides as Record<string, unknown>) }
+    : {};
+  const appType = provider.appType?.trim();
+
+  if (!appType) {
+    const prev = (isPlainObject(overrides[provider.id])
+      ? { ...(overrides[provider.id] as object) }
+      : {}) as MutableOverrideEntry;
+    const next = mutate(prev);
+    if (entryIsEmpty(next)) delete overrides[provider.id];
+    else overrides[provider.id] = next;
+    return { ...raw, providerOverrides: overrides };
+  }
+
+  const group = isPlainObject(overrides[appType])
+    ? { ...(overrides[appType] as Record<string, unknown>) }
+    : {};
+  let prev = (isPlainObject(group[provider.id])
+    ? { ...(group[provider.id] as object) }
+    : {}) as MutableOverrideEntry;
+
+  const flat = overrides[provider.id];
+  if (isPlainObject(flat)) {
+    const flatEntry = flat as MutableOverrideEntry;
+    const mergedModels = {
+      ...(flatEntry.modelOverrides ?? {}),
+      ...(prev.modelOverrides ?? {}),
+    };
+    prev = { ...flatEntry, ...prev };
+    if (Object.keys(mergedModels).length) prev.modelOverrides = mergedModels;
+    else delete prev.modelOverrides;
+    delete overrides[provider.id];
+  }
+
+  const next = mutate(prev);
+  if (entryIsEmpty(next)) delete group[provider.id];
+  else group[provider.id] = next;
+  if (Object.keys(group).length) overrides[appType] = group;
+  else delete overrides[appType];
+  return { ...raw, providerOverrides: overrides };
+}
+
 /**
  * Persist modelMeta for a provider (provider scope) or one model id
  * (model scope) under the canonical dbId key.
@@ -301,7 +366,7 @@ function entryIsEmpty(entry: MutableOverrideEntry): boolean {
 export function writeModelMetaOverride(
   fs: FsLike,
   configPath: string,
-  provider: Pick<CcProvider, "id" | "displayName">,
+  provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
   pid: number,
@@ -316,37 +381,26 @@ export function writeModelMetaOverride(
       return { ok: false, error: "empty model id" };
     }
     updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const overrides =
-        raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
-          ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
-          : {};
-      const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
-        ? { ...overrides[provider.id] }
-        : {}) as MutableOverrideEntry;
-
-      if (scope.kind === "provider") {
-        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-        if (!cleaned) delete prev.modelMeta;
-        else prev.modelMeta = cleaned;
-      } else {
-        const modelId = scope.modelId.trim();
-        const map = { ...(prev.modelOverrides ?? {}) };
-        const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
-        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-        if (!cleaned) delete map[key];
-        else map[key] = cleaned;
-        if (Object.keys(map).length) prev.modelOverrides = map;
-        else delete prev.modelOverrides;
-      }
-
-      if (modelMeta) prev.label = prev.label ?? provider.displayName;
-      if (entryIsEmpty(prev)) delete overrides[provider.id];
-      else overrides[provider.id] = prev;
-
-      return {
-        document: { ...raw, providerOverrides: overrides },
-        result: undefined,
-      };
+      const document = updateOverrideEntry(raw, provider, (entry) => {
+        const prev = { ...entry };
+        if (scope.kind === "provider") {
+          const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+          if (!cleaned) delete prev.modelMeta;
+          else prev.modelMeta = cleaned;
+        } else {
+          const modelId = scope.modelId.trim();
+          const map = { ...(prev.modelOverrides ?? {}) };
+          const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
+          const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+          if (!cleaned) delete map[key];
+          else map[key] = cleaned;
+          if (Object.keys(map).length) prev.modelOverrides = map;
+          else delete prev.modelOverrides;
+        }
+        if (modelMeta) prev.label = prev.label ?? provider.displayName;
+        return prev;
+      });
+      return { document, result: undefined };
     });
     return { ok: true };
   } catch (err) {
@@ -358,26 +412,18 @@ export function writeModelMetaOverride(
 export function clearAllModelMetaOverrides(
   fs: FsLike,
   configPath: string,
-  provider: Pick<CcProvider, "id" | "displayName">,
+  provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
     updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const overrides =
-        raw.providerOverrides && typeof raw.providerOverrides === "object" && !Array.isArray(raw.providerOverrides)
-          ? { ...(raw.providerOverrides as Record<string, ProviderOverrideEntry>) }
-          : {};
-      const prev = (overrides[provider.id] && typeof overrides[provider.id] === "object"
-        ? { ...overrides[provider.id] }
-        : {}) as MutableOverrideEntry;
-      delete prev.modelMeta;
-      delete prev.modelOverrides;
-      if (entryIsEmpty(prev)) delete overrides[provider.id];
-      else overrides[provider.id] = prev;
-      return {
-        document: { ...raw, providerOverrides: overrides },
-        result: undefined,
-      };
+      const document = updateOverrideEntry(raw, provider, (entry) => {
+        const prev = { ...entry };
+        delete prev.modelMeta;
+        delete prev.modelOverrides;
+        return prev;
+      });
+      return { document, result: undefined };
     });
     return { ok: true };
   } catch (err) {
@@ -406,14 +452,27 @@ export function entryKey(p: { dbId: string; model: string; appType?: string }): 
   return p.appType ? `${p.appType}::${p.dbId}::${p.model.trim()}` : pinKey(p.dbId, p.model);
 }
 
+/**
+ * Same provider+model identity. An appType-carrying probe also claims
+ * appType-less legacy entries (pre-migration / appType-stripping bug); a
+ * legacy probe never claims an appType-carrying entry (can't disambiguate).
+ */
+function sameEntry(
+  stored: { dbId: string; model: string; appType?: string },
+  probe: { dbId: string; model: string; appType?: string },
+): boolean {
+  if (stored.dbId !== probe.dbId) return false;
+  if (stored.model.trim() !== probe.model.trim()) return false;
+  return stored.appType === probe.appType || (!stored.appType && Boolean(probe.appType));
+}
+
 export function isPinned(
   pins: PinEntry[] | undefined,
   dbId: string,
   model: string,
   appType?: string,
 ): boolean {
-  const key = entryKey({ dbId, model, appType });
-  return (pins ?? []).some((p) => entryKey(p) === key);
+  return (pins ?? []).some((p) => sameEntry(p, { dbId, model, appType }));
 }
 
 /** Toggle a pin entry. Returns the new pins array. */
@@ -422,11 +481,11 @@ export function togglePinEntry(
   entry: PinEntry,
 ): { pins: PinEntry[]; pinned: boolean } {
   const list = [...(pins ?? [])];
-  const key = entryKey(entry);
-  const idx = list.findIndex((p) => entryKey(p) === key);
-  if (idx >= 0) {
-    list.splice(idx, 1);
-    return { pins: list, pinned: false };
+  // Unpin removes every match, healing duplicates accumulated by the old
+  // appType-stripping read path.
+  const kept = list.filter((p) => !sameEntry(p, entry));
+  if (kept.length !== list.length) {
+    return { pins: kept, pinned: false };
   }
   list.unshift({
     dbId: entry.dbId,
@@ -448,8 +507,7 @@ export function pushRecentEntry(
     appType: entry.appType,
     at: entry.at ?? Date.now(),
   };
-  const key = entryKey(next);
-  const filtered = (recent ?? []).filter((r) => entryKey(r) !== key);
+  const filtered = (recent ?? []).filter((r) => !sameEntry(r, next));
   return [next, ...filtered].slice(0, Math.max(1, limit));
 }
 

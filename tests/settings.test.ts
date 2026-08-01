@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import {
   clearAllModelMetaOverrides,
   isPinned,
+  togglePinAndWrite,
   migrateLegacySelection,
   pushRecentEntry,
   readPiSwitchConfig,
@@ -327,6 +328,115 @@ describe("pins and recent", () => {
     expect(cfg.pins).toEqual([{ dbId: "x", model: "y" }]);
     expect(cfg.recent?.[0].model).toBe("y");
     expect(cfg.recentLimit).toBe(5);
+  });
+});
+
+describe("pin appType round-trip (/ps p duplicate bug)", () => {
+  test("readPiSwitchConfig preserves pin/recent appType", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        pins: [{ dbId: "x", model: "y", appType: "claude" }],
+        recent: [{ dbId: "x", model: "y", appType: "claude", at: 1 }],
+      }),
+    });
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    expect(cfg.pins?.[0].appType).toBe("claude");
+    expect(cfg.recent?.[0].appType).toBe("claude");
+  });
+
+  test("togglePinAndWrite second toggle unpins instead of duplicating", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const entry = { dbId: "1", model: "m1", appType: "claude", label: "p · m1" };
+    const first = togglePinAndWrite(fs, "/c.json", entry, 1);
+    expect(first.ok).toBe(true);
+    expect(first.pinned).toBe(true);
+    const second = togglePinAndWrite(fs, "/c.json", entry, 1);
+    expect(second.ok).toBe(true);
+    expect(second.pinned).toBe(false);
+    expect(second.pins).toEqual([]);
+    expect(JSON.parse(fs.store["/c.json"]).pins).toEqual([]);
+  });
+
+  test("togglePinAndWrite heals accumulated appType-less duplicates", () => {
+    // State produced by the old appType-stripping bug: one migrated pin plus
+    // legacy duplicates of the same (dbId, model).
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        pins: [
+          { dbId: "1", model: "m1", appType: "claude" },
+          { dbId: "1", model: "m1" },
+          { dbId: "1", model: "m1" },
+          { dbId: "2", model: "other" },
+        ],
+      }),
+    });
+    const r = togglePinAndWrite(fs, "/c.json", { dbId: "1", model: "m1", appType: "claude" }, 1);
+    expect(r.pinned).toBe(false);
+    expect(r.pins).toEqual([{ dbId: "2", model: "other" }]);
+  });
+});
+
+describe("override write targets nested [appType][id] (shadowed override bug)", () => {
+  test("write with appType lands where resolveProviderOverride reads", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          claude: { "1": { modelOverrides: { other: { maxTokens: 1 } }, label: "x" } },
+        },
+      }),
+    });
+    const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
+    const r = writeModelMetaOverride(
+      fs, "/c.json", p, { kind: "model", modelId: "m" }, { maxTokens: 111 }, 1,
+    );
+    expect(r.ok).toBe(true);
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    const entry = resolveProviderOverride(cfg.providerOverrides, p);
+    expect(entry?.modelOverrides?.m?.maxTokens).toBe(111);
+    expect(entry?.modelOverrides?.other?.maxTokens).toBe(1);
+  });
+
+  test("write absorbs a shadowed top-level entry into the nested layer", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          "1": { modelOverrides: { lost: { maxTokens: 5 } } },
+          claude: { "1": { modelOverrides: { other: { maxTokens: 1 } } } },
+        },
+      }),
+    });
+    const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
+    writeModelMetaOverride(fs, "/c.json", p, { kind: "model", modelId: "m" }, { maxTokens: 111 }, 1);
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    const entry = resolveProviderOverride(cfg.providerOverrides, p);
+    expect(entry?.modelOverrides?.m?.maxTokens).toBe(111);
+    expect(entry?.modelOverrides?.other?.maxTokens).toBe(1);
+    expect(entry?.modelOverrides?.lost?.maxTokens).toBe(5);
+    expect(JSON.parse(fs.store["/c.json"]).providerOverrides["1"]).toBeUndefined();
+  });
+
+  test("clearAllModelMetaOverrides clears the nested layer", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          claude: {
+            "1": {
+              modelMeta: { reasoning: false },
+              modelOverrides: { m: { maxTokens: 1 } },
+              headers: { "x-h": "v" },
+            },
+          },
+        },
+      }),
+    });
+    const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
+    const r = clearAllModelMetaOverrides(fs, "/c.json", p, 1);
+    expect(r.ok).toBe(true);
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    const entry = resolveProviderOverride(cfg.providerOverrides, p);
+    expect(entry?.modelMeta).toBeUndefined();
+    expect(entry?.modelOverrides).toBeUndefined();
+    expect(entry?.headers).toEqual({ "x-h": "v" });
   });
 });
 
