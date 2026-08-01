@@ -347,13 +347,15 @@ async function threeLevelCustom(
       if (id === MANUAL) return "+ 手动输入";
       if (id === FETCH) return "r 刷新模型";
       const gear = provider && opts.hasOverride?.(provider, id) ? fg("accent", " *") : "";
-      if (provider && isPinned(livePins, provider.id, id)) return `* ${id}${gear}`;
+      if (provider && isPinned(livePins, provider.id, id, provider.appType)) return `* ${id}${gear}`;
       return `${id}${gear}`;
     }
 
     function providerHasPin(provider: CcProvider | undefined): boolean {
       if (!provider) return false;
-      return livePins.some((p) => p.dbId === provider.id);
+      return livePins.some(
+        (p) => p.dbId === provider.id && (!p.appType || p.appType === provider.appType),
+      );
     }
 
     function providerHasOverride(provider: CcProvider | undefined): boolean {
@@ -903,10 +905,11 @@ async function threeLevelCustom(
             const next = await opts.onTogglePin!({
               dbId: provider.id,
               model: mid,
+              appType: provider.appType,
               label: `${provider.displayName} · ${mid}`,
             });
             livePins = [...(next ?? [])];
-            const nowPinned = isPinned(livePins, provider.id, mid);
+            const nowPinned = isPinned(livePins, provider.id, mid, provider.appType);
             ctx.ui.notify(
               nowPinned
                 ? `已 pin · ${provider.displayName} · ${mid}`

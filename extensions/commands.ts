@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { CcProvider, ModelMetaOverride } from "../src/types.ts";
+import type { CcProvider, ModelMetaOverride, PinEntry } from "../src/types.ts";
 import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { PI_MIN_VERSION } from "../src/settings.ts";
@@ -16,6 +16,7 @@ import {
 } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import { buildQuickEntries } from "../src/ui/quick-pick.ts";
+import { quickSwitchPick } from "../src/ui/quick-switch-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
@@ -520,21 +521,32 @@ export async function runQuickSwitch(
   rt.reloadConfig();
   const { providers: live, error: snapErr } = rt.refreshSnapshot();
   if (snapErr) ctx.ui.notify(snapErr, "warning");
-  const entries = buildQuickEntries(rt.config.pins ?? [], rt.config.recent ?? [], live);
-  if (!entries.length) {
+  if (!buildQuickEntries(rt.config.pins ?? [], rt.config.recent ?? [], live).length) {
     ctx.ui.notify("没有可用的 pin / recent；先用 /ps-config 完成一次切换", "warning");
     return;
   }
-  const labels = entries.map((e) => e.label);
-  const pick = await ctx.ui.select("快速切换", labels);
-  if (!pick) return;
-  const entry = entries[labels.indexOf(pick)];
-  if (!entry) return;
-  const result = await lifecycle.activate(
-    { provider: entry.provider, modelId: entry.modelId, commit: "selection" },
-    ctx,
-  );
-  notifyActivation(rt, ctx, entry.provider, entry.modelId, result);
+  const onTogglePin = async (entry: PinEntry): Promise<PinEntry[]> => {
+    const result = rt.state.togglePin(entry);
+    if (!result.ok) {
+      throw new Error(result.error ?? "write pins failed");
+    }
+    rt.config = { ...rt.config, pins: result.pins };
+    return result.pins;
+  };
+  const onPick = async (provider: CcProvider, modelId: string): Promise<void> => {
+    const result = await lifecycle.activate(
+      { provider, modelId, commit: "selection" },
+      ctx,
+    );
+    notifyActivation(rt, ctx, provider, modelId, result);
+  };
+  await quickSwitchPick(ctx, {
+    providers: live,
+    pins: rt.config.pins ?? [],
+    recent: rt.config.recent ?? [],
+    onTogglePin,
+    onPick,
+  });
 }
 
 export function registerCommands(
