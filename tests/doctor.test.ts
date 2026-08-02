@@ -443,6 +443,53 @@ describe("runDoctor", () => {
     expect(check?.detail).toContain("过期");
   });
 
+  test("capabilities #36: model-id-tag and host-adaptation render Chinese labels", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "deepseek-v4-flash[1M]",
+        resolved: {
+          contextWindow: { value: 1000000, source: "model-id-tag" },
+          maxTokens: { value: 32000, source: "protocol-default" },
+          reasoning: { value: false, source: "protocol-default" },
+          vision: { value: false, source: "protocol-default" },
+          conflicts: [],
+        },
+      },
+    });
+    const check = report.checks.find((c) => c.id === "capabilities");
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("context=1000000(模型 id 标签)");
+
+    const hostReport = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "a", appType: "claude" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "claude-fable-5",
+        resolved: {
+          contextWindow: { value: 1000000, source: "host-adaptation" },
+          maxTokens: { value: 64000, source: "protocol-default" },
+          reasoning: { value: true, source: "protocol-default" },
+          vision: { value: true, source: "protocol-default" },
+          conflicts: [],
+        },
+      },
+    });
+    const hostCheck = hostReport.checks.find((c) => c.id === "capabilities");
+    expect(hostCheck?.detail).toContain("context=1000000(宿主适配)");
+  });
+
   test("tier W2: per-app-type row with direct/visible/routed counts", () => {
     const report = runDoctor({
       home: "/h",

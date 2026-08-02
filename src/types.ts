@@ -231,6 +231,9 @@ export const DEFAULT_MODEL_META = {
   maxTokens: 32_000,
 } as const;
 
+/** Canonical 1M context window (not 2^20). Used by [1M] id tag + anyrouter host adaptation. */
+export const CONTEXT_WINDOW_1M = 1_000_000;
+
 export interface ApiModelMeta {
   contextWindow: number;
   maxTokens: number;

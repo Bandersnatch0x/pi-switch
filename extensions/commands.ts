@@ -347,6 +347,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     debug: rt.config.debug,
     onReject: rt.rejectSink(),
     modelMetaFor: (id) => rt.modelMetaFor(provider, id),
+    modelsDevFor: (id) => rt.modelsDevFor?.(id),
   });
   if (!config) {
     ctx.ui?.notify?.(

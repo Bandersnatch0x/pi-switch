@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { parseProviderRow, makePiName, trimModelId, isSwitchable, uniquifyPiNames, MANAGED_AUTH_PARSE_ERROR } from "../src/parse/index.ts";
 import { parseGemini } from "../src/parse/gemini.ts";
-import { normalizeOpenAiBaseUrlForPi } from "../src/parse/common.ts";
+import { bracketContextWindow, normalizeOpenAiBaseUrlForPi } from "../src/parse/common.ts";
 import type { ProviderRow } from "../src/types.ts";
 
 function row(partial: Partial<ProviderRow> & Pick<ProviderRow, "id" | "app_type" | "name" | "settings_config">): ProviderRow {
@@ -40,9 +40,23 @@ describe("makePiName / trimModelId", () => {
     expect(out[2].piName).toBe("unique");
   });
 
-    test("model id only trims", () => {
+  test("model id only trims", () => {
     expect(trimModelId("  claude-fable-5[1M]  ")).toBe("claude-fable-5[1M]");
     expect(trimModelId("DeepSeek-V4-Pro")).toBe("DeepSeek-V4-Pro");
+  });
+});
+
+describe("bracketContextWindow (#36)", () => {
+  test("hits trim-trailing [1M]/[1m] only", () => {
+    expect(bracketContextWindow("foo[1M]")).toBe(1_000_000);
+    expect(bracketContextWindow("foo[1m]")).toBe(1_000_000);
+    expect(bracketContextWindow("foo[1M] ")).toBe(1_000_000);
+  });
+
+  test("misses non-trailing or other tags", () => {
+    expect(bracketContextWindow("foo[1M]-preview")).toBeUndefined();
+    expect(bracketContextWindow("foo[2M]")).toBeUndefined();
+    expect(bracketContextWindow("[1M]foo")).toBeUndefined();
   });
 });
 

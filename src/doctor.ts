@@ -437,7 +437,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       const src =
         e.source === "models-dev"
           ? `models.dev@${e.fetchedAt ?? "?"}${e.stale ? "(过期)" : ""}`
-          : e.source;
+          : e.source === "model-id-tag"
+            ? "模型 id 标签"
+            : e.source === "host-adaptation"
+              ? "宿主适配"
+              : e.source;
       return `${label}=${e.value}(${src})`;
     };
     const warnRows: string[] = [];

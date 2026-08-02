@@ -120,4 +120,97 @@ describe("resolveModelCapabilities (W4)", () => {
     expect(r.contextWindow.value).toBe(1000000); // last-good kept
     expect(r.contextWindow.stale).toBe(true);
   });
+
+  test("six-layer priority: user > idTag > host > models.dev > cc-meta > default", () => {
+    const r = resolveModelCapabilities({
+      user: { contextWindow: 111 },
+      idTag: { contextWindow: 222 },
+      hostAdaptation: { contextWindow: 333 },
+      modelsDev: { ...md, contextWindow: 444 },
+      ccMeta: { contextWindow: 555 },
+      defaults: { ...defaults, contextWindow: 666 },
+    });
+    expect(r.contextWindow).toMatchObject({ value: 111, source: "user-override" });
+
+    const r2 = resolveModelCapabilities({
+      idTag: { contextWindow: 222 },
+      hostAdaptation: { contextWindow: 333 },
+      modelsDev: { ...md, contextWindow: 444 },
+      ccMeta: { contextWindow: 555 },
+      defaults: { ...defaults, contextWindow: 666 },
+    });
+    expect(r2.contextWindow).toMatchObject({ value: 222, source: "model-id-tag" });
+
+    const r3 = resolveModelCapabilities({
+      hostAdaptation: { contextWindow: 333 },
+      modelsDev: { ...md, contextWindow: 444 },
+      ccMeta: { contextWindow: 555 },
+      defaults: { ...defaults, contextWindow: 666 },
+    });
+    expect(r3.contextWindow).toMatchObject({ value: 333, source: "host-adaptation" });
+
+    const r4 = resolveModelCapabilities({
+      modelsDev: { ...md, contextWindow: 444 },
+      ccMeta: { contextWindow: 555 },
+      defaults: { ...defaults, contextWindow: 666 },
+    });
+    expect(r4.contextWindow).toMatchObject({ value: 444, source: "models-dev" });
+
+    const r5 = resolveModelCapabilities({
+      ccMeta: { contextWindow: 555 },
+      defaults: { ...defaults, contextWindow: 666 },
+    });
+    expect(r5.contextWindow).toMatchObject({ value: 555, source: "cc-meta" });
+  });
+
+  test("idTag over models-dev conflicts; user over idTag does not", () => {
+    const conflict = resolveModelCapabilities({
+      idTag: { contextWindow: 1_000_000 },
+      modelsDev: { ...md, contextWindow: 200_000 },
+      defaults,
+    });
+    expect(conflict.contextWindow).toMatchObject({
+      value: 1_000_000,
+      source: "model-id-tag",
+    });
+    expect(conflict.conflicts).toContainEqual(
+      expect.objectContaining({
+        field: "contextWindow",
+        effectiveSource: "model-id-tag",
+        overriddenSource: "models-dev",
+      }),
+    );
+
+    const noConflict = resolveModelCapabilities({
+      user: { contextWindow: 512_000 },
+      idTag: { contextWindow: 1_000_000 },
+      defaults,
+    });
+    expect(noConflict.contextWindow).toMatchObject({
+      value: 512_000,
+      source: "user-override",
+    });
+    expect(noConflict.conflicts).toEqual([]);
+  });
+
+  test("stale models.dev still acts as last-good under registration layers", () => {
+    const staleMd = {
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+      reasoning: false,
+      vision: false,
+      observedAt: "2020-01-01T00:00:00Z",
+      source: "models-dev" as const,
+    };
+    // No higher layer for maxTokens → stale models.dev still wins (last-good).
+    const r = resolveModelCapabilities({
+      idTag: { contextWindow: 1_000_000 },
+      modelsDev: staleMd,
+      defaults,
+      now: Date.parse("2026-07-31T00:00:00Z"),
+      staleThresholdMs: 90 * 24 * 60 * 60 * 1000,
+    });
+    expect(r.contextWindow).toMatchObject({ value: 1_000_000, source: "model-id-tag" });
+    expect(r.maxTokens).toMatchObject({ value: 8_192, source: "models-dev", stale: true });
+  });
 });

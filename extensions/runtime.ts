@@ -22,6 +22,9 @@ import {
   type ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
+import { ccMetaFrom } from "../src/capabilities/registration.ts";
+import { bracketContextWindow } from "../src/parse/common.ts";
+import { applyAnyrouterModelMeta } from "../src/headers/anyrouter.ts";
 import { piSettingsPath, piSwitchConfigPath, piSwitchCachePath } from "../src/settings.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
@@ -351,9 +354,17 @@ export class Runtime {
     return this.capabilitiesInflight;
   }
 
-  /** Resolve capability facts for a provider/model (user > models.dev > cc-meta > default). */
+  /**
+   * Read-only models.dev cache lookup by exact model id (no network, no await).
+   * Stale last-good entries are returned as-is; missing key = undefined.
+   */
+  modelsDevFor(modelId: string): ModelsDevCapabilities | undefined {
+    return this.capabilitiesCache().capabilities[modelId];
+  }
+
+  /** Resolve capability facts for a provider/model (full #36 priority chain). */
   capabilitiesFor(provider: CcProvider, modelId: string) {
-    const cache = this.capabilitiesCache().capabilities[modelId];
+    const cache = this.modelsDevFor(modelId);
     const user = this.modelMetaFor(provider, modelId);
     const api = provider.api;
     const tier = api ? API_MODEL_META[api] : undefined;
@@ -365,21 +376,18 @@ export class Runtime {
           vision: tier.input?.includes("image"),
         }
       : undefined;
-    const meta = provider.meta ?? {};
-    const ccMeta =
-      typeof meta.contextWindow === "number" ||
-      typeof meta.maxTokens === "number" ||
-      typeof meta.reasoning === "boolean" ||
-      typeof meta.vision === "boolean"
-        ? {
-            contextWindow:
-              typeof meta.contextWindow === "number" ? meta.contextWindow : undefined,
-            maxTokens: typeof meta.maxTokens === "number" ? meta.maxTokens : undefined,
-            reasoning: typeof meta.reasoning === "boolean" ? meta.reasoning : undefined,
-            vision: typeof meta.vision === "boolean" ? meta.vision : undefined,
-          }
-        : undefined;
-    return resolveModelCapabilities({ user, modelsDev: cache, ccMeta, defaults });
+    const ccMeta = ccMetaFrom(provider.meta);
+    const cw = bracketContextWindow(modelId);
+    const idTag = cw !== undefined ? { contextWindow: cw } : undefined;
+    const hostAdaptation = applyAnyrouterModelMeta(api, provider.baseUrl);
+    return resolveModelCapabilities({
+      user,
+      idTag,
+      hostAdaptation,
+      modelsDev: cache,
+      ccMeta,
+      defaults,
+    });
   }
 
   get varsSummary(): VarsSummary | undefined {

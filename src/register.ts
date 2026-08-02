@@ -1,13 +1,12 @@
 import type { CcProvider, ModelMetaOverride, PiApi } from "./types.ts";
 import { API_MODEL_META, DEFAULT_MODEL_META } from "./types.ts";
-import {
-  applyAnyrouterHeaders,
-  applyAnyrouterModelMeta,
-} from "./headers/anyrouter.ts";
+import { applyAnyrouterHeaders } from "./headers/anyrouter.ts";
 import { applyCodexWindowId } from "./headers/codex.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
+import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
+import { resolveRegistrationMeta } from "./capabilities/registration.ts";
 
 /** Minimal ExtensionAPI surface used by register helpers. */
 export interface PiRegisterApi {
@@ -67,6 +66,11 @@ export function buildProviderConfig(
      * Lets one provider register models with different reasoning/ctx settings.
      */
     modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    /**
+     * Read-only models.dev cache lookup by exact model id (no network).
+     * Stale last-good entries are still used; missing key = layer absent.
+     */
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
   },
 ): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
@@ -74,8 +78,13 @@ export function buildProviderConfig(
   const models = ids.filter(Boolean).map((raw) => {
     const id = raw.trim();
     const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
-    // anyrouter: default contextWindow=1M under user overrides (user wins).
-    const meta = applyAnyrouterModelMeta(provider.api, provider.baseUrl, userMeta);
+    const meta = resolveRegistrationMeta({
+      modelId: id,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+      userMeta,
+      modelsDev: opts.modelsDevFor?.(id),
+    });
     return toModelConfig(id, provider.api, meta);
   });
   if (!models.length) return undefined;
@@ -120,6 +129,7 @@ export function registerProvider(
     onReject?: (name: string, reason: string) => void;
     modelMeta?: ModelMetaOverride;
     modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
   },
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);

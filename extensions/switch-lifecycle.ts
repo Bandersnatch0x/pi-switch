@@ -82,6 +82,7 @@ export function createSwitchLifecycle(
       debug: rt.config.debug,
       onReject: rt.rejectSink(),
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
+      modelsDevFor: (id) => rt.modelsDevFor?.(id),
     });
 
   const warnMissingSelection = (ctx?: PiSwitchCtx): void => {

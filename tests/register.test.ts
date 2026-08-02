@@ -160,4 +160,71 @@ describe("buildProviderConfig", () => {
     expect(m.reasoning).toBe(true);
     expect(m.contextWindow).toBe(200_000);
   });
+
+  test("[1M] tag sets contextWindow=1M without polluting maxTokens/reasoning", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      { rules: [] },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.contextWindow).toBe(1_000_000);
+    expect(m.maxTokens).toBe(32_000);
+    expect(m.reasoning).toBe(false);
+  });
+
+  test("lowercase [1m] also hits", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1m]"],
+      { rules: [] },
+    );
+    expect((cfg?.models as any[])[0].contextWindow).toBe(1_000_000);
+  });
+
+  test("sibling without tag keeps protocol tier window", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]", "deepseek-v4-flash"],
+      { rules: [] },
+    );
+    const models = cfg?.models as any[];
+    expect(models[0].contextWindow).toBe(1_000_000);
+    expect(models[1].contextWindow).toBe(128_000);
+  });
+
+  test("user modelMeta.contextWindow beats [1M] tag", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      { rules: [], modelMeta: { contextWindow: 512_000 } },
+    );
+    expect((cfg?.models as any[])[0].contextWindow).toBe(512_000);
+  });
+
+  test("[1M] tag beats models.dev 200k; lookup key is tagged id", () => {
+    const seen: string[] = [];
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      {
+        rules: [],
+        modelsDevFor: (id) => {
+          seen.push(id);
+          return {
+            contextWindow: 200_000,
+            maxTokens: 8_192,
+            reasoning: false,
+            observedAt: "2026-07-31T00:00:00Z",
+            source: "models-dev",
+          };
+        },
+      },
+    );
+    expect(seen).toEqual(["deepseek-v4-flash[1M]"]);
+    const m = (cfg?.models as any[])[0];
+    expect(m.contextWindow).toBe(1_000_000);
+    // maxTokens still from models.dev (tag only sets contextWindow)
+    expect(m.maxTokens).toBe(8_192);
+  });
 });
