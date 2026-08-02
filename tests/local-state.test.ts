@@ -114,9 +114,16 @@ describe("local state interface", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(state.readConfig().providerOverrides?.abc).toMatchObject({
+    // appType-aware write absorbs the legacy top-level entry into the
+    // canonical nested [appType][id] slot, keeping neighboring fields.
+    const overrides = state.readConfig().providerOverrides as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(overrides?.codex?.abc).toMatchObject({
       headers: { "User-Agent": "x" },
       modelMeta: { reasoning: false },
     });
+    expect(overrides?.abc).toBeUndefined();
   });
 });

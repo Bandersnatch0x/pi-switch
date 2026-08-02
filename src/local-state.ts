@@ -29,18 +29,18 @@ export interface LocalState {
   readOrMigrateSelection(providers: CcProvider[]): PiSwitchSelection | undefined;
   saveSelection(selection: PiSwitchSelection): StateWriteResult;
   saveProviderModelMeta(
-    provider: Pick<CcProvider, "id" | "displayName">,
+    provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
     modelMeta: ModelMetaOverride | null,
   ): StateWriteResult;
   /** Write one scope (provider or a single model id). */
   saveModelMetaOverride(
-    provider: Pick<CcProvider, "id" | "displayName">,
+    provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
     scope: ModelMetaScope,
     modelMeta: ModelMetaOverride | null,
   ): StateWriteResult;
   /** Drop provider modelMeta plus every per-model override. */
   clearModelMetaOverrides(
-    provider: Pick<CcProvider, "id" | "displayName">,
+    provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   ): StateWriteResult;
   togglePin(
     entry: PinEntry,

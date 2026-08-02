@@ -32,6 +32,9 @@ export interface QuickSwitchPickOpts {
 
 export type QuickSwitchResult = { kind: "picked" } | { kind: "cancel" };
 
+/** Rows visible in the quick list at once (matches QUICK_LIMIT=10). */
+export const QUICK_VIEWPORT = 10;
+
 type ThemeLike = {
   fg?: (key: string, text: string) => string;
   bold?: (text: string) => string;
@@ -106,7 +109,7 @@ async function quickSwitchCustom(
     function render(termWidth: number): string[] {
       const width = Math.max(20, Math.floor(termWidth));
       const lines: string[] = [];
-      const viewport = 10;
+      const viewport = QUICK_VIEWPORT;
       const visible = state.entries.slice(state.scroll, state.scroll + viewport);
       for (const e of visible) {
         const isSel = e === state.entries[state.idx];
@@ -140,7 +143,9 @@ async function quickSwitchCustom(
         if (matchesKey(data, Key.down)) {
           if (state.idx < state.entries.length - 1) {
             state = { ...state, idx: state.idx + 1 };
-            if (state.idx >= state.scroll + 10) state = { ...state, scroll: state.idx - 9 };
+            if (state.idx >= state.scroll + QUICK_VIEWPORT) {
+              state = { ...state, scroll: state.idx - (QUICK_VIEWPORT - 1) };
+            }
             tui.requestRender();
           }
           return;
@@ -191,7 +196,7 @@ async function quickSwitchCustom(
           })();
           return;
         }
-        if (matchesKey(data, Key.esc)) {
+        if (matchesKey(data, Key.escape)) {
           finish({ kind: "cancel" });
           return;
         }

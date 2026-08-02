@@ -69,6 +69,11 @@ export interface ThreeLevelPickOpts {
    * Drives the ⚙ badge.
    */
   hasOverride?: (provider: CcProvider, modelId?: string) => boolean;
+  /**
+   * Reopen state for the `o` override loop: land directly on the model column
+   * of this provider (model focused when given) instead of the type column.
+   */
+  resume?: { appType?: string; dbId: string; model?: string };
 }
 
 const MANUAL = "__manual__";
@@ -284,6 +289,29 @@ async function threeLevelCustom(
       if (opts.lastModel) {
         const mi = models0.findIndex((m) => m === opts.lastModel);
         if (mi >= 0) modelIdx = mi;
+      }
+    }
+
+    // Resume from the o-override loop: reopen directly at the model column.
+    if (opts.resume) {
+      const r = opts.resume;
+      const ti = allTabs.findIndex((t) =>
+        r.appType
+          ? t.appType === r.appType
+          : opts.providers.some((p) => p.id === r.dbId && p.appType === t.appType),
+      );
+      if (ti >= 0) {
+        const names = listNames(allTabs[ti].appType);
+        const ni = names.findIndex((p) => p.id === r.dbId);
+        if (ni >= 0) {
+          typeIdx = ti;
+          nameIdx = ni;
+          revealed = 2;
+          col = 2;
+          const models = listModels(names[ni]);
+          const mi = r.model ? models.findIndex((m) => m === r.model) : -1;
+          modelIdx = mi >= 0 ? mi : 0;
+        }
       }
     }
 

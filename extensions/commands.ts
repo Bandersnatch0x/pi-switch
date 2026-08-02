@@ -391,6 +391,8 @@ export async function runCommand(
   // First pass and each resume after override reloads config + DB snapshot once.
   // Remote model lists live here so they survive picker re-entry after `o`.
   const remoteCache = new Map<string, string[]>();
+  // After `o` the picker reopens at the model column of the edited provider.
+  let resume: { appType?: string; dbId: string; model?: string } | undefined;
   while (true) {
     rt.reloadConfig();
     const { providers: live, error: snapErr } = rt.refreshSnapshot();
@@ -409,6 +411,7 @@ export async function runCommand(
       preferredTab: sel?.tab ?? sel?.appType,
       lastDbId: sel?.dbId,
       lastModel: sel?.model,
+      resume,
       activePiName: activeProviderName(ctx),
       tabOrder: rt.config.tabs,
       pins: rt.config.pins,
@@ -442,6 +445,11 @@ export async function runCommand(
     // Override path: custom TUI already closed; open form outside (H1), then resume picker.
     if (picked.kind === "override") {
       await openProviderOverride(rt, lifecycle, ctx, picked.provider, picked.modelId);
+      resume = {
+        appType: picked.provider.appType,
+        dbId: picked.provider.id,
+        model: picked.modelId,
+      };
       continue;
     }
     if (picked.kind !== "ok") return;
