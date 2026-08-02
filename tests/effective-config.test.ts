@@ -47,7 +47,11 @@ function builtConfig(): BuiltProviderConfig {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 32_000,
-        thinkingFormat: "openai",
+        thinkingLevelMap: { high: "high" },
+        compat: {
+          thinkingFormat: "openai",
+          requiresReasoningContentOnAssistantMessages: true,
+        },
       },
     ],
   };
@@ -69,6 +73,8 @@ describe("effective config summary", () => {
     expect(text).toContain("apiKey=literal");
     expect(text).toContain("contextWindow=400000");
     expect(text).toContain("thinkingFormat=openai");
+    expect(text).toContain("thinkingLevelMap=1");
+    expect(text).toContain("requiresReasoningContentOnAssistantMessages=true");
     expect(text).not.toContain("literal-secret-value");
     expect(text).not.toContain("password");
     expect(text).not.toContain("token=secret");

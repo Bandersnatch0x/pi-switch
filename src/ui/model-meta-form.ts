@@ -28,6 +28,7 @@ import {
   matchExactModelOverride,
   matchModelOverride,
   MODEL_META_PRESETS,
+  type ModelMetaField,
   type ModelMetaPreset,
 } from "../model-meta.ts";
 import { THINKING_FORMATS } from "../types.ts";
@@ -84,7 +85,7 @@ export function scopeLabel(scope: ModelMetaScope): string {
   return scope.kind === "provider" ? "全部模型" : `模型 ${scope.modelId}`;
 }
 
-function fmtFieldValue(field: keyof ModelMetaOverride, value: boolean | number | string): string {
+function fmtFieldValue(field: ModelMetaField, value: boolean | number | string): string {
   if (typeof value === "number") return formatCount(value);
   return String(value);
 }
@@ -128,7 +129,7 @@ export function inheritedFor(
 }
 
 function ownInheritDefault(
-  field: keyof ModelMetaOverride,
+  field: ModelMetaField,
   draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,
@@ -143,7 +144,7 @@ function ownInheritDefault(
 }
 
 function fieldStateText(
-  field: keyof ModelMetaOverride,
+  field: ModelMetaField,
   draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,

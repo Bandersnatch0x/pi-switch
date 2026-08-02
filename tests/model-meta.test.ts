@@ -52,6 +52,39 @@ describe("cleanModelMeta", () => {
       }),
     ).toEqual({ thinkingFormat: "openai" });
   });
+  test("cleans thinkingLevelMap: keep null, trim strings, drop junk keys", () => {
+    expect(
+      cleanModelMeta({
+        thinkingLevelMap: {
+          minimal: "  high  ",
+          low: null,
+          medium: "",
+          high: "high",
+          nope: "x",
+        } as any,
+      }),
+    ).toEqual({
+      thinkingLevelMap: {
+        minimal: "high",
+        low: null,
+        high: "high",
+      },
+    });
+    expect(
+      cleanModelMeta({
+        thinkingLevelMap: { minimal: "   ", bad: 1 } as any,
+      }),
+    ).toBeUndefined();
+    expect(cleanModelMeta({ thinkingLevelMap: null as any })).toBeUndefined();
+  });
+  test("keeps requiresReasoningContentOnAssistantMessages boolean", () => {
+    expect(
+      cleanModelMeta({ requiresReasoningContentOnAssistantMessages: true }),
+    ).toEqual({ requiresReasoningContentOnAssistantMessages: true });
+    expect(
+      cleanModelMeta({ requiresReasoningContentOnAssistantMessages: "yes" as any }),
+    ).toBeUndefined();
+  });
   test("undefined for empty", () => {
     expect(cleanModelMeta({})).toBeUndefined();
     expect(cleanModelMeta(null)).toBeUndefined();
@@ -99,6 +132,26 @@ describe("mergeModelMeta", () => {
   });
   test("undefined when all layers empty", () => {
     expect(mergeModelMeta(undefined, {}, null as never)).toBeUndefined();
+  });
+  test("deep-merges thinkingLevelMap; higher null overwrites string", () => {
+    expect(
+      mergeModelMeta(
+        {
+          thinkingLevelMap: { minimal: "high", low: "high", medium: "high" },
+        },
+        {
+          thinkingLevelMap: { low: null, high: "high", xhigh: "max" },
+        },
+      ),
+    ).toEqual({
+      thinkingLevelMap: {
+        minimal: "high",
+        low: null,
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+      },
+    });
   });
 });
 

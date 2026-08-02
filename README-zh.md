@@ -311,14 +311,49 @@ defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides
 
 显式 `headers` 与预设冲突时，以 `headers` 为准。
 
-支持的 `modelMeta` 字段：
+支持的 `modelMeta` 字段（在 `pi-switch.json` 中扁平存储；注册时转换为 Pi 现代结构）：
 
 | 字段 | 说明 |
 | --- | --- |
 | `reasoning` | 是否允许 Pi 发送 reasoning/thinking 参数 |
-| `thinkingFormat` | 仅允许：`openai` / `openrouter` / `together` / `deepseek` / `zai` / `qwen` / `chat-template` / `qwen-chat-template` / `string-thinking` / `ant-ling` |
-| `contextWindow` | 上下文窗口 |
+| `thinkingFormat` | 仅允许：`openai` / `openrouter` / `together` / `deepseek` / `zai` / `qwen` / `chat-template` / `qwen-chat-template` / `string-thinking` / `ant-ling` → 注册为 `compat.thinkingFormat` |
+| `contextWindow` | 上下文窗口（影响 Pi compact 触发：`contextTokens > contextWindow - reserveTokens`） |
 | `maxTokens` | 最大输出 token |
+| `thinkingLevelMap` | 可选：Pi 思考档位（`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`）→ 上游 effort 字符串；`null` 表示不支持 → 注册到模型顶层 |
+| `requiresReasoningContentOnAssistantMessages` | OpenAI 兼容：助手消息回传空 `reasoning_content` → 注册到 `compat` |
+
+UI 只编辑四个标量字段（`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`）。`thinkingLevelMap` 等对象字段仅能通过配置文件或写入 API 设置。
+
+### DeepSeek V4 Flash 示例
+
+compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重新注册目标 Provider/模型，因此同一模型 ID 在不同 Provider 下可使用不同的 `contextWindow` 与 compat。推荐模型覆写：
+
+```json
+{
+  "providerOverrides": {
+    "<dbId>": {
+      "modelOverrides": {
+        "deepseek-v4-flash": {
+          "reasoning": true,
+          "contextWindow": 1000000,
+          "maxTokens": 384000,
+          "thinkingFormat": "deepseek",
+          "requiresReasoningContentOnAssistantMessages": true,
+          "thinkingLevelMap": {
+            "minimal": "high",
+            "low": "high",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+注册时输出顶层 `thinkingLevelMap` + 嵌套 `compat`（不再输出顶层 `thinkingFormat`）。模型 ID 上的 `[1M]` 标签只设置 `contextWindow=1000000`，**不**等同于完整 DeepSeek compat —— 请显式配置上述字段。
 
 保存后，若该 Provider 当前已激活，pi-switch 会立即重新注册，使覆写马上生效。
 

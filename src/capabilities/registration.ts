@@ -37,7 +37,8 @@ export function ccMetaFrom(
 
 /**
  * Resolve registration-facing model meta through the full capability chain.
- * Returns contextWindow / maxTokens / reasoning (and passthrough thinkingFormat).
+ * Returns contextWindow / maxTokens / reasoning, plus user-configured compat
+ * fields (thinkingFormat / thinkingLevelMap / requiresReasoningContent…).
  * vision has no registration surface (#15 D4) and is discarded.
  */
 export function resolveRegistrationMeta(input: {
@@ -82,8 +83,13 @@ export function resolveRegistrationMeta(input: {
     maxTokens: resolved.maxTokens.value,
     reasoning: resolved.reasoning.value,
   };
-  if (input.userMeta?.thinkingFormat) {
-    out.thinkingFormat = input.userMeta.thinkingFormat;
+  // Compat/effort fields come only from user config (not capability layers).
+  const user = input.userMeta;
+  if (user?.thinkingFormat) out.thinkingFormat = user.thinkingFormat;
+  if (user?.thinkingLevelMap) out.thinkingLevelMap = user.thinkingLevelMap;
+  if (typeof user?.requiresReasoningContentOnAssistantMessages === "boolean") {
+    out.requiresReasoningContentOnAssistantMessages =
+      user.requiresReasoningContentOnAssistantMessages;
   }
   return out;
 }

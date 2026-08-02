@@ -81,12 +81,42 @@ export interface PiSwitchMigrationMarker {
   migratedAt: string;
 }
 
-/** Per-provider model registration overrides (Pi model config fields). */
+/**
+ * Pi thinking-level keys (`ModelThinkingLevel` in pi-ai).
+ * Map values are provider-specific effort strings, or `null` to mark unsupported.
+ */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export type ThinkingLevelMap = Partial<Record<ThinkingLevel, string | null>>;
+
+export function isThinkingLevel(v: string): v is ThinkingLevel {
+  return (THINKING_LEVELS as readonly string[]).includes(v);
+}
+
+/**
+ * Per-provider model registration overrides (Pi model config fields).
+ * Stored flat in pi-switch.json; registration reshapes into Pi's
+ * top-level `thinkingLevelMap` + nested `compat` object.
+ */
 export interface ModelMetaOverride {
   reasoning?: boolean;
   thinkingFormat?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Maps pi thinking levels → provider effort strings (`null` = unsupported). */
+  thinkingLevelMap?: ThinkingLevelMap;
+  /** OpenAI-compat: replay empty reasoning_content on assistant turns. */
+  requiresReasoningContentOnAssistantMessages?: boolean;
 }
 
 /** Local pin of a provider+model pair (not an expose center). */

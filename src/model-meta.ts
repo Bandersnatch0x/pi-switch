@@ -13,8 +13,13 @@
  * Layers merge per field; a higher layer only overrides fields it sets.
  */
 
-import type { CcProvider, ModelMetaOverride, PiSwitchConfig } from "./types.ts";
-import { isThinkingFormat } from "./types.ts";
+import type {
+  CcProvider,
+  ModelMetaOverride,
+  PiSwitchConfig,
+  ThinkingLevelMap,
+} from "./types.ts";
+import { isThinkingFormat, THINKING_LEVELS } from "./types.ts";
 import { resolveProviderOverride } from "./provider-override.ts";
 
 export type ModelMetaPresetId = "relay-safe" | "full-reasoning";
@@ -62,6 +67,50 @@ export function getModelMetaPreset(id: string): ModelMetaPreset | undefined {
   return MODEL_META_PRESETS.find((p) => p.id === id);
 }
 
+/**
+ * Clean thinkingLevelMap: keep only known levels; values are trimmed non-empty
+ * strings or explicit `null`. Drop empty strings, arrays, and unknown keys.
+ */
+export function cleanThinkingLevelMap(
+  map: ThinkingLevelMap | null | undefined,
+): ThinkingLevelMap | undefined {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return undefined;
+  const out: ThinkingLevelMap = {};
+  for (const level of THINKING_LEVELS) {
+    if (!Object.prototype.hasOwnProperty.call(map, level)) continue;
+    const raw = map[level];
+    if (raw === null) {
+      out[level] = null;
+      continue;
+    }
+    if (typeof raw === "string") {
+      const v = raw.trim();
+      if (v) out[level] = v;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Deep-merge thinkingLevelMap left→right; higher-layer `null` overwrites strings. */
+export function mergeThinkingLevelMap(
+  ...layers: (ThinkingLevelMap | undefined)[]
+): ThinkingLevelMap | undefined {
+  const out: ThinkingLevelMap = {};
+  let any = false;
+  for (const layer of layers) {
+    const clean = cleanThinkingLevelMap(layer);
+    if (!clean) continue;
+    for (const [level, value] of Object.entries(clean) as [
+      keyof ThinkingLevelMap,
+      string | null,
+    ][]) {
+      out[level] = value;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
 /** Clean/normalize a modelMeta object; drop invalid fields. */
 export function cleanModelMeta(meta: ModelMetaOverride | null | undefined): ModelMetaOverride | undefined {
   if (!meta || typeof meta !== "object") return undefined;
@@ -78,22 +127,35 @@ export function cleanModelMeta(meta: ModelMetaOverride | null | undefined): Mode
   if (typeof meta.maxTokens === "number" && Number.isFinite(meta.maxTokens) && meta.maxTokens > 0) {
     cleaned.maxTokens = Math.floor(meta.maxTokens);
   }
+  if (typeof meta.requiresReasoningContentOnAssistantMessages === "boolean") {
+    cleaned.requiresReasoningContentOnAssistantMessages =
+      meta.requiresReasoningContentOnAssistantMessages;
+  }
+  const levelMap = cleanThinkingLevelMap(meta.thinkingLevelMap);
+  if (levelMap) cleaned.thinkingLevelMap = levelMap;
   return Object.keys(cleaned).length ? cleaned : undefined;
 }
 
 /**
  * Merge modelMeta layers left→right (right wins per field).
  * Unset fields never clobber a lower layer.
+ * `thinkingLevelMap` is deep-merged per level; higher-layer `null` overwrites.
  */
 export function mergeModelMeta(
   ...layers: (ModelMetaOverride | undefined)[]
 ): ModelMetaOverride | undefined {
   const out: ModelMetaOverride = {};
+  const mapLayers: (ThinkingLevelMap | undefined)[] = [];
   for (const layer of layers) {
     const clean = cleanModelMeta(layer);
     if (!clean) continue;
-    Object.assign(out, clean);
+    const { thinkingLevelMap, ...rest } = clean;
+    Object.assign(out, rest);
+    mapLayers.push(thinkingLevelMap);
   }
+  const mergedMap = mergeThinkingLevelMap(...mapLayers);
+  if (mergedMap) out.thinkingLevelMap = mergedMap;
+  else delete out.thinkingLevelMap;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -234,6 +296,14 @@ export function summarizeModelMeta(meta: ModelMetaOverride | undefined): string 
   if (meta.thinkingFormat) parts.push(`thinkingFormat=${meta.thinkingFormat}`);
   if (typeof meta.contextWindow === "number") parts.push(`ctx=${meta.contextWindow}`);
   if (typeof meta.maxTokens === "number") parts.push(`maxTokens=${meta.maxTokens}`);
+  if (meta.thinkingLevelMap) {
+    parts.push(`thinkingLevelMap=${Object.keys(meta.thinkingLevelMap).length}`);
+  }
+  if (typeof meta.requiresReasoningContentOnAssistantMessages === "boolean") {
+    parts.push(
+      `requiresReasoningContentOnAssistantMessages=${meta.requiresReasoningContentOnAssistantMessages}`,
+    );
+  }
   return parts.length ? parts.join(", ") : "默认协议档";
 }
 

@@ -16,7 +16,13 @@ export interface PiRegisterApi {
   setModel: (model: unknown) => boolean | Promise<boolean>;
 }
 
-/** Model config with per-api tiered meta (SPEC review #4). */
+/**
+ * Model config with per-api tiered meta (SPEC review #4).
+ * Flat pi-switch modelMeta is reshaped to Pi's modern layout:
+ *   - top-level thinkingLevelMap
+ *   - nested compat.thinkingFormat / compat.requiresReasoningContentOnAssistantMessages
+ * Legacy top-level thinkingFormat is never emitted.
+ */
 export function toModelConfig(
   modelId: string,
   api?: PiApi | null,
@@ -24,6 +30,12 @@ export function toModelConfig(
   meta?: ModelMetaOverride,
 ) {
   const tier = api ? API_MODEL_META[api] : undefined;
+  const compat: Record<string, unknown> = {};
+  if (meta?.thinkingFormat) compat.thinkingFormat = meta.thinkingFormat;
+  if (typeof meta?.requiresReasoningContentOnAssistantMessages === "boolean") {
+    compat.requiresReasoningContentOnAssistantMessages =
+      meta.requiresReasoningContentOnAssistantMessages;
+  }
   return {
     id: modelId,
     name: modelId,
@@ -32,7 +44,8 @@ export function toModelConfig(
     cost: DEFAULT_MODEL_META.cost,
     contextWindow: meta?.contextWindow ?? tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
     maxTokens: meta?.maxTokens ?? tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
-    ...(meta?.thinkingFormat ? { thinkingFormat: meta.thinkingFormat } : {}),
+    ...(meta?.thinkingLevelMap ? { thinkingLevelMap: meta.thinkingLevelMap } : {}),
+    ...(Object.keys(compat).length ? { compat } : {}),
   };
 }
 
