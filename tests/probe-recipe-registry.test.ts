@@ -192,7 +192,7 @@ describe("recipe registry (ticket 9)", () => {
   test("registerRecipeDefinitions rejects relay-specific without fixture", () => {
     const result = registerRecipeDefinitions([
       relaySpecificDef({
-        id: "client-fingerprint",
+        id: "relay-without-fixture",
         fixture: undefined,
       }),
     ]);
@@ -202,19 +202,36 @@ describe("recipe registry (ticket 9)", () => {
     expect(result.rejected[0]!.definition.fixture).toBeUndefined();
     expect(result.rejected[0]!.decision.admitted).toBe(false);
     // Must not appear in the live registry
-    expect(isRecipeAdmitted("client-fingerprint")).toBe(false);
+    expect(isRecipeAdmitted("relay-without-fixture")).toBe(false);
   });
 
   test("registerRecipeDefinitions admits relay-specific with fixture", () => {
-    const def = relaySpecificDef({ id: "client-fingerprint" });
+    const def = relaySpecificDef({ id: "relay-with-fixture" });
     const result = registerRecipeDefinitions([def]);
 
     expect(result.admitted).toHaveLength(1);
     expect(result.rejected).toHaveLength(0);
-    expect(isRecipeAdmitted("client-fingerprint")).toBe(true);
-    expect(getAdmittedRecipe("client-fingerprint")?.fixture?.id).toBe(
+    expect(isRecipeAdmitted("relay-with-fixture")).toBe(true);
+    expect(getAdmittedRecipe("relay-with-fixture")?.fixture?.id).toBe(
       "client-gate-claude-code-403",
     );
+  });
+
+  test("built-in Recipe2 client-fingerprint is relay-specific and admitted with fixture", () => {
+    const builtIn = DEFAULT_RECIPE_DEFINITIONS.find((d) => d.id === "client-fingerprint");
+    expect(builtIn).toBeDefined();
+    expect(builtIn!.class).toBe("relay-specific");
+    expect(builtIn!.patchScope).toBe("provider");
+    expect(builtIn!.signatureIds).toEqual(
+      expect.arrayContaining([
+        "client_gate_claude_code",
+        "client_gate_codex",
+        "client_gate_gemini",
+      ]),
+    );
+    expect(builtIn!.fixture?.id).toBeTruthy();
+    expect(evaluateRecipeGate(builtIn!).admitted).toBe(true);
+    expect(isRecipeAdmitted("client-fingerprint")).toBe(true);
   });
 
   test("matchRepairRecipes only uses admitted recipes (registry gate)", () => {

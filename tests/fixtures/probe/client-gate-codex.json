@@ -1,0 +1,9 @@
+{
+  "id": "client-gate-codex-403",
+  "description": "403 client-gate with distinctive Codex CLI UA / originator rejection body",
+  "httpStatus": 403,
+  "errorMessage": "Forbidden: only codex_cli_rs clients accepted; missing originator or X-Codex-Window-ID",
+  "expectedSignatureId": "client_gate_codex",
+  "expectedFingerprint": "codex",
+  "expectedCategory": "client-gate"
+}

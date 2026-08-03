@@ -176,11 +176,26 @@ export function evaluateContract(
 /**
  * Map a failed contract evaluation + HTTP status into a full ClassifiedFailure
  * (adds hardStop / unrepairable for 401/429/5xx).
+ *
+ * When error text uniquely maps to a client fingerprint gate, classify as
+ * `client-gate` (repairable) instead of generic auth/5xx unrepairable.
  */
 export function classifyStageFailure(
   evalResult: Extract<ContractEval, { ok: false }>,
   httpStatus?: number,
+  errorText?: string,
 ): ClassifiedFailure {
+  const gateText = errorText?.trim() || evalResult.summary;
+  const gate = detectUniqueClientGate(gateText);
+  if (gate) {
+    return {
+      category: "client-gate",
+      unrepairable: false,
+      hardStop: false,
+      summary: `client fingerprint gate: requires ${gate} identity`,
+    };
+  }
+
   if (httpStatus !== undefined) {
     const fromHttp = classifyHttpStatus(httpStatus);
     if (fromHttp) return fromHttp;
@@ -191,6 +206,75 @@ export function classifyStageFailure(
     hardStop: false,
     summary: evalResult.summary,
   };
+}
+
+// ── Ticket 5: unique client fingerprint gate detection ──────────────────────
+
+/** CLI fingerprint identity uniquely demanded by a client-gate rejection. */
+export type ClientGateFingerprint = "claude-code" | "codex" | "gemini";
+
+const CLIENT_GATE_SIGNATURE: Record<ClientGateFingerprint, string> = {
+  "claude-code": "client_gate_claude_code",
+  codex: "client_gate_codex",
+  gemini: "client_gate_gemini",
+};
+
+/**
+ * Detect a *unique* client fingerprint gate from free text (error body / summary).
+ *
+ * Returns the single mapped CLI identity when the wording is distinctive and
+ * maps to exactly one of Claude Code / Codex / Gemini. Returns undefined when
+ * ambiguous, multi-match, or non-distinctive (callers must not guess).
+ *
+ * Pure; used by signature resolution and stage classification.
+ */
+export function detectUniqueClientGate(
+  text: string | undefined,
+): ClientGateFingerprint | undefined {
+  if (!text || !text.trim()) return undefined;
+  const t = text.toLowerCase();
+
+  const hits: ClientGateFingerprint[] = [];
+
+  // Claude Code — distinctive UA / Agent SDK / anthropic client markers
+  if (
+    /\bclaude[-_ ]?cli\b/.test(t) ||
+    /\bclaude[-_ ]?code\b/.test(t) ||
+    /\bclaude agent\b/.test(t) ||
+    /\bagent sdk\b/.test(t) ||
+    /\banthropic-version\b/.test(t) ||
+    (/\bdevice_id\b/.test(t) && /\b(metadata|user_id|fingerprint)\b/.test(t))
+  ) {
+    hits.push("claude-code");
+  }
+
+  // Codex — distinctive codex_cli_rs / originator / window-id markers
+  if (
+    /\bcodex_cli(?:_rs)?\b/.test(t) ||
+    /\bcodex[-_ ]?cli\b/.test(t) ||
+    /\bx-codex-window-id\b/.test(t) ||
+    (/\boriginator\b/.test(t) && /\bcodex\b/.test(t))
+  ) {
+    hits.push("codex");
+  }
+
+  // Gemini — distinctive GeminiCLI / x-goog-api-client markers
+  if (
+    /\bgemini[-_ ]?cli\b/.test(t) ||
+    /\bx-goog-api-client\b/.test(t)
+  ) {
+    hits.push("gemini");
+  }
+
+  // Uniqueness: exactly one client family
+  if (hits.length !== 1) return undefined;
+  return hits[0];
+}
+
+export function clientGateSignatureId(
+  fingerprint: ClientGateFingerprint,
+): string {
+  return CLIENT_GATE_SIGNATURE[fingerprint];
 }
 
 // ── Ticket 2: durable normalized evidence ───────────────────────────────────
@@ -208,6 +292,10 @@ export type ProbeEvidenceSignatureId =
   | "contract_basic_no_text"
   | "contract_reasoning_empty"
   | "contract_tool_missing_echo"
+  | "reasoning_param_rejected"
+  | "client_gate_claude_code"
+  | "client_gate_codex"
+  | "client_gate_gemini"
   | "unknown";
 
 /**
@@ -366,6 +454,20 @@ export function resolveSignatureId(input: {
   if (stage.status === "stopped") return "stopped";
 
   const status = stage.httpStatus ?? input.observation?.response?.httpStatus;
+  const summary = stage.summary ?? "";
+  const err = input.observation?.response?.message?.errorMessage ?? "";
+  const rawBody =
+    typeof input.observation?.response?.rawBody === "string"
+      ? input.observation.response.rawBody
+      : "";
+  const combined = `${summary}\n${err}\n${rawBody}`;
+
+  // Unique client-gate fingerprints take precedence over generic HTTP status
+  // signatures (e.g. distinctive 403 must not collapse to http_auth_403).
+  const gate = detectUniqueClientGate(combined);
+  if (gate) {
+    return clientGateSignatureId(gate);
+  }
 
   if (status === 401) return "http_auth_401";
   if (status === 403) return "http_auth_403";
@@ -376,29 +478,28 @@ export function resolveSignatureId(input: {
   }
 
   // Contract-shaped failures with known summaries (no guessing beyond that)
-  const summary = (stage.summary ?? "").toLowerCase();
-  if (stage.category === "protocol" && summary.includes("no text content")) {
+  const summaryLower = summary.toLowerCase();
+  if (stage.category === "protocol" && summaryLower.includes("no text content")) {
     return "contract_basic_no_text";
   }
   if (
     stage.category === "protocol" &&
-    summary.includes("reasoning contract")
+    summaryLower.includes("reasoning contract")
   ) {
     return "contract_reasoning_empty";
   }
-  if (stage.category === "tool" && summary.includes("probe_echo")) {
+  if (stage.category === "tool" && summaryLower.includes("probe_echo")) {
     return "contract_tool_missing_echo";
   }
 
-  // Distinctive protocol error patterns (later recipes map these; still exact)
-  const err =
-    input.observation?.response?.message?.errorMessage?.toLowerCase() ?? "";
-  const combined = `${summary}\n${err}`;
+  // Distinctive protocol error patterns (Recipe 1)
+  const combinedLower = combined.toLowerCase();
   if (
-    /\b(reasoning|thinking)\b/.test(combined) &&
-    /\b(unsupported|not supported|unknown|invalid|unexpected)\b/.test(combined)
+    /\b(reasoning|thinking)\b/.test(combinedLower) &&
+    /\b(unsupported|not supported|unknown|invalid|unexpected)\b/.test(
+      combinedLower,
+    )
   ) {
-    // Exact-ish pattern for Recipe 1 later; still a durable signature only.
     return "reasoning_param_rejected";
   }
 
@@ -408,8 +509,17 @@ export function resolveSignatureId(input: {
 
 function categoryForStage(
   stage: ProbeStageResult,
+  signatureId: string,
 ): NormalizedEvidenceCategory {
   if (stage.status === "pass") return "ok";
+  // Unique client-gate signatures always surface as client-gate category.
+  if (
+    signatureId === "client_gate_claude_code" ||
+    signatureId === "client_gate_codex" ||
+    signatureId === "client_gate_gemini"
+  ) {
+    return "client-gate";
+  }
   if (stage.category) return stage.category;
   if (stage.status === "skip" || stage.status === "stopped") return "unknown";
   return "unknown";
@@ -433,7 +543,7 @@ export function normalizeStageEvidence(input: {
   const out: NormalizedStageEvidence = {
     contract: stage.contract,
     status: stage.status,
-    category: categoryForStage(stage),
+    category: categoryForStage(stage, signatureId),
     signatureId,
     allowedHeaderNames,
     summary,
@@ -444,7 +554,15 @@ export function normalizeStageEvidence(input: {
   else if (observation?.response?.httpStatus !== undefined) {
     out.httpStatus = observation.response.httpStatus;
   }
-  if (stage.unrepairable) out.unrepairable = true;
+  // Unique client-gate is repairable even when HTTP layer marked 403 unrepairable.
+  if (
+    stage.unrepairable &&
+    signatureId !== "client_gate_claude_code" &&
+    signatureId !== "client_gate_codex" &&
+    signatureId !== "client_gate_gemini"
+  ) {
+    out.unrepairable = true;
+  }
 
   return out;
 }

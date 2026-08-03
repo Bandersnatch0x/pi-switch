@@ -32,6 +32,16 @@ export interface ProbeTarget {
    * When false or omitted, the reasoning contract is skipped.
    */
   reasoning?: boolean;
+  /**
+   * Candidate-only CLI fingerprint preset (Recipe2 in-memory verify).
+   * Production transport may apply headers from this; pure engine ignores it.
+   */
+  fingerprint?: "claude-code" | "codex" | "gemini" | "none";
+  /**
+   * Candidate-only provider claudeCodeCompat force-on (Recipe2).
+   * Pure engine ignores it; production transport wires request-shape compat.
+   */
+  claudeCodeCompat?: boolean;
 }
 
 /**

@@ -171,7 +171,11 @@ export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult
       continue;
     }
 
-    const failure = classifyStageFailure(evaluation, transportResult.httpStatus);
+    const failure = classifyStageFailure(
+      evaluation,
+      transportResult.httpStatus,
+      transportResult.message.errorMessage,
+    );
     stages.push({
       contract,
       status: "fail",

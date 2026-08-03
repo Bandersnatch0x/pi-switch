@@ -72,10 +72,7 @@ export function buildRepairPlan(evidence: NormalizedProbeRunEvidence): RepairPla
       patches: recipes.map((r) => ({
         recipeId: r.recipeId,
         description: r.summary,
-        scope:
-          r.patch.scope === "model"
-            ? `model:${r.patch.modelId}`
-            : r.patch.scope,
+        scope: formatPatchScope(r.patch),
         affectedModels: [...r.affectedModels],
       })),
     },
@@ -323,6 +320,12 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
       target: repairedTarget,
     },
   };
+}
+
+function formatPatchScope(patch: RepairPatch): string {
+  if (patch.kind === "modelMeta") return `model:${patch.modelId}`;
+  if (patch.kind === "fingerprint") return `provider:${patch.provider}`;
+  return "unknown";
 }
 
 function formatPlanPreviewSummary(plan: RepairPlan): string {

@@ -205,8 +205,10 @@ describe("matchRepairRecipes / buildRepairPlan (ticket 4)", () => {
     expect(m.patch.kind).toBe("modelMeta");
     expect(m.patch.scope).toBe("model");
     expect(m.patch.provider).toBe(target.provider);
-    expect(m.patch.modelId).toBe(target.modelId);
-    expect(m.patch.modelMeta).toEqual({ reasoning: false });
+    if (m.patch.kind === "modelMeta") {
+      expect(m.patch.modelId).toBe(target.modelId);
+      expect(m.patch.modelMeta).toEqual({ reasoning: false });
+    }
     // Exact model only — never provider-level
     expect(m.patch).not.toHaveProperty("providerMeta");
     expect(m.affectedModels).toEqual([target.modelId]);

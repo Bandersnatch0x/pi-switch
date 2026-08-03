@@ -1,24 +1,29 @@
 /**
- * Repair Recipe matching (ticket 4 / #46, registry gate ticket 9 / #47).
+ * Repair Recipe matching (ticket 4 / #46, Recipe2 ticket 5 / #48, registry gate ticket 9 / #47).
  *
  * Whitelist only: exact evidence signatures → minimal Pi-side candidate.
  * Ambiguous evidence ("unknown") never matches. No LLM-generated recipes.
  * Only recipes admitted by the evidence gate (recipe-registry) may match.
  *
  * Recipe 1: reasoning/thinking param rejected → exact-model reasoning=false.
- * (Recipes 2–3 land in later tickets and must pass the gate first.)
+ * Recipe 2: unique client-gate signature → provider-level fingerprint/compat.
  */
 
 import type { NormalizedProbeRunEvidence, NormalizedStageEvidence } from "./evidence.ts";
+import {
+  type ClientGateFingerprint,
+  clientGateSignatureId,
+} from "./evidence.ts";
 import { isRecipeAdmitted } from "./recipe-registry.ts";
 import type { ProbeContractId, ProbeTarget } from "./types.ts";
 
-/** First-party recipe ids. Later tickets add fingerprint / gemini-tool. */
-export type RepairRecipeId = "reasoning-false";
+/** First-party recipe ids. */
+export type RepairRecipeId = "reasoning-false" | "client-fingerprint";
 
 /**
  * Minimal Pi-side config candidate produced by a recipe.
  * Model-field patches always use exact model scope (never provider / global).
+ * Fingerprint / compat flags use provider scope (never global).
  */
 export interface RepairPatchModelMeta {
   kind: "modelMeta";
@@ -29,7 +34,21 @@ export interface RepairPatchModelMeta {
   modelMeta: { reasoning: false };
 }
 
-export type RepairPatch = RepairPatchModelMeta;
+/** Provider-level fingerprint (+ optional Claude Code compat) candidate. */
+export interface RepairPatchProviderFingerprint {
+  kind: "fingerprint";
+  /** Provider only — never global config. */
+  scope: "provider";
+  provider: string;
+  fingerprint: ClientGateFingerprint;
+  /**
+   * When true, also force providerOverrides[provider].claudeCodeCompat=true
+   * (Claude Code request-shape gate; not set for codex/gemini).
+   */
+  claudeCodeCompat?: true;
+}
+
+export type RepairPatch = RepairPatchModelMeta | RepairPatchProviderFingerprint;
 
 /** One whitelist match from normalized evidence. */
 export interface RepairRecipeMatch {
@@ -51,6 +70,12 @@ export interface RepairRecipeMatch {
 
 const RECIPE1_SIGNATURE = "reasoning_param_rejected";
 
+const RECIPE2_SIGNATURE_TO_FINGERPRINT: Record<string, ClientGateFingerprint> = {
+  [clientGateSignatureId("claude-code")]: "claude-code",
+  [clientGateSignatureId("codex")]: "codex",
+  [clientGateSignatureId("gemini")]: "gemini",
+};
+
 /**
  * Contracts to verify after applying Recipe1 (reasoning=false).
  * Reasoning is skipped on the candidate target; prove basic (+ tool if present
@@ -59,6 +84,22 @@ const RECIPE1_SIGNATURE = "reasoning_param_rejected";
 function recipe1VerifyContracts(evidence: NormalizedProbeRunEvidence): ProbeContractId[] {
   const hasToolStage = evidence.stages.some((s) => s.contract === "tool");
   return hasToolStage ? ["basic", "tool"] : ["basic"];
+}
+
+/**
+ * Contracts to verify after applying Recipe2 (fingerprint).
+ * Re-run every non-skipped contract from the original plan (fingerprint is
+ * header-level; all contracts that were intended must pass under the candidate).
+ */
+function recipe2VerifyContracts(evidence: NormalizedProbeRunEvidence): ProbeContractId[] {
+  const out: ProbeContractId[] = [];
+  for (const s of evidence.stages) {
+    if (s.status === "skip") continue;
+    if (!out.includes(s.contract)) out.push(s.contract);
+  }
+  // Always include basic as the minimum gate check.
+  if (!out.includes("basic")) out.unshift("basic");
+  return out;
 }
 
 function matchRecipe1(
@@ -92,6 +133,47 @@ function matchRecipe1(
   };
 }
 
+function matchRecipe2(
+  stage: NormalizedStageEvidence,
+  target: ProbeTarget,
+  evidence: NormalizedProbeRunEvidence,
+): RepairRecipeMatch | undefined {
+  if (!isRecipeAdmitted("client-fingerprint")) return undefined;
+  if (stage.status !== "fail") return undefined;
+  if (stage.unrepairable) return undefined;
+
+  const fingerprint = RECIPE2_SIGNATURE_TO_FINGERPRINT[stage.signatureId];
+  // Non-unique / unknown / non-mapped signatures never produce a candidate.
+  if (!fingerprint) return undefined;
+
+  const patch: RepairPatchProviderFingerprint = {
+    kind: "fingerprint",
+    scope: "provider",
+    provider: target.provider,
+    fingerprint,
+  };
+  // Claude Code gates often need request-shape compat in addition to UA preset.
+  if (fingerprint === "claude-code") {
+    patch.claudeCodeCompat = true;
+  }
+
+  return {
+    recipeId: "client-fingerprint",
+    signatureId: stage.signatureId,
+    sourceContract: stage.contract,
+    verifyContracts: recipe2VerifyContracts(evidence),
+    patch,
+    // Provider-level fingerprint applies to all models on this provider.
+    affectedModels: [target.modelId],
+    summary:
+      fingerprint === "claude-code"
+        ? `Set providerOverrides["${target.provider}"].fingerprint="claude-code" ` +
+          `and claudeCodeCompat=true (unique client-gate signature)`
+        : `Set providerOverrides["${target.provider}"].fingerprint="${fingerprint}" ` +
+          `(unique client-gate signature; provider scope only)`,
+  };
+}
+
 /**
  * Match whitelist Repair Recipes against durable normalized evidence.
  * Returns zero or more matches in stage order; callers try at most one per run.
@@ -110,7 +192,11 @@ export function matchRepairRecipes(
       matches.push(r1);
       seen.add(r1.recipeId);
     }
-    // Future recipes register here (ticket 5 / 6) after passing the gate.
+    const r2 = matchRecipe2(stage, evidence.target, evidence);
+    if (r2 && !seen.has(r2.recipeId)) {
+      matches.push(r2);
+      seen.add(r2.recipeId);
+    }
   }
 
   return matches;
@@ -129,6 +215,13 @@ export function applyPatchToTarget(
       provider: target.provider,
       modelId: target.modelId,
       reasoning: false,
+    };
+  }
+  if (patch.kind === "fingerprint") {
+    return {
+      ...target,
+      fingerprint: patch.fingerprint,
+      ...(patch.claudeCodeCompat ? { claudeCodeCompat: true } : {}),
     };
   }
   return { ...target };

@@ -177,9 +177,39 @@ export const REASONING_FALSE_RECIPE_DEFINITION: RepairRecipeDefinition = {
   },
 };
 
+/**
+ * Built-in Recipe 2 — relay-specific client fingerprint (ticket 5 / #48).
+ * Only unique signatures (exactly one of Claude Code / Codex / Gemini) match;
+ * non-unique evidence stays unknown and is never admitted by matching.
+ */
+export const CLIENT_FINGERPRINT_RECIPE_DEFINITION: RepairRecipeDefinition = {
+  id: "client-fingerprint",
+  class: "relay-specific",
+  signatureIds: [
+    "client_gate_claude_code",
+    "client_gate_codex",
+    "client_gate_gemini",
+  ],
+  candidateSummary:
+    "Set provider-level fingerprint preset (and claudeCodeCompat for Claude Code) when client-gate signature uniquely maps to Claude Code / Codex / Gemini",
+  patchScope: "provider",
+  supportWindow: {
+    min: "0.3.0",
+    note: "fingerprint presets validated against defaults/fingerprint-snapshot.json baselines",
+  },
+  fixture: {
+    id: "client-gate-unique-signature",
+    description:
+      "Distinctive client-gate rejection body uniquely maps to Claude Code, Codex, or Gemini fingerprint",
+    path: "tests/fixtures/probe/client-gate-claude-code.json",
+  },
+  rollbackTested: true,
+};
+
 /** Default first-party definitions (pre-gate). */
 export const DEFAULT_RECIPE_DEFINITIONS: readonly RepairRecipeDefinition[] = [
   REASONING_FALSE_RECIPE_DEFINITION,
+  CLIENT_FINGERPRINT_RECIPE_DEFINITION,
 ];
 
 /**
