@@ -54,12 +54,12 @@ function makeIo(opts?: {
     execFileSync: (() => {
       throw new Error("no exec");
     }) as NodeIo["execFileSync"],
-    existsSync: fs.existsSync,
+    existsSync: fs.existsSync as NodeIo["existsSync"],
     readFileSync: fs.readFileSync as NodeIo["readFileSync"],
     writeFileSync: fs.writeFileSync as NodeIo["writeFileSync"],
-    renameSync: fs.renameSync,
-    unlinkSync: fs.unlinkSync,
-    randomUUID: () => "test-uuid",
+    renameSync: fs.renameSync as NodeIo["renameSync"],
+    unlinkSync: fs.unlinkSync as NodeIo["unlinkSync"],
+    randomUUID: () => "test-0000-0000-0000-uuid",
     resolvePackageVersion: () => undefined,
     snapshotPath: "/dev/null",
     probeHttp: async () => false,
