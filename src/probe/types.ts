@@ -34,7 +34,10 @@ export interface ProbeTarget {
   reasoning?: boolean;
 }
 
-/** Wide failure categories (normalized evidence; ticket 2 expands persistence). */
+/**
+ * Wide failure categories for normalized evidence.
+ * Durable evidence never stores prompts, response bodies, secrets, or query strings.
+ */
 export type ProbeFailureCategory =
   | "auth"
   | "model"

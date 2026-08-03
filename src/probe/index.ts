@@ -1,8 +1,8 @@
 /**
- * Compatibility Probe pure engine (issue #42 / ticket 1 #43).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–2).
  *
- * Seam for later tickets: evidence persistence (#44), doctor precheck (#45),
- * repair recipes (#46+). Transport is always injected.
+ * Seam for later tickets: doctor precheck (#45), repair recipes (#46+).
+ * Transport is always injected; evidence persistence is dual-layer Repair Case.
  */
 
 export {
@@ -38,6 +38,36 @@ export {
   classifyHttpStatus,
   classifyStageFailure,
   evaluateContract,
+  normalizeProbeRun,
+  normalizeStageEvidence,
+  pickAllowedHeaderNames,
+  redactProbeText,
+  resolveSignatureId,
 } from "./evidence.ts";
+export type {
+  ClassifiedFailure,
+  ContractEval,
+  NormalizeProbeRunInput,
+  NormalizedEvidenceCategory,
+  NormalizedProbeRunEvidence,
+  NormalizedStageEvidence,
+  ProbeEvidenceSignatureId,
+  RawProbeObservation,
+} from "./evidence.ts";
+export {
+  REPAIR_CASE_DETAIL_CUSTOM_TYPE,
+  REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
+  buildRepairCaseLayers,
+  createCaseId,
+  formatRepairCaseSummaryText,
+  projectRepairCaseIntoContext,
+} from "./repair-case.ts";
+export type {
+  RepairCaseDetailData,
+  RepairCaseDetailSessionEntry,
+  RepairCaseSessionLayers,
+  RepairCaseSummaryData,
+  RepairCaseSummarySessionEntry,
+} from "./repair-case.ts";
 export { runProbe } from "./engine.ts";
 export { formatProbeResultJson, formatProbeResultSummary } from "./format.ts";
