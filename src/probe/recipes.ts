@@ -1,14 +1,16 @@
 /**
- * Repair Recipe matching (ticket 4 / #46).
+ * Repair Recipe matching (ticket 4 / #46, registry gate ticket 9 / #47).
  *
  * Whitelist only: exact evidence signatures → minimal Pi-side candidate.
  * Ambiguous evidence ("unknown") never matches. No LLM-generated recipes.
+ * Only recipes admitted by the evidence gate (recipe-registry) may match.
  *
  * Recipe 1: reasoning/thinking param rejected → exact-model reasoning=false.
- * (Recipes 2–3 land in later tickets.)
+ * (Recipes 2–3 land in later tickets and must pass the gate first.)
  */
 
 import type { NormalizedProbeRunEvidence, NormalizedStageEvidence } from "./evidence.ts";
+import { isRecipeAdmitted } from "./recipe-registry.ts";
 import type { ProbeContractId, ProbeTarget } from "./types.ts";
 
 /** First-party recipe ids. Later tickets add fingerprint / gemini-tool. */
@@ -64,6 +66,8 @@ function matchRecipe1(
   target: ProbeTarget,
   evidence: NormalizedProbeRunEvidence,
 ): RepairRecipeMatch | undefined {
+  // Gate: only admitted registry entries may produce a match.
+  if (!isRecipeAdmitted("reasoning-false")) return undefined;
   if (stage.status !== "fail") return undefined;
   if (stage.signatureId !== RECIPE1_SIGNATURE) return undefined;
   if (stage.unrepairable) return undefined;
@@ -92,6 +96,7 @@ function matchRecipe1(
  * Match whitelist Repair Recipes against durable normalized evidence.
  * Returns zero or more matches in stage order; callers try at most one per run.
  * Unknown / ambiguous signatures produce no match.
+ * Recipes must be admitted by the evidence gate (ticket 9).
  */
 export function matchRepairRecipes(
   evidence: NormalizedProbeRunEvidence,
@@ -105,7 +110,7 @@ export function matchRepairRecipes(
       matches.push(r1);
       seen.add(r1.recipeId);
     }
-    // Future recipes register here (ticket 5 / 6) — still unique per id.
+    // Future recipes register here (ticket 5 / 6) after passing the gate.
   }
 
   return matches;

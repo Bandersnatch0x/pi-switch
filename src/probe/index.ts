@@ -1,7 +1,8 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–4).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–4, 9).
  *
- * Seam for later tickets: fingerprint / gemini recipes (#48–49), registry (#47).
+ * Seam for later tickets: fingerprint / gemini recipes (#48–49).
+ * Recipe registry + evidence gate (#47) admit whitelist recipes only.
  * Transport + doctor precheck + config store are always injectable; zero network in unit tests.
  */
 
@@ -95,6 +96,28 @@ export type {
   RepairRecipeId,
   RepairRecipeMatch,
 } from "./recipes.ts";
+export {
+  DEFAULT_RECIPE_DEFINITIONS,
+  REASONING_FALSE_RECIPE_DEFINITION,
+  admitRecipes,
+  createRecipeRegistry,
+  evaluateRecipeGate,
+  getAdmittedRecipe,
+  isRecipeAdmitted,
+  listAdmittedRecipes,
+  registerRecipeDefinitions,
+  resetRecipeRegistry,
+} from "./recipe-registry.ts";
+export type {
+  RecipeAdmitResult,
+  RecipeClass,
+  RecipeFixture,
+  RecipeGateDecision,
+  RecipePatchScope,
+  RecipeRegistry,
+  RecipeSupportWindow,
+  RepairRecipeDefinition,
+} from "./recipe-registry.ts";
 export { buildRepairPlan, runRepair } from "./repair.ts";
 export type {
   RepairConfigCommitInput,
