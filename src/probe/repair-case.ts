@@ -1,12 +1,14 @@
 /**
- * Repair Case dual-layer session records (ticket 2 / #44).
+ * Repair Case dual-layer session records (ticket 2 / #44)
+ * + session-context projection across Session Model switches (ticket 7 / #50).
  *
  * - custom_message: short redacted summary → enters model context
  * - custom: detailed normalized evidence → does NOT enter model context
  * Both layers share the same Case ID.
  *
- * Mirrors pi SessionManager entry shapes (CustomMessageEntry / CustomEntry)
- * without depending on the runtime session API.
+ * Mirrors pi SessionManager entry shapes (CustomMessageEntry / CustomEntry /
+ * model_change) and buildSessionContext rules without depending on the runtime
+ * session API. Session Model changes never mutate recorded Probe Targets.
  */
 
 import { redactProbeText, type NormalizedProbeRunEvidence } from "./evidence.ts";
@@ -206,5 +208,151 @@ export function projectRepairCaseIntoContext(layers: RepairCaseSessionLayers): {
       },
     ],
     excludedFromContext: [layers.detailEntry],
+  };
+}
+
+// ── Ticket 7: session transcript + model-context projection ─────────────────
+
+/** Session Model identity (independent of Probe Target). */
+export interface SessionModelRef {
+  provider: string;
+  modelId: string;
+}
+
+/**
+ * model_change entry shape (pi SessionManager.appendModelChange).
+ * Records Session Model switches; does not enter LLM message list as content
+ * but updates the active session model for the next request.
+ */
+export interface RepairCaseModelChangeEntry {
+  type: "model_change";
+  provider: string;
+  modelId: string;
+}
+
+/** Ordered session entries relevant to Repair Case context projection. */
+export type RepairCaseSessionTranscriptEntry =
+  | RepairCaseSummarySessionEntry
+  | RepairCaseDetailSessionEntry
+  | RepairCaseModelChangeEntry;
+
+/**
+ * In-memory session transcript for Repair Cases.
+ * Production wires the same dual-layer appends onto pi SessionManager;
+ * this pure store is the unit-test seam (zero network / zero disk).
+ */
+export interface RepairCaseSession {
+  /** Mutable ordered transcript (append-only by helpers). */
+  entries: RepairCaseSessionTranscriptEntry[];
+  /** Latest Session Model from model_change entries (or create-time seed). */
+  sessionModel?: SessionModelRef;
+}
+
+export interface CreateRepairCaseSessionOptions {
+  sessionModel?: SessionModelRef;
+}
+
+/** Create an empty Repair Case session transcript. */
+export function createRepairCaseSession(
+  options: CreateRepairCaseSessionOptions = {},
+): RepairCaseSession {
+  return {
+    entries: [],
+    ...(options.sessionModel !== undefined
+      ? { sessionModel: { ...options.sessionModel } }
+      : {}),
+  };
+}
+
+/**
+ * Append dual-layer Repair Case entries to the session transcript.
+ * Summary (custom_message) + detail (custom) share the case Case ID.
+ * Does not call setModel and does not mutate Session Model.
+ */
+export function recordRepairCase(
+  session: RepairCaseSession,
+  layers: RepairCaseSessionLayers,
+): void {
+  // Append order mirrors pi: message-like context entry then opaque custom state.
+  session.entries.push({
+    type: "custom_message",
+    customType: REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
+    content: layers.summaryEntry.content,
+    display: layers.summaryEntry.display,
+    details: { caseId: layers.summaryEntry.details.caseId },
+  });
+  session.entries.push({
+    type: "custom",
+    customType: REPAIR_CASE_DETAIL_CUSTOM_TYPE,
+    data: layers.detailEntry.data,
+  });
+}
+
+/**
+ * Record a Session Model switch (pi appendModelChange).
+ * Never mutates recorded Probe Targets or Repair Case detail.
+ */
+export function switchSessionModel(
+  session: RepairCaseSession,
+  provider: string,
+  modelId: string,
+): void {
+  session.entries.push({ type: "model_change", provider, modelId });
+  session.sessionModel = { provider, modelId };
+}
+
+export interface ProjectedSessionModelContext {
+  /** Messages the LLM would receive (custom_message only for Repair Cases). */
+  contextMessages: Array<{ role: "user"; content: string }>;
+  /** custom detail entries retained offline — never sent to the model. */
+  excludedFromContext: RepairCaseDetailSessionEntry[];
+  /** Latest Session Model after walking model_change entries. */
+  sessionModel?: SessionModelRef;
+}
+
+/**
+ * Project a session transcript into model context.
+ *
+ * Mirrors pi buildSessionContext rules for Repair Case entries:
+ * - custom_message → user text (enters context)
+ * - custom → ignored (detail stays out)
+ * - model_change → updates sessionModel only (no content message)
+ *
+ * Summaries remain visible after Session Model switches because they live on
+ * the session path, not on a per-model cache.
+ */
+export function projectSessionModelContext(
+  session: RepairCaseSession,
+): ProjectedSessionModelContext {
+  const contextMessages: Array<{ role: "user"; content: string }> = [];
+  const excludedFromContext: RepairCaseDetailSessionEntry[] = [];
+
+  // Replay transcript so projection is pure over entries.
+  // model_change entries are the source of truth for Session Model; fall back
+  // to the create-time seed when no switch has been recorded yet.
+  const hasModelChange = session.entries.some((e) => e.type === "model_change");
+  let sessionModel: SessionModelRef | undefined =
+    !hasModelChange && session.sessionModel
+      ? { ...session.sessionModel }
+      : undefined;
+
+  for (const entry of session.entries) {
+    if (entry.type === "custom_message") {
+      contextMessages.push({ role: "user", content: entry.content });
+      continue;
+    }
+    if (entry.type === "custom") {
+      excludedFromContext.push(entry);
+      continue;
+    }
+    if (entry.type === "model_change") {
+      sessionModel = { provider: entry.provider, modelId: entry.modelId };
+    }
+  }
+
+  return {
+    contextMessages,
+    excludedFromContext,
+    ...(sessionModel !== undefined ? { sessionModel } : {}),
   };
 }

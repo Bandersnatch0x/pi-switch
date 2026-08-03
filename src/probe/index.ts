@@ -1,8 +1,9 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–6, 9).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–7, 9).
  *
  * Recipe registry + evidence gate (#47) admit whitelist recipes only.
  * Recipe3 gemini tool compat (#49) enables per-provider geminiToolCompat.
+ * Repair Case session context (#50) projects short summaries after Session Model switches.
  * Transport + doctor precheck + config store are always injectable; zero network in unit tests.
  */
 
@@ -66,15 +67,25 @@ export {
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
   buildRepairCaseLayers,
   createCaseId,
+  createRepairCaseSession,
   formatRepairCaseSummaryText,
   projectRepairCaseIntoContext,
+  projectSessionModelContext,
+  recordRepairCase,
+  switchSessionModel,
 } from "./repair-case.ts";
 export type {
+  CreateRepairCaseSessionOptions,
+  ProjectedSessionModelContext,
   RepairCaseDetailData,
   RepairCaseDetailSessionEntry,
+  RepairCaseModelChangeEntry,
+  RepairCaseSession,
   RepairCaseSessionLayers,
+  RepairCaseSessionTranscriptEntry,
   RepairCaseSummaryData,
   RepairCaseSummarySessionEntry,
+  SessionModelRef,
 } from "./repair-case.ts";
 export {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
