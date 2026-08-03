@@ -1042,7 +1042,7 @@ async function threeLevelFallback(
   const provider = names[nameLabels.indexOf(namePick)];
   if (!provider || !isSwitchable(provider)) return { kind: "cancel" };
 
-  const models = [...provider.configModels, "✎ 手动输入", "↻ 刷新模型"];
+  const models = [...mergeModelLists(provider.configModels, []), "✎ 手动输入", "↻ 刷新模型"];
   const modelPick = await ctx.ui.select(`选择模型 · ${provider.displayName}`, models);
   if (!modelPick) return { kind: "cancel" };
   if (modelPick === "↻ 刷新模型") {
@@ -1050,8 +1050,7 @@ async function threeLevelFallback(
       try {
         const ids = await opts.fetchRemote(provider);
         const again = await ctx.ui.select(`选择模型 · ${provider.displayName}`, [
-          ...ids,
-          ...provider.configModels,
+          ...mergeModelLists(provider.configModels, ids),
           "✎ 手动输入",
         ]);
         if (!again) return { kind: "cancel" };
