@@ -1,8 +1,8 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–3).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–4).
  *
- * Seam for later tickets: repair recipes (#46+).
- * Transport + doctor precheck are always injectable; zero network in unit tests.
+ * Seam for later tickets: fingerprint / gemini recipes (#48–49), registry (#47).
+ * Transport + doctor precheck + config store are always injectable; zero network in unit tests.
  */
 
 export {
@@ -85,3 +85,27 @@ export type {
 } from "./precheck.ts";
 export { runProbe } from "./engine.ts";
 export { formatProbeResultJson, formatProbeResultSummary } from "./format.ts";
+export {
+  applyPatchToTarget,
+  matchRepairRecipes,
+} from "./recipes.ts";
+export type {
+  RepairPatch,
+  RepairPatchModelMeta,
+  RepairRecipeId,
+  RepairRecipeMatch,
+} from "./recipes.ts";
+export { buildRepairPlan, runRepair } from "./repair.ts";
+export type {
+  RepairConfigCommitInput,
+  RepairConfigCommitResult,
+  RepairConfigSnapshot,
+  RepairConfigStore,
+  RepairMode,
+  RepairOutcome,
+  RepairPlan,
+  RepairPlanPreview,
+  RepairPlanPreviewPatch,
+  RepairSwitchAction,
+  RunRepairOptions,
+} from "./repair.ts";
