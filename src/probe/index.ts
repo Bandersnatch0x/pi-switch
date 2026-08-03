@@ -1,9 +1,11 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–7, 9).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–9).
  *
  * Recipe registry + evidence gate (#47) admit whitelist recipes only.
  * Recipe3 gemini tool compat (#49) enables per-provider geminiToolCompat.
  * Repair Case session context (#50) projects short summaries after Session Model switches.
+ * Target pick + post-success switch action (#51) default/reselect without setModel;
+ * explicit repaired-target switch routes through injected lifecycle activate.
  * Transport + doctor precheck + config store are always injectable; zero network in unit tests.
  */
 
@@ -151,3 +153,35 @@ export type {
   RepairSwitchAction,
   RunRepairOptions,
 } from "./repair.ts";
+export {
+  defaultProbeTargetHighlight,
+  findProviderForProbeTarget,
+  resolveProbeTarget,
+  selectProbeTarget,
+} from "./target-pick.ts";
+export type {
+  DefaultProbeTargetHighlightInput,
+  ExplicitProbeTargetPick,
+  OnSetModelSpy,
+  ProbeTargetEnrichment,
+  ProbeTargetPickHint,
+  ProbeTargetSource,
+  ResolveProbeTargetErr,
+  ResolveProbeTargetInput,
+  ResolveProbeTargetOk,
+  ResolveProbeTargetReason,
+  ResolveProbeTargetResult,
+  SelectProbeTargetOptions,
+} from "./target-pick.ts";
+export {
+  executeRepairSwitchAction,
+  hasRepairSwitchAction,
+} from "./switch-action.ts";
+export type {
+  ExecuteRepairSwitchDeps,
+  ExecuteRepairSwitchErr,
+  ExecuteRepairSwitchOk,
+  ExecuteRepairSwitchResult,
+  LifecycleActivationResult,
+  LifecycleSwitchTarget,
+} from "./switch-action.ts";
