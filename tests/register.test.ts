@@ -160,4 +160,137 @@ describe("buildProviderConfig", () => {
     expect(m.reasoning).toBe(true);
     expect(m.contextWindow).toBe(200_000);
   });
+
+  test("[1M] tag sets contextWindow=1M without polluting maxTokens/reasoning", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      { rules: [] },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.contextWindow).toBe(1_000_000);
+    expect(m.maxTokens).toBe(32_000);
+    expect(m.reasoning).toBe(false);
+  });
+
+  test("lowercase [1m] also hits", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1m]"],
+      { rules: [] },
+    );
+    expect((cfg?.models as any[])[0].contextWindow).toBe(1_000_000);
+  });
+
+  test("sibling without tag keeps protocol tier window", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]", "deepseek-v4-flash"],
+      { rules: [] },
+    );
+    const models = cfg?.models as any[];
+    expect(models[0].contextWindow).toBe(1_000_000);
+    expect(models[1].contextWindow).toBe(128_000);
+  });
+
+  test("user modelMeta.contextWindow beats [1M] tag", () => {
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      { rules: [], modelMeta: { contextWindow: 512_000 } },
+    );
+    expect((cfg?.models as any[])[0].contextWindow).toBe(512_000);
+  });
+
+  test("[1M] tag beats models.dev 200k; lookup key is tagged id", () => {
+    const seen: string[] = [];
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash[1M]"],
+      {
+        rules: [],
+        modelsDevFor: (id) => {
+          seen.push(id);
+          return {
+            contextWindow: 200_000,
+            maxTokens: 8_192,
+            reasoning: false,
+            observedAt: "2026-07-31T00:00:00Z",
+            source: "models-dev",
+          };
+        },
+      },
+    );
+    expect(seen).toEqual(["deepseek-v4-flash[1M]"]);
+    const m = (cfg?.models as any[])[0];
+    expect(m.contextWindow).toBe(1_000_000);
+    // maxTokens still from models.dev (tag only sets contextWindow)
+    expect(m.maxTokens).toBe(8_192);
+  });
+
+  test("DeepSeek V4 Flash meta registers as thinkingLevelMap + nested compat", () => {
+    const deepseekMeta = {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      thinkingFormat: "deepseek",
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingLevelMap: {
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+      },
+    };
+    const cfg = buildProviderConfig(
+      mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
+      ["deepseek-v4-flash"],
+      { rules: [], modelMeta: deepseekMeta },
+    );
+    const m = (cfg?.models as any[])[0];
+    expect(m.reasoning).toBe(true);
+    expect(m.contextWindow).toBe(1_000_000);
+    expect(m.maxTokens).toBe(384_000);
+    expect(m.thinkingLevelMap).toEqual(deepseekMeta.thinkingLevelMap);
+    expect(m.compat).toEqual({
+      thinkingFormat: "deepseek",
+      requiresReasoningContentOnAssistantMessages: true,
+    });
+    // Never emit legacy top-level thinkingFormat
+    expect(m.thinkingFormat).toBeUndefined();
+  });
+
+  test("same model id can register different windows/compat via modelMetaFor", () => {
+    const cfgA = buildProviderConfig(
+      mk({ id: "a", appType: "hermes", api: "openai-completions", displayName: "relay-a" }),
+      ["deepseek-v4-flash"],
+      {
+        rules: [],
+        modelMeta: {
+          contextWindow: 1_000_000,
+          thinkingFormat: "deepseek",
+          requiresReasoningContentOnAssistantMessages: true,
+        },
+      },
+    );
+    const cfgB = buildProviderConfig(
+      mk({ id: "b", appType: "hermes", api: "openai-completions", displayName: "relay-b" }),
+      ["deepseek-v4-flash"],
+      {
+        rules: [],
+        modelMeta: { contextWindow: 128_000, thinkingFormat: "openai" },
+      },
+    );
+    const a = (cfgA?.models as any[])[0];
+    const b = (cfgB?.models as any[])[0];
+    expect(a.id).toBe(b.id);
+    expect(a.contextWindow).toBe(1_000_000);
+    expect(a.compat).toEqual({
+      thinkingFormat: "deepseek",
+      requiresReasoningContentOnAssistantMessages: true,
+    });
+    expect(b.contextWindow).toBe(128_000);
+    expect(b.compat).toEqual({ thinkingFormat: "openai" });
+  });
 });

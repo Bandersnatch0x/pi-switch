@@ -199,6 +199,60 @@ describe("provider modelMeta overrides", () => {
     expect(raw.providerOverrides.abc.modelMeta.thinkingFormat).toBe("deepseek");
   });
 
+  test("writeProviderModelMeta accepts full DeepSeek meta", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const meta = {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      thinkingFormat: "deepseek",
+      requiresReasoningContentOnAssistantMessages: true,
+      thinkingLevelMap: {
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+      },
+    };
+    const r = writeProviderModelMeta(
+      fs,
+      "/c.json",
+      { id: "ds", displayName: "deepseek" },
+      meta,
+      1,
+    );
+    expect(r.ok).toBe(true);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(raw.providerOverrides.ds.modelMeta).toEqual(meta);
+  });
+
+  test("writeProviderModelMeta rejects invalid thinkingLevelMap key", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const r = writeProviderModelMeta(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "x" },
+      { thinkingLevelMap: { nope: "high" } as any },
+      1,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("invalid thinkingLevelMap key");
+  });
+
+  test("writeProviderModelMeta rejects invalid thinkingLevelMap value", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const r = writeProviderModelMeta(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "x" },
+      { thinkingLevelMap: { minimal: "  " } },
+      1,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("invalid thinkingLevelMap value");
+  });
+
   test("writeProviderModelMeta drops empty shell when only invalid-empty meta", () => {
     const fs = memFs({
       "/c.json": JSON.stringify({

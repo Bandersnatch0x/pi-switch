@@ -313,14 +313,49 @@ Optional `fingerprint` field forces a CLI disguise preset regardless of protocol
 
 Explicit `headers` always win over the preset on conflicts.
 
-Supported `modelMeta` fields:
+Supported `modelMeta` fields (stored flat in `pi-switch.json`; registration reshapes into Pi's modern layout):
 
 | Field | Description |
 | --- | --- |
 | `reasoning` | Whether Pi may send reasoning/thinking parameters |
-| `thinkingFormat` | One of: `openai` / `openrouter` / `together` / `deepseek` / `zai` / `qwen` / `chat-template` / `qwen-chat-template` / `string-thinking` / `ant-ling` |
-| `contextWindow` | Context window size |
+| `thinkingFormat` | One of: `openai` / `openrouter` / `together` / `deepseek` / `zai` / `qwen` / `chat-template` / `qwen-chat-template` / `string-thinking` / `ant-ling` → registered as `compat.thinkingFormat` |
+| `contextWindow` | Context window size (drives Pi compact: `contextTokens > contextWindow - reserveTokens`) |
 | `maxTokens` | Max output tokens |
+| `thinkingLevelMap` | Optional map of Pi levels (`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`) → provider effort strings, or `null` for unsupported → registered top-level |
+| `requiresReasoningContentOnAssistantMessages` | OpenAI-compat: require empty `reasoning_content` on assistant turns → registered under `compat` |
+
+The UI only edits the four scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`). Object fields such as `thinkingLevelMap` are config-only (edit `pi-switch.json` or call the write APIs).
+
+### DeepSeek V4 Flash example
+
+Compact is executed by Pi itself; pi-switch does not compress sessions. Per-switch registration means the same model id can use different `contextWindow` / compat under different providers. A recommended model override:
+
+```json
+{
+  "providerOverrides": {
+    "<dbId>": {
+      "modelOverrides": {
+        "deepseek-v4-flash": {
+          "reasoning": true,
+          "contextWindow": 1000000,
+          "maxTokens": 384000,
+          "thinkingFormat": "deepseek",
+          "requiresReasoningContentOnAssistantMessages": true,
+          "thinkingLevelMap": {
+            "minimal": "high",
+            "low": "high",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+At register time this becomes Pi model config with top-level `thinkingLevelMap` and nested `compat` (no top-level `thinkingFormat`). The `[1M]` model-id tag only sets `contextWindow=1000000`; it does **not** imply DeepSeek compat — set the fields above explicitly.
 
 After save, if the provider is currently active, pi-switch re-registers it so the override applies immediately.
 

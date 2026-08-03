@@ -20,6 +20,7 @@ import {
   matchExactModelOverride,
   matchModelOverride,
   MODEL_META_PRESETS,
+  type ModelMetaField,
   type ModelMetaPreset,
 } from "../model-meta.ts";
 
@@ -87,7 +88,7 @@ export function parseCount(raw: string): number | undefined | typeof NaN {
 }
 
 function fmtFieldValue(
-  field: keyof ModelMetaOverride,
+  field: ModelMetaField,
   value: boolean | number | string,
 ): string {
   if (typeof value === "number") return formatCount(value);
@@ -157,7 +158,7 @@ export async function runModelMetaDialog(
 
   /** Row label for one field: 覆写 / 继承 / 默认. */
   const fieldRow = (
-    field: keyof ModelMetaOverride,
+    field: ModelMetaField,
     inherited: ModelMetaOverride | undefined,
   ): string => {
     const own = draft[field];

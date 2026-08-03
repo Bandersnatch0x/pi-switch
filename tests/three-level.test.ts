@@ -74,6 +74,125 @@ describe("three-level data wiring", () => {
   });
 });
 
+describe("fallback model list filters bracket-1M via mergeModelLists (#40)", () => {
+  /** Scripted select: pick type/name, capture model options, optional later answers. */
+  function rpcFallbackCtx(opts: {
+    /** Return value for each select after type+name; args[1] recorded on model selects. */
+    modelAnswers: Array<string | undefined | ((options: string[]) => string | undefined)>;
+    inputAnswer?: string | undefined;
+  }): {
+    ctx: PiSwitchCtx;
+    modelOptionSnapshots: string[][];
+  } {
+    const modelOptionSnapshots: string[][] = [];
+    let modelSelectIdx = 0;
+    let stage: "type" | "name" | "model" = "type";
+    const ctx = {
+      mode: "rpc",
+      ui: {
+        custom: async () => undefined,
+        select: async (_title: string, options: string[]) => {
+          if (stage === "type") {
+            stage = "name";
+            return options[0];
+          }
+          if (stage === "name") {
+            stage = "model";
+            return options[0];
+          }
+          modelOptionSnapshots.push([...options]);
+          const answer = opts.modelAnswers[modelSelectIdx++];
+          if (typeof answer === "function") return answer(options);
+          return answer;
+        },
+        input: async () => opts.inputAnswer,
+      },
+    } as unknown as PiSwitchCtx;
+    return { ctx, modelOptionSnapshots };
+  }
+
+  test("initial list hides bracket-tagged ids", async () => {
+    const provider = mk({
+      id: "1",
+      displayName: "alpha",
+      appType: "claude",
+      configModels: ["foo", "foo[1M]"],
+    });
+    const { ctx, modelOptionSnapshots } = rpcFallbackCtx({
+      modelAnswers: [undefined],
+    });
+    const result = await threeLevelPick(ctx, { providers: [provider] });
+    expect(result).toEqual({ kind: "cancel" });
+    expect(modelOptionSnapshots).toHaveLength(1);
+    const options = modelOptionSnapshots[0];
+    expect(options).toContain("foo");
+    expect(options).not.toContain("foo[1M]");
+    expect(options).toContain("✎ 手动输入");
+    expect(options).toContain("↻ 刷新模型");
+  });
+
+  test("all bracket-tagged config still leaves manual/refresh escape hatches", async () => {
+    const provider = mk({
+      id: "1",
+      displayName: "alpha",
+      appType: "claude",
+      configModels: ["only[1M]"],
+    });
+    const { ctx, modelOptionSnapshots } = rpcFallbackCtx({
+      modelAnswers: [undefined],
+    });
+    await threeLevelPick(ctx, { providers: [provider] });
+    expect(modelOptionSnapshots[0]).toEqual(["✎ 手动输入", "↻ 刷新模型"]);
+  });
+
+  test("refresh merges remote with config priority and drops tags", async () => {
+    const provider = mk({
+      id: "1",
+      displayName: "alpha",
+      appType: "claude",
+      configModels: ["c"],
+    });
+    const { ctx, modelOptionSnapshots } = rpcFallbackCtx({
+      modelAnswers: ["↻ 刷新模型", undefined],
+    });
+    await threeLevelPick(ctx, {
+      providers: [provider],
+      fetchRemote: async () => ["a", "a[1M]"],
+    });
+    expect(modelOptionSnapshots).toHaveLength(2);
+    expect(modelOptionSnapshots[1]).toEqual(["c", "a", "✎ 手动输入"]);
+  });
+
+  test("manual input still accepts bracket-tagged id", async () => {
+    const provider = mk({
+      id: "1",
+      displayName: "alpha",
+      appType: "claude",
+      configModels: ["foo"],
+    });
+    const { ctx } = rpcFallbackCtx({
+      modelAnswers: ["✎ 手动输入"],
+      inputAnswer: "x[1M]",
+    });
+    const result = await threeLevelPick(ctx, { providers: [provider] });
+    expect(result).toEqual({ kind: "ok", provider, modelId: "x[1M]" });
+  });
+
+  test("selecting a plain id returns it unchanged", async () => {
+    const provider = mk({
+      id: "1",
+      displayName: "alpha",
+      appType: "claude",
+      configModels: ["plain-model", "plain-model[1M]"],
+    });
+    const { ctx } = rpcFallbackCtx({
+      modelAnswers: ["plain-model"],
+    });
+    const result = await threeLevelPick(ctx, { providers: [provider] });
+    expect(result).toEqual({ kind: "ok", provider, modelId: "plain-model" });
+  });
+});
+
 describe("popPickerLevel (Esc stack)", () => {
   test("pops model → name → type-only → exit", () => {
     expect(popPickerLevel({ revealed: 2, col: 2 })).toEqual({

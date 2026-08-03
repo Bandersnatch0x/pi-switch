@@ -1,8 +1,9 @@
 /**
- * Model capability resolution (issue #15 D1-D3, W4).
+ * Model capability resolution (issue #15 D1-D3, W4; issue #36 id-tag + host).
  *
  * Deterministic priority, no silent merging:
- *   user override > models.dev (fetchedAt) > cc meta (transport) > protocol default
+ *   user override > model id tag > host adaptation (anyrouter) >
+ *   models.dev (fetchedAt) > cc meta (transport) > protocol default
  * Lower-layer disagreements surface as conflicts (WARN in doctor). User
  * overrides never conflict (documented resolution). Stale models.dev facts
  * keep last-good and are flagged (TTL = compat window).
@@ -17,6 +18,8 @@ export type CapabilityMeta = ModelMetaOverride & { vision?: boolean };
 
 export type CapabilitySource =
   | "user-override"
+  | "model-id-tag"
+  | "host-adaptation"
   | "models-dev"
   | "cc-meta"
   | "protocol-default";
@@ -48,6 +51,8 @@ export interface ResolvedCapabilities {
 
 interface LayerInputs {
   user?: CapabilityMeta | undefined;
+  idTag?: CapabilityMeta | undefined;
+  hostAdaptation?: CapabilityMeta | undefined;
   modelsDev?: ModelsDevCapabilities | undefined;
   ccMeta?: CapabilityMeta | undefined;
   defaults?: CapabilityMeta | undefined;
@@ -84,6 +89,8 @@ export function resolveModelCapabilities(input: LayerInputs): ResolvedCapabiliti
   const layersFor = <T>(field: "contextWindow" | "maxTokens" | "reasoning" | "vision") => {
     const layers: Array<{ value: T | undefined; source: CapabilitySource; fetchedAt?: string }> = [
       { value: input.user?.[field] as T | undefined, source: "user-override" },
+      { value: input.idTag?.[field] as T | undefined, source: "model-id-tag" },
+      { value: input.hostAdaptation?.[field] as T | undefined, source: "host-adaptation" },
       { value: md?.[field] as T | undefined, source: "models-dev", fetchedAt: mdFetched },
       { value: input.ccMeta?.[field] as T | undefined, source: "cc-meta" },
       { value: input.defaults?.[field] as T | undefined, source: "protocol-default" },

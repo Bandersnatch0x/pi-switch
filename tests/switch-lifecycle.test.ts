@@ -119,6 +119,7 @@ function setup(options?: {
   };
 
   const config: PiSwitchConfig = { recentLimit: 5 };
+  const scheduleCalls: string[] = [];
   const runtime = {
     home,
     state: createLocalState({ fs, home, pid: 1 }),
@@ -136,7 +137,12 @@ function setup(options?: {
     headerVars: () => ({}),
     rejectSink: () => undefined,
     modelMetaFor: () => undefined,
-  } as unknown as Runtime;
+    modelsDevFor: () => undefined,
+    scheduleModelsDevRefresh: (modelId: string) => {
+      scheduleCalls.push(modelId);
+    },
+    scheduleCalls,
+  } as unknown as Runtime & { scheduleCalls: string[] };
 
   const ctx = {
     modelRegistry: {
@@ -195,6 +201,32 @@ describe("switch lifecycle interface", () => {
       model: "gpt-5",
     });
     expect(state.runtime.registeredPsNames).toEqual(["ps-codex-new"]);
+  });
+
+  test("activate success schedules models.dev refresh once with modelId (#39)", async () => {
+    const state = setup();
+    await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "selection" },
+      state.ctx,
+    );
+    const calls = (state.runtime as unknown as { scheduleCalls: string[] }).scheduleCalls;
+    expect(calls).toEqual(["gpt-5"]);
+  });
+
+  test("activate register failure does not schedule models.dev refresh (#39)", async () => {
+    const state = setup({
+      selection: { dbId: "old", model: "old-model" },
+    });
+    await state.lifecycle.activate(
+      {
+        provider: provider({ api: null, parseError: "unsupported apiFormat: magic" }),
+        modelId: "gpt-5",
+        commit: "selection",
+      },
+      state.ctx,
+    );
+    const calls = (state.runtime as unknown as { scheduleCalls: string[] }).scheduleCalls;
+    expect(calls).toEqual([]);
   });
 
   test("non-switchable provider fails at register without touching pi state", async () => {

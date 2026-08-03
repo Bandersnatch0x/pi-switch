@@ -1,13 +1,12 @@
 import type { CcProvider, ModelMetaOverride, PiApi } from "./types.ts";
 import { API_MODEL_META, DEFAULT_MODEL_META } from "./types.ts";
-import {
-  applyAnyrouterHeaders,
-  applyAnyrouterModelMeta,
-} from "./headers/anyrouter.ts";
+import { applyAnyrouterHeaders } from "./headers/anyrouter.ts";
 import { applyCodexWindowId } from "./headers/codex.ts";
 import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
+import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
+import { resolveRegistrationMeta } from "./capabilities/registration.ts";
 
 /** Minimal ExtensionAPI surface used by register helpers. */
 export interface PiRegisterApi {
@@ -17,7 +16,13 @@ export interface PiRegisterApi {
   setModel: (model: unknown) => boolean | Promise<boolean>;
 }
 
-/** Model config with per-api tiered meta (SPEC review #4). */
+/**
+ * Model config with per-api tiered meta (SPEC review #4).
+ * Flat pi-switch modelMeta is reshaped to Pi's modern layout:
+ *   - top-level thinkingLevelMap
+ *   - nested compat.thinkingFormat / compat.requiresReasoningContentOnAssistantMessages
+ * Legacy top-level thinkingFormat is never emitted.
+ */
 export function toModelConfig(
   modelId: string,
   api?: PiApi | null,
@@ -25,6 +30,12 @@ export function toModelConfig(
   meta?: ModelMetaOverride,
 ) {
   const tier = api ? API_MODEL_META[api] : undefined;
+  const compat: Record<string, unknown> = {};
+  if (meta?.thinkingFormat) compat.thinkingFormat = meta.thinkingFormat;
+  if (typeof meta?.requiresReasoningContentOnAssistantMessages === "boolean") {
+    compat.requiresReasoningContentOnAssistantMessages =
+      meta.requiresReasoningContentOnAssistantMessages;
+  }
   return {
     id: modelId,
     name: modelId,
@@ -33,7 +44,8 @@ export function toModelConfig(
     cost: DEFAULT_MODEL_META.cost,
     contextWindow: meta?.contextWindow ?? tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
     maxTokens: meta?.maxTokens ?? tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
-    ...(meta?.thinkingFormat ? { thinkingFormat: meta.thinkingFormat } : {}),
+    ...(meta?.thinkingLevelMap ? { thinkingLevelMap: meta.thinkingLevelMap } : {}),
+    ...(Object.keys(compat).length ? { compat } : {}),
   };
 }
 
@@ -67,6 +79,11 @@ export function buildProviderConfig(
      * Lets one provider register models with different reasoning/ctx settings.
      */
     modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    /**
+     * Read-only models.dev cache lookup by exact model id (no network).
+     * Stale last-good entries are still used; missing key = layer absent.
+     */
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
   },
 ): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
@@ -74,8 +91,13 @@ export function buildProviderConfig(
   const models = ids.filter(Boolean).map((raw) => {
     const id = raw.trim();
     const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
-    // anyrouter: default contextWindow=1M under user overrides (user wins).
-    const meta = applyAnyrouterModelMeta(provider.api, provider.baseUrl, userMeta);
+    const meta = resolveRegistrationMeta({
+      modelId: id,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+      userMeta,
+      modelsDev: opts.modelsDevFor?.(id),
+    });
     return toModelConfig(id, provider.api, meta);
   });
   if (!models.length) return undefined;
@@ -120,6 +142,7 @@ export function registerProvider(
     onReject?: (name: string, reason: string) => void;
     modelMeta?: ModelMetaOverride;
     modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
   },
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);

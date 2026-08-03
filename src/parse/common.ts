@@ -1,5 +1,6 @@
 /** Shared pure helpers for parsers. No IO. */
 import type { PiApi } from "../types.ts";
+import { CONTEXT_WINDOW_1M } from "../types.ts";
 
 /** Trim only — never strip brackets, case-fold, or slug model ids (SPEC §5.10). */
 export function trimModelId(raw: string): string {
@@ -14,6 +15,11 @@ export function trimModelId(raw: string): string {
  */
 export function isBracket1mModelId(id: string): boolean {
   return /\[1[Mm]\]\s*$/.test(id.trim());
+}
+
+/** Bracket capability tag on a model id (`foo[1M]`). Only 1M is recognized. */
+export function bracketContextWindow(id: string): number | undefined {
+  return isBracket1mModelId(id) ? CONTEXT_WINDOW_1M : undefined;
 }
 
 export function stripTrailingSlash(url: string): string {

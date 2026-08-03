@@ -14,12 +14,13 @@
  */
 
 import type { ModelMetaOverride, PiApi } from "../types.ts";
+import { CONTEXT_WINDOW_1M } from "../types.ts";
 
 /** Anthropic official 1M-context beta flag (do not invent alternate dates). */
 export const ANYROUTER_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 
 /** Local model meta default when registering anyrouter anthropic providers. */
-export const ANYROUTER_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+export const ANYROUTER_DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_1M;
 
 /**
  * True when baseUrl points at anyrouter.top (or a subdomain).
@@ -86,20 +87,17 @@ export function applyAnyrouterHeaders(
 }
 
 /**
- * Layer anyrouter modelMeta defaults under user overrides (user wins per field).
+ * Host-adaptation layer for anyrouter: supply contextWindow=1M when matching.
+ * Pure layer fact — no userMeta merge; priority is decided by resolveModelCapabilities.
  * Only contextWindow for now — anyrouter gate is header-driven; 1M local meta
  * keeps status bar / compact aligned with the enabled window.
  */
 export function applyAnyrouterModelMeta(
   api: PiApi | null | undefined,
   baseUrl: string,
-  userMeta?: ModelMetaOverride,
 ): ModelMetaOverride | undefined {
   if (api !== "anthropic-messages" || !isAnyrouterBaseUrl(baseUrl)) {
-    return userMeta;
+    return undefined;
   }
-  return {
-    contextWindow: ANYROUTER_DEFAULT_CONTEXT_WINDOW,
-    ...userMeta,
-  };
+  return { contextWindow: CONTEXT_WINDOW_1M };
 }

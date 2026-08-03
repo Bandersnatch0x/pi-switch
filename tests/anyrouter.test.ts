@@ -7,6 +7,7 @@ import {
   isAnyrouterBaseUrl,
   mergeAnthropicBetaFlag,
 } from "../src/headers/anyrouter.ts";
+import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
 import { buildProviderConfig } from "../src/register.ts";
 import type { CcProvider } from "../src/types.ts";
 
@@ -80,23 +81,22 @@ describe("applyAnyrouterHeaders", () => {
 });
 
 describe("applyAnyrouterModelMeta", () => {
-  test("defaults contextWindow under user meta", () => {
+  test("supplies contextWindow=1M for anyrouter anthropic (pure layer)", () => {
     expect(
-      applyAnyrouterModelMeta("anthropic-messages", "https://anyrouter.top", {
-        reasoning: false,
-      }),
+      applyAnyrouterModelMeta("anthropic-messages", "https://anyrouter.top"),
     ).toEqual({
       contextWindow: ANYROUTER_DEFAULT_CONTEXT_WINDOW,
-      reasoning: false,
     });
+    expect(ANYROUTER_DEFAULT_CONTEXT_WINDOW).toBe(1_000_000);
   });
 
-  test("user contextWindow wins", () => {
+  test("undefined for non-anyrouter or non-anthropic", () => {
     expect(
-      applyAnyrouterModelMeta("anthropic-messages", "https://anyrouter.top", {
-        contextWindow: 500_000,
-      }),
-    ).toEqual({ contextWindow: 500_000 });
+      applyAnyrouterModelMeta("anthropic-messages", "https://api.anthropic.com"),
+    ).toBeUndefined();
+    expect(
+      applyAnyrouterModelMeta("openai-completions", "https://anyrouter.top"),
+    ).toBeUndefined();
   });
 });
 
@@ -169,5 +169,47 @@ describe("buildProviderConfig anyrouter adapt", () => {
     const headers = cfg!.headers as Record<string, string>;
     expect(headers["anthropic-beta"]).toBe("claude-code-20250219");
     expect((cfg!.models as { contextWindow: number }[])[0].contextWindow).toBe(200_000);
+  });
+
+  test("anyrouter hostAdaptation beats models.dev 200k (conflict visible in resolve)", () => {
+    const cfg = buildProviderConfig(
+      mk({
+        id: "ar",
+        appType: "claude",
+        baseUrl: "https://anyrouter.top",
+        api: "anthropic-messages",
+      }),
+      ["claude-fable-5"],
+      {
+        rules: [],
+        modelsDevFor: () => ({
+          contextWindow: 200_000,
+          maxTokens: 64_000,
+          reasoning: true,
+          observedAt: "2026-07-31T00:00:00Z",
+          source: "models-dev",
+        }),
+      },
+    );
+    expect((cfg!.models as { contextWindow: number }[])[0].contextWindow).toBe(1_000_000);
+
+    // doctor-side: host-adaptation vs models-dev is a conflict (WARN visible)
+    const r = resolveModelCapabilities({
+      hostAdaptation: applyAnyrouterModelMeta("anthropic-messages", "https://anyrouter.top"),
+      modelsDev: {
+        contextWindow: 200_000,
+        observedAt: "2026-07-31T00:00:00Z",
+        source: "models-dev",
+      },
+      defaults: { contextWindow: 200_000, maxTokens: 64_000, reasoning: true, vision: true },
+    });
+    expect(r.contextWindow).toMatchObject({ value: 1_000_000, source: "host-adaptation" });
+    expect(r.conflicts).toContainEqual(
+      expect.objectContaining({
+        field: "contextWindow",
+        effectiveSource: "host-adaptation",
+        overriddenSource: "models-dev",
+      }),
+    );
   });
 });

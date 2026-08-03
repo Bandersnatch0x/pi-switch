@@ -31,6 +31,8 @@ export type EffectiveConfigSummary = {
     contextWindow: number;
     maxTokens: number;
     thinkingFormat?: string;
+    thinkingLevelMap?: Record<string, string | null>;
+    requiresReasoningContentOnAssistantMessages?: boolean;
   };
 };
 
@@ -76,6 +78,14 @@ export function createEffectiveConfigSummary(input: {
     input.config.models[0];
   if (!model) throw new Error(`no effective model config for ${input.modelId}`);
 
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as {
+          thinkingFormat?: string;
+          requiresReasoningContentOnAssistantMessages?: boolean;
+        })
+      : undefined;
+
   return {
     source: input.source,
     providerId: input.provider.id,
@@ -94,7 +104,14 @@ export function createEffectiveConfigSummary(input: {
       input: model.input,
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
-      ...(model.thinkingFormat ? { thinkingFormat: model.thinkingFormat } : {}),
+      ...(compat?.thinkingFormat ? { thinkingFormat: compat.thinkingFormat } : {}),
+      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean"
+        ? {
+            requiresReasoningContentOnAssistantMessages:
+              compat.requiresReasoningContentOnAssistantMessages,
+          }
+        : {}),
     },
   };
 }
@@ -105,6 +122,13 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
   const thinking = summary.model.thinkingFormat
     ? ` thinkingFormat=${summary.model.thinkingFormat}`
     : "";
+  const levelMap = summary.model.thinkingLevelMap
+    ? ` thinkingLevelMap=${Object.keys(summary.model.thinkingLevelMap).length}`
+    : "";
+  const requiresRc =
+    typeof summary.model.requiresReasoningContentOnAssistantMessages === "boolean"
+      ? ` requiresReasoningContentOnAssistantMessages=${summary.model.requiresReasoningContentOnAssistantMessages}`
+      : "";
   return [
     "pi-switch effective config",
     `source: ${source}`,
@@ -115,6 +139,6 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     `auth: apiKey=${summary.apiKeyMode} authHeader=${summary.authHeader}`,
     `fingerprint: ${summary.fingerprint}`,
     `headers: ${headers}`,
-    `modelMeta: reasoning=${summary.model.reasoning} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}`,
+    `modelMeta: reasoning=${summary.model.reasoning} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${requiresRc}`,
   ].join("\n");
 }

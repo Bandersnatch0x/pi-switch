@@ -9,8 +9,10 @@ import type {
 import {
   DEFAULT_RECENT_LIMIT,
   isThinkingFormat,
+  isThinkingLevel,
   LEGACY_SETTINGS_KEY,
   SETTINGS_KEY,
+  THINKING_LEVELS,
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
 import { cleanModelMeta, matchExactModelOverride } from "./model-meta.ts";
@@ -274,7 +276,7 @@ type MutableOverrideEntry = {
   modelOverrides?: Record<string, ModelMetaOverride>;
 };
 
-function validateThinkingFormat(
+function validateModelMetaWrite(
   modelMeta: ModelMetaOverride,
 ): { ok: true } | { ok: false; error: string } {
   if (typeof modelMeta.thinkingFormat === "string" && modelMeta.thinkingFormat.trim()) {
@@ -285,6 +287,39 @@ function validateThinkingFormat(
         error: `invalid thinkingFormat: ${fmt} (allowed: openai|openrouter|together|deepseek|zai|qwen|chat-template|qwen-chat-template|string-thinking|ant-ling)`,
       };
     }
+  }
+  if (modelMeta.thinkingLevelMap !== undefined) {
+    if (
+      !modelMeta.thinkingLevelMap ||
+      typeof modelMeta.thinkingLevelMap !== "object" ||
+      Array.isArray(modelMeta.thinkingLevelMap)
+    ) {
+      return { ok: false, error: "invalid thinkingLevelMap: expected object" };
+    }
+    for (const [key, value] of Object.entries(modelMeta.thinkingLevelMap)) {
+      if (!isThinkingLevel(key)) {
+        return {
+          ok: false,
+          error: `invalid thinkingLevelMap key: ${key} (allowed: ${THINKING_LEVELS.join("|")})`,
+        };
+      }
+      if (value === null) continue;
+      if (typeof value !== "string" || !value.trim()) {
+        return {
+          ok: false,
+          error: `invalid thinkingLevelMap value for ${key}: expected non-empty string or null`,
+        };
+      }
+    }
+  }
+  if (
+    modelMeta.requiresReasoningContentOnAssistantMessages !== undefined &&
+    typeof modelMeta.requiresReasoningContentOnAssistantMessages !== "boolean"
+  ) {
+    return {
+      ok: false,
+      error: "invalid requiresReasoningContentOnAssistantMessages: expected boolean",
+    };
   }
   return { ok: true };
 }
@@ -373,7 +408,7 @@ export function writeModelMetaOverride(
 ): { ok: boolean; error?: string } {
   try {
     if (modelMeta) {
-      const valid = validateThinkingFormat(modelMeta);
+      const valid = validateModelMetaWrite(modelMeta);
       if (!valid.ok) return valid;
     }
 
