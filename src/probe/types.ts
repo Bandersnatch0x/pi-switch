@@ -42,6 +42,12 @@ export interface ProbeTarget {
    * Pure engine ignores it; production transport wires request-shape compat.
    */
   claudeCodeCompat?: boolean;
+  /**
+   * Candidate / current provider geminiToolCompat force-on (Recipe3).
+   * When true, Recipe3 does not re-propose the same switch (report only).
+   * Pure engine ignores it; production transport wires toolConfig injection.
+   */
+  geminiToolCompat?: boolean;
 }
 
 /**

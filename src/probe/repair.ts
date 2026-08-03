@@ -60,6 +60,9 @@ export function buildRepairPlan(evidence: NormalizedProbeRunEvidence): RepairPla
     ...(evidence.target.reasoning !== undefined
       ? { reasoning: evidence.target.reasoning }
       : {}),
+    ...(evidence.target.geminiToolCompat !== undefined
+      ? { geminiToolCompat: evidence.target.geminiToolCompat }
+      : {}),
   };
 
   return {
@@ -325,6 +328,7 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
 function formatPatchScope(patch: RepairPatch): string {
   if (patch.kind === "modelMeta") return `model:${patch.modelId}`;
   if (patch.kind === "fingerprint") return `provider:${patch.provider}`;
+  if (patch.kind === "geminiToolCompat") return `provider:${patch.provider}`;
   return "unknown";
 }
 

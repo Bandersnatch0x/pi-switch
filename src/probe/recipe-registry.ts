@@ -206,10 +206,36 @@ export const CLIENT_FINGERPRINT_RECIPE_DEFINITION: RepairRecipeDefinition = {
   rollbackTested: true,
 };
 
+/**
+ * Built-in Recipe 3 — relay-specific Gemini tool empty-args/schema (ticket 6 / #49).
+ * Enables existing per-provider geminiToolCompat; when already on, matching
+ * produces no candidate (report only).
+ */
+export const GEMINI_TOOL_COMPAT_RECIPE_DEFINITION: RepairRecipeDefinition = {
+  id: "gemini-tool-compat",
+  class: "relay-specific",
+  signatureIds: ["gemini_tool_empty_args"],
+  candidateSummary:
+    "Set providerOverrides[provider].geminiToolCompat=true when tool probe shows empty-args/schema evidence",
+  patchScope: "provider",
+  supportWindow: {
+    min: "0.3.0",
+    note: "geminiToolCompat pure transforms in src/compat/gemini-tool-compat.ts; proxy empty-args repro",
+  },
+  fixture: {
+    id: "gemini-tool-empty-args",
+    description:
+      "Tool contract returns probe_echo with empty arguments when Gemini proxy does not enforce schema without toolConfig",
+    path: "tests/fixtures/probe/gemini-tool-empty-args.json",
+  },
+  rollbackTested: true,
+};
+
 /** Default first-party definitions (pre-gate). */
 export const DEFAULT_RECIPE_DEFINITIONS: readonly RepairRecipeDefinition[] = [
   REASONING_FALSE_RECIPE_DEFINITION,
   CLIENT_FINGERPRINT_RECIPE_DEFINITION,
+  GEMINI_TOOL_COMPAT_RECIPE_DEFINITION,
 ];
 
 /**

@@ -234,6 +234,18 @@ describe("recipe registry (ticket 9)", () => {
     expect(isRecipeAdmitted("client-fingerprint")).toBe(true);
   });
 
+  test("built-in Recipe3 gemini-tool-compat is relay-specific and admitted with fixture", () => {
+    const builtIn = DEFAULT_RECIPE_DEFINITIONS.find((d) => d.id === "gemini-tool-compat");
+    expect(builtIn).toBeDefined();
+    expect(builtIn!.class).toBe("relay-specific");
+    expect(builtIn!.patchScope).toBe("provider");
+    expect(builtIn!.signatureIds).toContain("gemini_tool_empty_args");
+    expect(builtIn!.fixture?.id).toBe("gemini-tool-empty-args");
+    expect(builtIn!.fixture?.path).toContain("gemini-tool-empty-args.json");
+    expect(evaluateRecipeGate(builtIn!).admitted).toBe(true);
+    expect(isRecipeAdmitted("gemini-tool-compat")).toBe(true);
+  });
+
   test("matchRepairRecipes only uses admitted recipes (registry gate)", () => {
     // Recipe1 is admitted via default registry — still matches.
     const evidence = {

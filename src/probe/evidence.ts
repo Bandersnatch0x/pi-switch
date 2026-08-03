@@ -92,6 +92,33 @@ function hasProbeEchoToolCall(message: ProbeAssistantMessage): boolean {
   );
 }
 
+/**
+ * True when a probe_echo tool call is present but required `msg` is empty/missing.
+ * Classic Gemini-proxy symptom: functionCall.args = {} when schema is not enforced.
+ */
+export function hasEmptyProbeEchoArgs(message: ProbeAssistantMessage): boolean {
+  for (const b of message.content) {
+    if (b.type !== "toolCall" || b.name !== "probe_echo") continue;
+    const args = b.arguments;
+    if (args === null || args === undefined) return true;
+    if (typeof args !== "object") return true;
+    const keys = Object.keys(args);
+    if (keys.length === 0) return true;
+    const msg = (args as Record<string, unknown>).msg;
+    if (msg === undefined || msg === null || msg === "") return true;
+    // All values empty (e.g. { msg: "", extra: null })
+    if (
+      Object.values(args as Record<string, unknown>).every(
+        (v) => v === undefined || v === null || v === "",
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 export type ContractEval =
   | { ok: true; summary: string }
   | { ok: false; category: ProbeFailureCategory; summary: string };
@@ -159,6 +186,16 @@ export function evaluateContract(
       };
 
     case "tool":
+      // Empty-args tool call is a distinct failure (Recipe3 / geminiToolCompat),
+      // not a pass — even when the tool name is correct.
+      if (hasProbeEchoToolCall(message) && hasEmptyProbeEchoArgs(message)) {
+        return {
+          ok: false,
+          category: "tool",
+          summary:
+            "tool contract: probe_echo called with empty or missing arguments (schema not enforced)",
+        };
+      }
       if (message.stopReason === "toolUse" && hasProbeEchoToolCall(message)) {
         return { ok: true, summary: "probe_echo tool call received" };
       }
@@ -292,6 +329,7 @@ export type ProbeEvidenceSignatureId =
   | "contract_basic_no_text"
   | "contract_reasoning_empty"
   | "contract_tool_missing_echo"
+  | "gemini_tool_empty_args"
   | "reasoning_param_rejected"
   | "client_gate_claude_code"
   | "client_gate_codex"
@@ -488,12 +526,31 @@ export function resolveSignatureId(input: {
   ) {
     return "contract_reasoning_empty";
   }
+
+  // Recipe 3: empty-args / schema evidence (before generic missing-echo)
+  const emptyArgsFromObservation = (() => {
+    const msg = input.observation?.response?.message;
+    return msg ? hasEmptyProbeEchoArgs(msg) : false;
+  })();
+  const combinedLower = combined.toLowerCase();
+  if (
+    emptyArgsFromObservation ||
+    (stage.category === "tool" &&
+      /empty or missing arguments|schema not enforced/.test(summaryLower)) ||
+    (stage.contract === "tool" &&
+      (/\bparametersjsonschema\b/.test(combinedLower) ||
+        /\btoolconfig\b/.test(combinedLower) ||
+        /\bfunctioncallingconfig\b/.test(combinedLower) ||
+        /empty (or missing )?arguments?/.test(combinedLower)))
+  ) {
+    return "gemini_tool_empty_args";
+  }
+
   if (stage.category === "tool" && summaryLower.includes("probe_echo")) {
     return "contract_tool_missing_echo";
   }
 
   // Distinctive protocol error patterns (Recipe 1)
-  const combinedLower = combined.toLowerCase();
   if (
     /\b(reasoning|thinking)\b/.test(combinedLower) &&
     /\b(unsupported|not supported|unknown|invalid|unexpected)\b/.test(
@@ -600,6 +657,9 @@ export function normalizeProbeRun(
       modelId: result.target.modelId,
       ...(result.target.reasoning !== undefined
         ? { reasoning: result.target.reasoning }
+        : {}),
+      ...(result.target.geminiToolCompat !== undefined
+        ? { geminiToolCompat: result.target.geminiToolCompat }
         : {}),
     },
     stages,

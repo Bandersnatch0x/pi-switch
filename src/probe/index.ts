@@ -1,8 +1,8 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–5, 9).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–6, 9).
  *
- * Seam for later tickets: gemini tool recipe (#49).
  * Recipe registry + evidence gate (#47) admit whitelist recipes only.
+ * Recipe3 gemini tool compat (#49) enables per-provider geminiToolCompat.
  * Transport + doctor precheck + config store are always injectable; zero network in unit tests.
  */
 
@@ -43,6 +43,7 @@ export {
   clientGateSignatureId,
   detectUniqueClientGate,
   evaluateContract,
+  hasEmptyProbeEchoArgs,
   normalizeProbeRun,
   normalizeStageEvidence,
   pickAllowedHeaderNames,
@@ -97,12 +98,14 @@ export type {
   RepairPatch,
   RepairPatchModelMeta,
   RepairPatchProviderFingerprint,
+  RepairPatchProviderGeminiToolCompat,
   RepairRecipeId,
   RepairRecipeMatch,
 } from "./recipes.ts";
 export {
   CLIENT_FINGERPRINT_RECIPE_DEFINITION,
   DEFAULT_RECIPE_DEFINITIONS,
+  GEMINI_TOOL_COMPAT_RECIPE_DEFINITION,
   REASONING_FALSE_RECIPE_DEFINITION,
   admitRecipes,
   createRecipeRegistry,
