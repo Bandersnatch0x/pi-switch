@@ -74,8 +74,8 @@ export function createSwitchLifecycle(
   pi: ExtensionAPI,
   rt: Runtime,
 ): SwitchLifecycle {
-  const register = (provider: CcProvider, modelId: string): boolean =>
-    registerProvider(asRegisterApi(pi), provider, [modelId], {
+  const register = (provider: CcProvider, modelId: string): boolean => {
+    const ok = registerProvider(asRegisterApi(pi), provider, [modelId], {
       rules: rt.headerRules,
       ...rt.headerOverrideOpts(provider),
       vars: rt.headerVars(),
@@ -84,6 +84,10 @@ export function createSwitchLifecycle(
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
       modelsDevFor: (id) => rt.modelsDevFor?.(id),
     });
+    // Fire-and-forget models.dev refresh after successful registration (issue #39).
+    if (ok) rt.scheduleModelsDevRefresh?.(modelId);
+    return ok;
+  };
 
   const warnMissingSelection = (ctx?: PiSwitchCtx): void => {
     if (rt.warnedMissingDbId) return;

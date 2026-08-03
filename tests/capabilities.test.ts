@@ -1,8 +1,13 @@
 import { test, expect, describe } from "bun:test";
 import {
+  CAPABILITIES_FAILURE_COOLDOWN_MS,
+  CAPABILITIES_TTL_MS,
   extractModelsDevCapabilities,
   findModelsDevEntry,
+  isModelsDevMiss,
+  makeMiss,
   MODELS_DEV_API_URL,
+  shouldRefreshModelsDev,
 } from "../src/capabilities/models-dev.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
 
@@ -53,6 +58,96 @@ describe("models.dev extractor (W4)", () => {
 
   test("api url is the full-catalog endpoint", () => {
     expect(MODELS_DEV_API_URL).toBe("https://models.dev/api.json");
+  });
+});
+
+describe("models.dev negative cache helpers (issue #39)", () => {
+  test("isModelsDevMiss / makeMiss shape", () => {
+    const miss = makeMiss("2026-08-03T00:00:00Z");
+    expect(miss).toEqual({ missing: true, observedAt: "2026-08-03T00:00:00Z" });
+    expect(isModelsDevMiss(miss)).toBe(true);
+    expect(
+      isModelsDevMiss({
+        contextWindow: 1,
+        observedAt: "2026-08-03T00:00:00Z",
+        source: "models-dev",
+      }),
+    ).toBe(false);
+    expect(isModelsDevMiss(undefined)).toBe(false);
+  });
+
+  test("shouldRefreshModelsDev truth table", () => {
+    const now = Date.parse("2026-08-03T00:00:00Z");
+    const ttl = CAPABILITIES_TTL_MS;
+    const cooldown = CAPABILITIES_FAILURE_COOLDOWN_MS;
+    const fresh = new Date(now - 1000).toISOString();
+    const stale = new Date(now - ttl - 1).toISOString();
+
+    // cold → true
+    expect(
+      shouldRefreshModelsDev({ entry: undefined, now, ttlMs: ttl, cooldownMs: cooldown }),
+    ).toBe(true);
+
+    // fresh positive → false
+    expect(
+      shouldRefreshModelsDev({
+        entry: { observedAt: fresh, source: "models-dev" },
+        now,
+        ttlMs: ttl,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(false);
+
+    // fresh negative → false
+    expect(
+      shouldRefreshModelsDev({
+        entry: makeMiss(fresh),
+        now,
+        ttlMs: ttl,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(false);
+
+    // stale positive → true
+    expect(
+      shouldRefreshModelsDev({
+        entry: { observedAt: stale, source: "models-dev" },
+        now,
+        ttlMs: ttl,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(true);
+
+    // stale negative → true
+    expect(
+      shouldRefreshModelsDev({
+        entry: makeMiss(stale),
+        now,
+        ttlMs: ttl,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(true);
+
+    // cooldown active → false even when cold
+    expect(
+      shouldRefreshModelsDev({
+        entry: undefined,
+        now,
+        ttlMs: ttl,
+        failedAt: now - 1000,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(false);
+
+    // bad timestamp → false (last-good)
+    expect(
+      shouldRefreshModelsDev({
+        entry: { observedAt: "not-a-date", source: "models-dev" },
+        now,
+        ttlMs: ttl,
+        cooldownMs: cooldown,
+      }),
+    ).toBe(false);
   });
 });
 

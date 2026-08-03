@@ -15,10 +15,15 @@ import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fing
 import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
 import { resolveRoutingProbeUrl, ROUTING_PROBE_TIMEOUT_MS } from "../src/routing.ts";
 import {
+  CAPABILITIES_FAILURE_COOLDOWN_MS,
   CAPABILITIES_TTL_MS,
   extractModelsDevCapabilities,
   findModelsDevEntry,
+  isModelsDevMiss,
+  makeMiss,
   MODELS_DEV_API_URL,
+  shouldRefreshModelsDev,
+  type ModelsDevCacheEntry,
   type ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
@@ -59,7 +64,8 @@ export interface FingerprintSnapshot {
 interface CapabilitiesCache {
   version: number;
   updatedAt?: string;
-  capabilities: Record<string, ModelsDevCapabilities>;
+  /** Positive hits and confirmed misses share the map (issue #39). */
+  capabilities: Record<string, ModelsDevCacheEntry>;
 }
 
 export type VarsSummary = {
@@ -94,6 +100,9 @@ export class Runtime {
   private snapshotProbed = false;
   private cachedCapabilities: CapabilitiesCache | undefined;
   private capabilitiesInflight: Promise<void> | undefined;
+  /** Session-only network failure timestamp (issue #39 cooldown; never persisted). */
+  private capabilitiesFailedAt: number | undefined;
+  private lastRefreshError: { at: number; message: string } | undefined;
   private identityMigration: IdentityMigrationSummary | undefined;
   private lastSchemaCapabilities: import("../src/db.ts").DbCapabilities | undefined;
 
@@ -324,7 +333,7 @@ export class Runtime {
     return this.cachedCapabilities;
   }
 
-  isCapabilitiesStale(cap: ModelsDevCapabilities): boolean {
+  isCapabilitiesStale(cap: { observedAt: string }): boolean {
     const t = Date.parse(cap.observedAt);
     if (Number.isNaN(t)) return false;
     return Date.now() - t > CAPABILITIES_TTL_MS;
@@ -341,12 +350,24 @@ export class Runtime {
         const cache = this.capabilitiesCache();
         for (const id of modelIds) {
           const hit = findModelsDevEntry(catalog, id);
-          if (hit) cache.capabilities[id] = extractModelsDevCapabilities(hit.model, now);
+          // Hit → positive entry; confirmed absence → negative miss (issue #39).
+          // Network errors never reach here — they must not write a miss.
+          cache.capabilities[id] = hit
+            ? extractModelsDevCapabilities(hit.model, now)
+            : makeMiss(now);
         }
         cache.updatedAt = now;
         this.io.writeFileSync(this.cachePath(), JSON.stringify(cache, null, 2), "utf8");
-      } catch {
-        // network failure: keep last-good cache (never block doctor)
+        this.capabilitiesFailedAt = undefined;
+        this.lastRefreshError = undefined;
+      } catch (err) {
+        // network failure: keep last-good cache; session cooldown only (never write miss)
+        const at = Date.now();
+        this.capabilitiesFailedAt = at;
+        this.lastRefreshError = {
+          at,
+          message: err instanceof Error ? err.message : String(err),
+        };
       } finally {
         this.capabilitiesInflight = undefined;
       }
@@ -355,10 +376,44 @@ export class Runtime {
   }
 
   /**
+   * Fire-and-forget background refresh after successful registration (issue #39).
+   * Gates on config + TTL/cooldown via shouldRefreshModelsDev; reuses capabilitiesInflight.
+   * Synchronous path only — no await, no network on the register hot path.
+   */
+  scheduleModelsDevRefresh(modelId: string): void {
+    if (!this.capabilitiesRefreshEnabled()) return;
+    if (
+      !shouldRefreshModelsDev({
+        entry: this.rawCacheEntry(modelId),
+        now: Date.now(),
+        ttlMs: CAPABILITIES_TTL_MS,
+        failedAt: this.capabilitiesFailedAt,
+        cooldownMs: CAPABILITIES_FAILURE_COOLDOWN_MS,
+      })
+    ) {
+      return;
+    }
+    void this.refreshCapabilities([modelId]);
+  }
+
+  /** Session-only last background refresh failure (for doctor surface). */
+  lastRefreshFailure(): { at: number; message: string } | undefined {
+    return this.lastRefreshError;
+  }
+
+  /**
    * Read-only models.dev cache lookup by exact model id (no network, no await).
-   * Stale last-good entries are returned as-is; missing key = undefined.
+   * Negative entries are filtered to undefined so resolve treats the layer as absent.
+   * Stale last-good positive entries are returned as-is; missing key = undefined.
    */
   modelsDevFor(modelId: string): ModelsDevCapabilities | undefined {
+    const e = this.capabilitiesCache().capabilities[modelId];
+    if (!e || isModelsDevMiss(e)) return undefined;
+    return e;
+  }
+
+  /** Unfiltered cache entry (doctor / refresh gate); may be a miss. */
+  rawCacheEntry(modelId: string): ModelsDevCacheEntry | undefined {
     return this.capabilitiesCache().capabilities[modelId];
   }
 

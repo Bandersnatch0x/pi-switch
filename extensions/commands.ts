@@ -23,6 +23,7 @@ import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
+import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
 import {
   createEffectiveConfigSummary,
   formatEffectiveConfigSummary,
@@ -253,17 +254,27 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
 
   // W4: refresh the selected model's capability fact when missing/stale, then resolve.
   let capabilities: { modelId: string; resolved: ResolvedCapabilities } | undefined;
+  let modelsDevCache: { state: "hit" | "miss" | "cold"; observedAt?: string } | undefined;
   const selMatch = sel
     ? providers.find(
         (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
       )
     : undefined;
   if (sel && selMatch && isSwitchable(selMatch)) {
-    const cached = rt.capabilitiesCache().capabilities[sel.model];
+    const cached = rt.rawCacheEntry(sel.model);
     if (!cached || rt.isCapabilitiesStale(cached)) {
       await rt.refreshCapabilities([sel.model]);
     }
     capabilities = { modelId: sel.model, resolved: rt.capabilitiesFor(selMatch, sel.model) };
+    // Issue #39: surface cache state after on-demand refresh.
+    const entry = rt.rawCacheEntry(sel.model);
+    if (!entry) {
+      modelsDevCache = { state: "cold" };
+    } else if (isModelsDevMiss(entry)) {
+      modelsDevCache = { state: "miss", observedAt: entry.observedAt };
+    } else {
+      modelsDevCache = { state: "hit", observedAt: entry.observedAt };
+    }
   }
 
   const report = runDoctor({
@@ -285,6 +296,8 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     fingerprintSnapshot: rt.fingerprintSnapshot(),
     routingProbe,
     capabilities,
+    modelsDevCache,
+    refreshFailure: rt.lastRefreshFailure(),
     migrationSummary: rt.migrationSummary,
     schemaCapabilities,
   });

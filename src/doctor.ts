@@ -68,6 +68,13 @@ export interface DoctorInput {
   routingProbe?: { url: string; reachable: boolean };
   /** Resolved capability facts for the current model (W4). */
   capabilities?: { modelId: string; resolved: ResolvedCapabilities };
+  /**
+   * models.dev cache state for the selected model (issue #39).
+   * miss/cold are informational only and never upgrade the check to warn.
+   */
+  modelsDevCache?: { state: "hit" | "miss" | "cold"; observedAt?: string };
+  /** Last session-only background refresh failure (issue #39). */
+  refreshFailure?: { at: number; message: string };
   /** Identity migration outcome (issue #16); present only on this run. */
   migrationSummary?: IdentityMigrationSummary;
   /** Probed CC Switch schema capabilities (W1). Undefined when not available. */
@@ -453,6 +460,18 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         warnRows.push(`models.dev@${e.fetchedAt ?? "?"} 过期（保留 last-good）`);
       }
     }
+    // Issue #39: cache-state lines are informational; miss/cold never upgrade warn.
+    const infoRows: string[] = [];
+    if (input.modelsDevCache?.state === "miss") {
+      const at = input.modelsDevCache.observedAt ?? "?";
+      infoRows.push(`models.dev: 无此条目（已确认 @${at}）`);
+    } else if (input.modelsDevCache?.state === "cold") {
+      infoRows.push("未查询（下次注册后台刷新）");
+    }
+    if (input.refreshFailure) {
+      const t = new Date(input.refreshFailure.at).toISOString();
+      infoRows.push(`上次后台刷新失败 @${t}`);
+    }
     const detail =
       `${input.capabilities.modelId}: ` +
       [
@@ -461,7 +480,8 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         fieldLine("reasoning", cap.reasoning),
         fieldLine("vision", cap.vision),
       ].join(" · ") +
-      (warnRows.length ? `；${warnRows.join("；")}` : "");
+      (warnRows.length ? `；${warnRows.join("；")}` : "") +
+      (infoRows.length ? `；${infoRows.join("；")}` : "");
     checks.push({
       id: "capabilities",
       title: "模型能力元数据",
