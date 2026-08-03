@@ -49,7 +49,7 @@ export type ProbeFailureCategory =
 
 export type ProbeStageStatus = "pass" | "fail" | "skip" | "stopped";
 
-export type ProbeStoppedReason = "failure" | "unrepairable" | "budget";
+export type ProbeStoppedReason = "failure" | "unrepairable" | "budget" | "precheck";
 
 /** One stage outcome in a probe run. */
 export interface ProbeStageResult {
@@ -70,15 +70,36 @@ export interface ProbeBudgetSnapshot {
   timeoutMs: number;
 }
 
+/**
+ * Target doctor precheck outcome (ticket 3).
+ * Kept structurally local so types.ts does not import doctor modules.
+ * Shape matches ProbePrecheckResult in precheck.ts.
+ */
+export interface ProbeRunPrecheckSnapshot {
+  status: "pass" | "warn" | "fail";
+  allowProbe: boolean;
+  checks: Array<{
+    id: string;
+    dimension: string;
+    title: string;
+    status: "pass" | "warn" | "fail";
+    detail: string;
+    fix?: string;
+  }>;
+  summary: string;
+}
+
 /** Structured headless-friendly probe outcome. */
 export interface ProbeRunResult {
   target: ProbeTarget;
   stages: ProbeStageResult[];
-  /** True when every non-skipped stage passed. */
+  /** True when every non-skipped stage passed (and precheck did not block). */
   ok: boolean;
   stoppedReason?: ProbeStoppedReason;
   requestCount: number;
   budget: ProbeBudgetSnapshot;
+  /** Present when a target doctor precheck ran (pass/warn/fail). */
+  precheck?: ProbeRunPrecheckSnapshot;
 }
 
 /** Synthetic user message built by the engine (never session history). */
@@ -146,11 +167,25 @@ export interface ProbeTransportResult {
  */
 export type ProbeTransport = (request: ProbeRequest) => Promise<ProbeTransportResult>;
 
+/**
+ * Injectable target doctor precheck (ticket 3).
+ * May be a precomputed result or an async function (no network in unit tests).
+ */
+export type ProbePrecheckInput =
+  | ProbeRunPrecheckSnapshot
+  | (() => ProbeRunPrecheckSnapshot | Promise<ProbeRunPrecheckSnapshot>);
+
 export interface ProbeEngineOptions {
   target: ProbeTarget;
   /** Opaque model handle passed through to transport. */
   model: unknown;
   transport: ProbeTransport;
+  /**
+   * Optional target-scoped doctor precheck.
+   * FAIL (allowProbe=false) blocks all transport calls; WARN continues.
+   * Omitted → precheck skipped (prior engine behavior).
+   */
+  precheck?: ProbePrecheckInput;
   /**
    * Contracts to run. Default: basic → reasoning → tool
    * (reasoning skipped when target does not claim support).

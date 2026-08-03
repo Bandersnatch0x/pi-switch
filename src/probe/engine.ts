@@ -1,7 +1,8 @@
 /**
- * Compatibility Probe engine — stages, budget, stop conditions (ticket 1 #43).
+ * Compatibility Probe engine — stages, budget, stop conditions (ticket 1 #43),
+ * target doctor precheck gate (ticket 3 #45).
  *
- * Pure orchestration: inject transport (faux complete in tests).
+ * Pure orchestration: inject transport + optional precheck (faux in tests).
  * Never calls setModel; never carries session history.
  */
 
@@ -14,6 +15,7 @@ import {
   PROBE_TIMEOUT_MS,
   type ProbeContractId,
   type ProbeEngineOptions,
+  type ProbeRunPrecheckSnapshot,
   type ProbeRunResult,
   type ProbeStageResult,
   type ProbeStoppedReason,
@@ -46,6 +48,23 @@ function planContracts(
   return { order, skips };
 }
 
+async function resolvePrecheck(
+  input: ProbeEngineOptions["precheck"],
+): Promise<ProbeRunPrecheckSnapshot | undefined> {
+  if (input === undefined) return undefined;
+  if (typeof input === "function") return await input();
+  return input;
+}
+
+function budgetSnapshot(
+  maxRequests: number,
+  used: number,
+  maxTokens: number,
+  timeoutMs: number,
+) {
+  return { maxRequests, used, maxTokens, timeoutMs };
+}
+
 /**
  * Run a Compatibility Probe against a Probe Target.
  * Read-only: does not change configuration or Session Model.
@@ -60,6 +79,34 @@ export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult
 
   const { order, skips } = planContracts(opts.target, opts.contracts);
   const stages: ProbeStageResult[] = [];
+
+  // Target doctor precheck (ticket 3): FAIL blocks all network; WARN continues.
+  const precheck = await resolvePrecheck(opts.precheck);
+  if (precheck && !precheck.allowProbe) {
+    const haltSummary = `stopped: doctor precheck failed (${precheck.summary})`;
+    for (const contract of order) {
+      const skip = skips.get(contract);
+      if (skip) {
+        stages.push(skip);
+        continue;
+      }
+      stages.push({
+        contract,
+        status: "stopped",
+        summary: haltSummary,
+        requestCount: 0,
+      });
+    }
+    return {
+      target: { ...opts.target },
+      stages,
+      ok: false,
+      stoppedReason: "precheck",
+      requestCount: 0,
+      budget: budgetSnapshot(maxRequests, 0, maxTokens, timeoutMs),
+      precheck,
+    };
+  }
 
   let requestCount = 0;
   let stoppedReason: ProbeStoppedReason | undefined;
@@ -156,11 +203,7 @@ export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult
     ok,
     stoppedReason,
     requestCount,
-    budget: {
-      maxRequests,
-      used: requestCount,
-      maxTokens,
-      timeoutMs,
-    },
+    budget: budgetSnapshot(maxRequests, requestCount, maxTokens, timeoutMs),
+    ...(precheck ? { precheck } : {}),
   };
 }

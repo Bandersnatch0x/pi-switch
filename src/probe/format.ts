@@ -25,5 +25,9 @@ export function formatProbeResultSummary(result: ProbeRunResult): string {
   });
   const head = result.ok ? "PASS" : "FAIL";
   const stop = result.stoppedReason ? ` stop=${result.stoppedReason}` : "";
-  return `ps-probe ${head} ${target} [${parts.join(", ")}] req=${result.requestCount}/${result.budget.maxRequests}${stop}`;
+  const pre =
+    result.precheck && result.precheck.status !== "pass"
+      ? ` precheck=${result.precheck.status}`
+      : "";
+  return `ps-probe ${head} ${target} [${parts.join(", ")}] req=${result.requestCount}/${result.budget.maxRequests}${stop}${pre}`;
 }

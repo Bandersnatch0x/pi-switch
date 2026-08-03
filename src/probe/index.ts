@@ -1,8 +1,8 @@
 /**
- * Compatibility Probe pure engine (issue #42 / tickets 1–2).
+ * Compatibility Probe pure engine (issue #42 / tickets 1–3).
  *
- * Seam for later tickets: doctor precheck (#45), repair recipes (#46+).
- * Transport is always injected; evidence persistence is dual-layer Repair Case.
+ * Seam for later tickets: repair recipes (#46+).
+ * Transport + doctor precheck are always injectable; zero network in unit tests.
  */
 
 export {
@@ -20,7 +20,9 @@ export type {
   ProbeContractId,
   ProbeEngineOptions,
   ProbeFailureCategory,
+  ProbePrecheckInput,
   ProbeRequest,
+  ProbeRunPrecheckSnapshot,
   ProbeRunResult,
   ProbeStageResult,
   ProbeStageStatus,
@@ -69,5 +71,17 @@ export type {
   RepairCaseSummaryData,
   RepairCaseSummarySessionEntry,
 } from "./repair-case.ts";
+export {
+  PROBE_TARGET_PRECHECK_DIMENSIONS,
+  runTargetDoctorPrecheck,
+} from "./precheck.ts";
+export type {
+  ProbePrecheckCheck,
+  ProbePrecheckDimension,
+  ProbePrecheckResult,
+  ProbePrecheckSoftCheck,
+  ProbePrecheckStatus,
+  TargetDoctorPrecheckInput,
+} from "./precheck.ts";
 export { runProbe } from "./engine.ts";
 export { formatProbeResultJson, formatProbeResultSummary } from "./format.ts";
