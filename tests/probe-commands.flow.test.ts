@@ -617,4 +617,41 @@ describe("runRepairCommand (command flow)", () => {
     expect(detail.repair?.status).toBe("cas-conflict");
     expect(detail.repair?.verificationAttempts).toHaveLength(2);
   });
+
+  test("commit error → error notify, case recorded with attempts, no switch", async () => {
+    const { pi, entries } = makePi();
+    const { ctx, msgs } = makeCtx();
+    const { transport } = recipe1Transport();
+    // Store returns a non-conflict write error (disk-full / permission / parse).
+    const { store, commits } = makeStore({
+      ok: false,
+      reason: "error",
+      message: "disk full while persisting repair candidate",
+    } as never);
+    const { lifecycle, activated } = makeLifecycle();
+
+    await runRepairCommand(pi, rt, lifecycle, ctx, {
+      transport,
+      configStore: store,
+      buildPrecheck: precheckPass,
+    });
+
+    expect(commits).toHaveLength(1);
+    expect(msgs.some((m) => m.msg.includes("ps-repair commit-error"))).toBe(true);
+    expect(msgs.some((m) => m.msg.includes("disk full"))).toBe(true);
+    expect(msgs[msgs.length - 1]!.level).toBe("error");
+    expect(activated).toHaveLength(0);
+    expect(entries).toHaveLength(1);
+    const detail = entries[0]!.data as {
+      repair?: {
+        status: string;
+        persisted: boolean;
+        verificationAttempts: unknown[];
+      };
+    };
+    expect(detail.repair?.status).toBe("commit-error");
+    expect(detail.repair?.persisted).toBe(false);
+    // Commit error still carries the 2 verification attempts for durability.
+    expect(detail.repair?.verificationAttempts).toHaveLength(2);
+  });
 });

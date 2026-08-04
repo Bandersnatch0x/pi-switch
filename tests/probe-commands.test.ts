@@ -784,4 +784,52 @@ describe("createRepairConfigStore (CAS)", () => {
     // Legacy flat entry absorbed (deleted).
     expect(doc.providerOverrides.p1).toBeUndefined();
   });
+
+  test("target provider not in snapshot → error result, file untouched", async () => {
+    const initial: Record<string, string> = {
+      [path]: JSON.stringify(baseConfig(), null, 2),
+    };
+    const { fs, storeImpl } = makeStore(initial);
+    const snap = await storeImpl.read();
+    const before = fs.store[path];
+
+    const result = await storeImpl.commit({
+      expectedVersion: snap.version,
+      patch: {
+        kind: "fingerprint",
+        scope: "provider",
+        provider: "ps-ghost", // not in the providers snapshot
+        fingerprint: "codex",
+      },
+    } as never);
+
+    if (result.ok) throw new Error("expected failure result");
+    expect(result.reason).toBe("error");
+    expect(result.message).toContain("not found");
+    // No write happened.
+    expect(fs.store[path]).toBe(before);
+  });
+
+  test("corrupt config parse → error result, file untouched", async () => {
+    const initial: Record<string, string> = {
+      [path]: "{ not valid json",
+    };
+    const { fs, storeImpl } = makeStore(initial);
+    const snap = await storeImpl.read();
+    const before = fs.store[path];
+
+    const result = await storeImpl.commit({
+      expectedVersion: snap.version,
+      patch: {
+        kind: "fingerprint",
+        scope: "provider",
+        provider: "ps-p1",
+        fingerprint: "codex",
+      },
+    } as never);
+
+    if (result.ok) throw new Error("expected failure result");
+    expect(result.reason).toBe("error");
+    expect(fs.store[path]).toBe(before);
+  });
 });
