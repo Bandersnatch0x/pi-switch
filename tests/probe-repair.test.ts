@@ -9,6 +9,7 @@ import {
   runRepair,
   type NormalizedProbeRunEvidence,
   type ProbeRequest,
+  type ProbeTarget,
   type ProbeTransport,
   type ProbeTransportResult,
   type RepairConfigStore,
@@ -227,6 +228,19 @@ describe("matchRepairRecipes / buildRepairPlan (ticket 4)", () => {
     expect(plan.preview.target).toContain(target.modelId);
   });
 
+  test("plan preserves existing fingerprint and compat flags", () => {
+    const evidence = reasoningRejectedEvidence();
+    evidence.target = {
+      ...evidence.target,
+      fingerprint: "codex",
+      claudeCodeCompat: true,
+      geminiToolCompat: true,
+    };
+
+    const plan = buildRepairPlan(evidence);
+    expect(plan.target).toEqual(evidence.target);
+  });
+
   test("unknown evidence yields no recipe (no guessing)", () => {
     const plan = buildRepairPlan(unknownFailureEvidence());
     expect(plan.recipes).toHaveLength(0);
@@ -326,6 +340,10 @@ describe("runRepair pipeline (ticket 4)", () => {
     expect(calls.every((c) => c.contract !== "reasoning" || c.options.reasoning === undefined)).toBe(
       true,
     );
+    // Every verify request carries the in-memory candidate target (reasoning=false)
+    // so a production transport sees the patched target, not the original plan target.
+    expect(calls.every((c) => c.target.reasoning === false)).toBe(true);
+    expect(calls.every((c) => c.target.provider === target.provider)).toBe(true);
     // At most one recipe committed
     expect(commits).toHaveLength(1);
     expect(commits[0]!.expectedVersion).toBe("cfg-v1");
@@ -470,17 +488,27 @@ describe("runRepair pipeline (ticket 4)", () => {
   });
 
   test("candidate only affects in-memory probe target during verify (reasoning off)", async () => {
-    const plan = buildRepairPlan(reasoningRejectedEvidence());
-    const seenTargets: Array<{ reasoning?: boolean }> = [];
+    const evidence = reasoningRejectedEvidence();
+    evidence.target = {
+      ...evidence.target,
+      fingerprint: "codex",
+      claudeCodeCompat: true,
+      geminiToolCompat: true,
+    };
+    const plan = buildRepairPlan(evidence);
+    const seenTargets: ProbeTarget[] = [];
     const { transport } = recordingTransport((req) => {
-      // Engine passes model opaquely; we observe contracts: reasoning must not be requested
-      // when candidate sets reasoning=false on the Probe Target.
+      // Every verify request carries the in-memory candidate target (reasoning=false),
+      // never the original plan target (reasoning=true).
+      seenTargets.push(req.target);
+      expect(req.target.reasoning).toBe(false);
+      expect(req.target.fingerprint).toBe("codex");
+      expect(req.target.claudeCodeCompat).toBe(true);
+      expect(req.target.geminiToolCompat).toBe(true);
       if (req.contract === "basic") return okText();
       if (req.contract === "tool") return okTool();
       throw new Error(`reasoning must not be probed under candidate: ${req.contract}`);
     });
-    // Capture applied candidate via a custom onCandidate hook if exposed is not available —
-    // assert via plan + committed patch + no reasoning transport calls.
     const { store, commits } = memoryConfigStore();
 
     const outcome = await runRepair({
@@ -497,7 +525,7 @@ describe("runRepair pipeline (ticket 4)", () => {
     const patch = commits[0]!.patch as { modelMeta: { reasoning: boolean }; scope: string };
     expect(patch.scope).toBe("model");
     expect(patch.modelMeta.reasoning).toBe(false);
-    void seenTargets;
+    expect(seenTargets.length).toBeGreaterThan(0);
   });
 
   test("at most one recipe is committed even if plan lists more (first only)", async () => {

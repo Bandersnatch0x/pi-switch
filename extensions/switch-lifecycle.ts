@@ -306,6 +306,8 @@ export function createSwitchLifecycle(
     const recentWritten = rt.state.recordRecent({
       dbId: provider.id,
       model: modelId,
+      // Composite identity (#16): appType-less recents dedupe wrong in /ps.
+      appType: provider.appType,
     });
     if (!recentWritten.ok && rt.config.debug) {
       console.warn("[pi-switch] write recent failed:", recentWritten.error);

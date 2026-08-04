@@ -54,6 +54,8 @@ export interface ThreeLevelPickOpts {
   pins?: PinEntry[];
   /** Last-N successful switches for soft prioritization. */
   recent?: RecentEntry[];
+  /** Hide mutating picker actions (override/pin) for Probe Target selection. */
+  readOnly?: boolean;
   /** Persist pin toggle; return the new pins array (picker stays open). */
   onTogglePin?: (entry: PinEntry) => PinEntry[] | Promise<PinEntry[]>;
   fetchRemote?: (provider: CcProvider) => Promise<string[]>;
@@ -167,7 +169,7 @@ export function popPickerLevel(state: {
 
 export function formatFooterHints(
   theme?: ThemeLike,
-  opts?: { revealed?: number; col?: number },
+  opts?: { revealed?: number; col?: number; readOnly?: boolean },
 ): string {
   const sep =
     typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
@@ -188,11 +190,11 @@ export function formatFooterHints(
     formatKeyHint(theme, "f", "refresh"),
   );
   // o closes custom TUI then opens override dialog outside (no nested UI).
-  if (revealed > 0) {
+  if (!opts?.readOnly && revealed > 0) {
     parts.push(formatKeyHint(theme, "o", "override"));
   }
   // p toggles pin for current provider+model without closing the picker.
-  if (revealed >= 2) {
+  if (!opts?.readOnly && revealed >= 2) {
     parts.push(formatKeyHint(theme, "p", "pin"));
   }
   // Esc pops reveal depth; only type-only view exits the whole command.
@@ -667,7 +669,7 @@ async function threeLevelCustom(
           ? formatManualFooterHints(theme)
           : searchMode
             ? formatSearchFooterHints(theme)
-            : formatFooterHints(theme, { revealed, col }),
+            : formatFooterHints(theme, { revealed, col, readOnly: opts.readOnly }),
       );
       push(border(width, "accent"));
 
@@ -909,7 +911,7 @@ async function threeLevelCustom(
       }
 
       // Toggle pin for current provider + focused model (stays open).
-      if (data === "p" || data === "P") {
+      if (!opts.readOnly && (data === "p" || data === "P")) {
         if (revealed < 2) {
           ctx.ui.notify("请先进入模型列再 pin", "warning");
           return;
@@ -957,7 +959,7 @@ async function threeLevelCustom(
       }
 
       // Close custom TUI first; caller opens override dialog outside (H1: no nested UI).
-      if (data === "o" || data === "O") {
+      if (!opts.readOnly && (data === "o" || data === "O")) {
         if (revealed < 1) {
           ctx.ui.notify("请先进入名称列再设置参数覆写", "warning");
           return;

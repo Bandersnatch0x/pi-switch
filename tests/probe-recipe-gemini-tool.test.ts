@@ -341,6 +341,10 @@ describe("runRepair reuses ticket 4 pipeline for Recipe3 (ticket 6)", () => {
     expect(commits).toHaveLength(1);
     expect(commits[0]!.expectedVersion).toBe("cfg-gtc-1");
 
+    // Every verify request carries the candidate geminiToolCompat flag, so the
+    // production transport can inject toolConfig via onPayload per request.
+    expect(calls.every((c) => c.target.geminiToolCompat === true)).toBe(true);
+
     const patch = commits[0]!.patch as {
       kind: string;
       scope: string;

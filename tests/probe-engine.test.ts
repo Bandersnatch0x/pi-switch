@@ -120,6 +120,35 @@ describe("runProbe (ticket 1)", () => {
     });
   });
 
+  test("transport receives the target on every request (candidate flags included)", async () => {
+    const { transport, calls } = recordingTransport((req) => {
+      if (req.contract === "basic") return okText();
+      if (req.contract === "reasoning") return okThinking();
+      if (req.contract === "tool") return okTool();
+      throw new Error(`unexpected contract ${req.contract}`);
+    });
+
+    const targetWithFlags = {
+      ...targetBase,
+      reasoning: true,
+      fingerprint: "gemini" as const,
+      geminiToolCompat: true,
+    };
+    const result = await runProbe({
+      target: targetWithFlags,
+      model: { id: targetBase.modelId },
+      transport,
+    });
+
+    expect(result.ok).toBe(true);
+    // Every request carries the full target, so a production transport can
+    // apply fingerprint / claudeCodeCompat / geminiToolCompat per request.
+    expect(calls.length).toBeGreaterThan(0);
+    for (const req of calls) {
+      expect(req.target).toEqual(targetWithFlags);
+    }
+  });
+
   test("skips reasoning when target does not claim reasoning support", async () => {
     const { transport, calls } = recordingTransport((req) => {
       if (req.contract === "basic") return okText();

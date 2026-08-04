@@ -150,6 +150,13 @@ export interface ProbeCompleteOptions {
  */
 export interface ProbeRequest {
   contract: ProbeContractId;
+  /**
+   * Target this request is being sent under. For repair verification this is
+   * the in-memory candidate (patch applied); production transport reads
+   * fingerprint / claudeCodeCompat / geminiToolCompat from here. Pure engine
+   * only forwards it — never interprets it.
+   */
+  target: ProbeTarget;
   /** Opaque model handle (e.g. pi-ai Model) resolved by the caller. */
   model: unknown;
   context: ProbeContext;

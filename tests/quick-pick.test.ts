@@ -41,7 +41,10 @@ describe("buildQuickEntries", () => {
     ]);
     expect(entries[0].pinned).toBe(true);
     expect(entries[0].label).toBe("* C claude/alpha · gpt-5");
+    // Starred rows carry the stored pin so unpin can toggle with its identity.
+    expect(entries[0].pin).toEqual({ dbId: "a", model: "gpt-5" });
     expect(entries[1].label).toBe("  O codex/beta · r-new");
+    expect(entries[1].pin).toBeUndefined();
   });
 
   test("filters stale dbIds and unswitchable providers", () => {

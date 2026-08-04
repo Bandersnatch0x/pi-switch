@@ -149,6 +149,9 @@ export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult
     requestCount += 1;
     const transportResult = await opts.transport({
       contract,
+      // Forward a copy so a transport cannot mutate the caller's target object
+      // (repair verification sends the in-memory candidate target).
+      target: { ...opts.target },
       model: opts.model,
       context: built.context,
       options: {

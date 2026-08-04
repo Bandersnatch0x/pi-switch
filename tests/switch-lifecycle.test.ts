@@ -4,7 +4,7 @@ import {
   createSwitchLifecycle,
   type SwitchLifecycle,
 } from "../extensions/switch-lifecycle.ts";
-import { readSelection, type FsLike } from "../src/settings.ts";
+import { readPiSwitchConfig, readSelection, type FsLike } from "../src/settings.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PiSwitchConfig } from "../src/types.ts";
 import type { Runtime } from "../extensions/runtime.ts";
@@ -168,6 +168,7 @@ function setup(options?: {
     fs,
     operations,
     settingsPath,
+    configPath,
     getSessionStart: () => sessionStart,
   };
 }
@@ -199,6 +200,12 @@ describe("switch lifecycle interface", () => {
     expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
       dbId: "new",
       model: "gpt-5",
+    });
+    // Composite identity (#16): recents must carry appType or /ps dedupes wrong.
+    expect(readPiSwitchConfig(state.fs, state.configPath).recent?.[0]).toMatchObject({
+      dbId: "new",
+      model: "gpt-5",
+      appType: "codex",
     });
     expect(state.runtime.registeredPsNames).toEqual(["ps-codex-new"]);
   });

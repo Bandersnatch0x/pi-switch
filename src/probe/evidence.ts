@@ -658,6 +658,12 @@ export function normalizeProbeRun(
       ...(result.target.reasoning !== undefined
         ? { reasoning: result.target.reasoning }
         : {}),
+      ...(result.target.fingerprint !== undefined
+        ? { fingerprint: result.target.fingerprint }
+        : {}),
+      ...(result.target.claudeCodeCompat !== undefined
+        ? { claudeCodeCompat: result.target.claudeCodeCompat }
+        : {}),
       ...(result.target.geminiToolCompat !== undefined
         ? { geminiToolCompat: result.target.geminiToolCompat }
         : {}),

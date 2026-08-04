@@ -54,16 +54,7 @@ export interface RepairPlan {
  */
 export function buildRepairPlan(evidence: NormalizedProbeRunEvidence): RepairPlan {
   const recipes = matchRepairRecipes(evidence);
-  const target: ProbeTarget = {
-    provider: evidence.target.provider,
-    modelId: evidence.target.modelId,
-    ...(evidence.target.reasoning !== undefined
-      ? { reasoning: evidence.target.reasoning }
-      : {}),
-    ...(evidence.target.geminiToolCompat !== undefined
-      ? { geminiToolCompat: evidence.target.geminiToolCompat }
-      : {}),
-  };
+  const target: ProbeTarget = { ...evidence.target };
 
   return {
     target,
@@ -149,6 +140,7 @@ export type RepairOutcome =
       status: "cas-conflict";
       plan: RepairPlan;
       recipe: RepairRecipeMatch;
+      attempts: ProbeRunResult[];
       summary: string;
       persisted: false;
     }
@@ -156,6 +148,7 @@ export type RepairOutcome =
       status: "commit-error";
       plan: RepairPlan;
       recipe: RepairRecipeMatch;
+      attempts: ProbeRunResult[];
       summary: string;
       persisted: false;
     }
@@ -289,6 +282,7 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
         status: "cas-conflict",
         plan,
         recipe,
+        attempts,
         summary:
           commitResult.message?.trim() ||
           "config changed externally during repair; aborting to preserve external changes",
@@ -299,6 +293,7 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
       status: "commit-error",
       plan,
       recipe,
+      attempts,
       summary:
         commitResult.message?.trim() ||
         "failed to persist repair candidate",

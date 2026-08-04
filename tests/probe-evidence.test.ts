@@ -252,6 +252,23 @@ describe("normalizeProbeRun / normalizeStageEvidence (ticket 2)", () => {
     expect(json).not.toContain("observations");
   });
 
+  test("normalization preserves effective target compat flags", () => {
+    const run: ProbeRunResult = {
+      ...failAuthRun(),
+      target: {
+        ...failAuthRun().target,
+        fingerprint: "codex",
+        claudeCodeCompat: true,
+        geminiToolCompat: true,
+      },
+    };
+
+    const evidence = normalizeProbeRun({ result: run });
+    expect(evidence.target.fingerprint).toBe("codex");
+    expect(evidence.target.claudeCodeCompat).toBe(true);
+    expect(evidence.target.geminiToolCompat).toBe(true);
+  });
+
   test("ambiguous evidence yields signature unknown — no guessing", () => {
     const stage = normalizeStageEvidence({
       stage: {

@@ -82,11 +82,13 @@ export type {
   RepairCaseDetailData,
   RepairCaseDetailSessionEntry,
   RepairCaseModelChangeEntry,
+  RepairCaseRepairRecord,
   RepairCaseSession,
   RepairCaseSessionLayers,
   RepairCaseSessionTranscriptEntry,
   RepairCaseSummaryData,
   RepairCaseSummarySessionEntry,
+  RepairCaseVerificationAttempt,
   SessionModelRef,
 } from "./repair-case.ts";
 export {

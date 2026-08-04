@@ -291,8 +291,7 @@ export function applyPatchToTarget(
 ): ProbeTarget {
   if (patch.kind === "modelMeta" && patch.modelMeta.reasoning === false) {
     return {
-      provider: target.provider,
-      modelId: target.modelId,
+      ...target,
       reasoning: false,
     };
   }

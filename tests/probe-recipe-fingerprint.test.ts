@@ -404,6 +404,11 @@ describe("runRepair reuses ticket 4 pipeline for Recipe2 (ticket 5)", () => {
     expect(commits).toHaveLength(1);
     expect(commits[0]!.expectedVersion).toBe("cfg-fp-1");
 
+    // Every verify request carries the candidate fingerprint on the target,
+    // so the production transport can apply fingerprint headers per request.
+    expect(calls.every((c) => c.target.fingerprint === "claude-code")).toBe(true);
+    expect(calls.every((c) => c.target.claudeCodeCompat === true)).toBe(true);
+
     const patch = commits[0]!.patch as {
       kind: string;
       scope: string;

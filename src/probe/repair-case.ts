@@ -12,7 +12,14 @@
  */
 
 import { redactProbeText, type NormalizedProbeRunEvidence } from "./evidence.ts";
-import type { ProbeContractId, ProbeFailureCategory, ProbeStageStatus } from "./types.ts";
+import type { RepairOutcome } from "./repair.ts";
+import type {
+  ProbeContractId,
+  ProbeFailureCategory,
+  ProbeStageStatus,
+  ProbeStoppedReason,
+  ProbeTarget,
+} from "./types.ts";
 
 /** customType for the context-facing summary layer. */
 export const REPAIR_CASE_SUMMARY_CUSTOM_TYPE = "ps-repair-case-summary";
@@ -35,14 +42,45 @@ export interface RepairCaseSummaryData {
   stoppedReason?: string;
 }
 
+export interface RepairCaseVerificationAttempt {
+  pass: number;
+  ok: boolean;
+  requestCount: number;
+  stoppedReason?: ProbeStoppedReason;
+  stages: Array<{
+    contract: ProbeContractId;
+    status: ProbeStageStatus;
+    category?: ProbeFailureCategory;
+    httpStatus?: number;
+    summary: string;
+  }>;
+}
+
+export interface RepairCaseRepairRecord {
+  status: RepairOutcome["status"] | "cancelled";
+  persisted: boolean;
+  recipe?: {
+    recipeId: string;
+    signatureId: string;
+    scope: string;
+    affectedModels: string[];
+  };
+  verificationAttempts: RepairCaseVerificationAttempt[];
+  switch?: {
+    status: "not-offered" | "declined" | "succeeded" | "failed";
+    target?: ProbeTarget;
+    summary?: string;
+  };
+}
+
 /** Detailed durable evidence for the custom entry (not sent to the LLM). */
 export interface RepairCaseDetailData {
   caseId: string;
-  target: { provider: string; modelId: string; reasoning?: boolean };
+  target: ProbeTarget;
   ok: boolean;
   evidence: NormalizedProbeRunEvidence;
-  /** Reserved for later tickets (recipe attempts). */
-  recipeAttempts: unknown[];
+  recipeAttempts: RepairCaseVerificationAttempt[];
+  repair?: RepairCaseRepairRecord;
 }
 
 /**
@@ -99,6 +137,7 @@ export function createCaseId(
 export function formatRepairCaseSummaryText(
   caseId: string,
   evidence: NormalizedProbeRunEvidence,
+  repair?: RepairCaseRepairRecord,
 ): string {
   const target = `${evidence.target.provider}/${evidence.target.modelId}`;
   const parts = evidence.stages.map((s) => {
@@ -109,7 +148,13 @@ export function formatRepairCaseSummaryText(
   });
   const head = evidence.ok ? "PASS" : "FAIL";
   const stop = evidence.stoppedReason ? ` stop=${evidence.stoppedReason}` : "";
-  const raw = `ps-repair-case ${caseId} ${head} ${target} [${parts.join(", ")}]${stop}`;
+  const repairStatus = repair ? ` repair=${repair.status}` : "";
+  const switchStatus = repair?.switch
+    ? ` switch=${repair.switch.status}`
+    : "";
+  const raw =
+    `ps-repair-case ${caseId} ${head} ${target} [${parts.join(", ")}]` +
+    `${stop}${repairStatus}${switchStatus}`;
   return redactProbeText(raw);
 }
 
@@ -119,6 +164,7 @@ export function formatRepairCaseSummaryText(
  */
 export function buildRepairCaseLayers(input: {
   evidence: NormalizedProbeRunEvidence;
+  repair?: RepairCaseRepairRecord;
   caseId?: string;
   now?: () => Date;
   random?: () => number;
@@ -127,7 +173,7 @@ export function buildRepairCaseLayers(input: {
     input.caseId ?? createCaseId(input.now ?? (() => new Date()), input.random ?? Math.random);
   const { evidence } = input;
 
-  const text = formatRepairCaseSummaryText(caseId, evidence);
+  const text = formatRepairCaseSummaryText(caseId, evidence, input.repair);
 
   const summary: RepairCaseSummaryData = {
     caseId,
@@ -157,16 +203,11 @@ export function buildRepairCaseLayers(input: {
 
   const detail: RepairCaseDetailData = {
     caseId,
-    target: {
-      provider: evidence.target.provider,
-      modelId: evidence.target.modelId,
-      ...(evidence.target.reasoning !== undefined
-        ? { reasoning: evidence.target.reasoning }
-        : {}),
-    },
+    target: { ...evidence.target },
     ok: evidence.ok,
     evidence,
-    recipeAttempts: [],
+    recipeAttempts: input.repair?.verificationAttempts ?? [],
+    ...(input.repair ? { repair: input.repair } : {}),
   };
 
   const summaryEntry: RepairCaseSummarySessionEntry = {
