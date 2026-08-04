@@ -47,7 +47,8 @@
     "prepublishOnly": "bun test",
     "release": "bun scripts/release.mjs",
     "release:apply": "bun scripts/release.mjs --apply",
-    "smoke": "bun scripts/smoke.mjs"
+    "smoke": "bun scripts/smoke.mjs",
+    "smoke:probe-repair": "bun scripts/smoke-probe-repair.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.78.1",
