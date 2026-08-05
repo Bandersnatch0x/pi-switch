@@ -2,16 +2,17 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createSwitchLifecycle,
+  sessionModelFromBranch,
   type SwitchLifecycle,
 } from "../extensions/switch-lifecycle.ts";
 import { readPiSwitchConfig, readSelection, type FsLike } from "../src/settings.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
-import type { CcProvider, PiSwitchConfig } from "../src/types.ts";
+import type { CcProvider, PiSwitchConfig, RecentEntry } from "../src/types.ts";
 import type { Runtime } from "../extensions/runtime.ts";
 import { createLocalState } from "../src/local-state.ts";
 
 type Operation =
-  | { op: "register"; name: string }
+  | { op: "register"; name: string; models?: string[] }
   | { op: "find"; name: string }
   | { op: "setModel" }
   | { op: "unregister"; name: string };
@@ -68,24 +69,34 @@ function memFs(
 
 function setup(options?: {
   providers?: CcProvider[];
-  selection?: { dbId: string; model: string };
+  selection?: { dbId: string; model: string; appType?: string };
+  recent?: RecentEntry[];
   setModelResult?: boolean;
   failSelectionWrite?: boolean;
   failRecentWrite?: boolean;
   failUnregister?: boolean;
   hasUnregister?: boolean;
+  /** Active model already set on ctx (Pi restore succeeded). */
+  activeModel?: { provider: string; id: string };
+  /** Session branch for getBranch (continue/resume model recovery). */
+  branch?: Array<Record<string, unknown>>;
 }) {
   const home = "/home/test";
   const settingsPath = `${home}/.pi/agent/settings.json`;
   const configPath = `${home}/.pi/agent/pi-switch.json`;
-  const initial: Record<string, string> = options?.selection
-    ? {
-        [settingsPath]: JSON.stringify({
-          piSwitchSelection: options.selection,
-        }),
-        [configPath]: "{}",
-      }
-    : { [configPath]: "{}" };
+  const configBody: Record<string, unknown> = options?.recent
+    ? { recent: options.recent }
+    : {};
+  const initial: Record<string, string> = {
+    [configPath]: JSON.stringify(configBody),
+    ...(options?.selection
+      ? {
+          [settingsPath]: JSON.stringify({
+            piSwitchSelection: options.selection,
+          }),
+        }
+      : {}),
+  };
   const fs = memFs(
     initial,
     [
@@ -98,8 +109,12 @@ function setup(options?: {
   let sessionStart: SessionStartHandler | undefined;
 
   const pi = {
-    registerProvider: (name: string) => {
-      operations.push({ op: "register", name });
+    registerProvider: (name: string, config?: { models?: Array<{ id: string }> }) => {
+      operations.push({
+        op: "register",
+        name,
+        models: config?.models?.map((m) => m.id),
+      });
     },
     setModel: async () => {
       operations.push({ op: "setModel" });
@@ -118,7 +133,10 @@ function setup(options?: {
         }),
   };
 
-  const config: PiSwitchConfig = { recentLimit: 5 };
+  const config: PiSwitchConfig = {
+    recentLimit: 5,
+    recent: options?.recent,
+  };
   const scheduleCalls: string[] = [];
   const runtime = {
     home,
@@ -146,11 +164,15 @@ function setup(options?: {
 
   const ctx = {
     modelRegistry: {
-      find: (name: string) => {
+      find: (name: string, modelId?: string) => {
         operations.push({ op: "find", name });
-        return { provider: name, id: "gpt-5" };
+        return { provider: name, id: modelId ?? "gpt-5" };
       },
     },
+    model: options?.activeModel,
+    sessionManager: options?.branch
+      ? { getBranch: () => options.branch ?? [] }
+      : undefined,
     ui: {
       notify: () => undefined,
       setStatus: () => undefined,
@@ -402,5 +424,126 @@ describe("switch lifecycle interface", () => {
       "setModel",
     ]);
     expect(state.runtime.registeredPsNames).toEqual(["ps-codex-saved"]);
+  });
+
+  test("install pre-registers recent providers so session restore can find them", () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5" },
+      recent: [
+        { dbId: "zhipu-id", model: "glm-5.2", appType: "codex", at: 1 },
+        { dbId: "saved", model: "gpt-5", appType: "codex", at: 2 },
+      ],
+    });
+
+    state.lifecycle.install();
+
+    const registers = state.operations.filter((item) => item.op === "register");
+    expect(registers.map((item) => item.name).sort()).toEqual([
+      "xkool",
+      "zhipu-glm-en",
+    ]);
+    expect(state.runtime.registeredPsNames.sort()).toEqual([
+      "xkool",
+      "zhipu-glm-en",
+    ]);
+  });
+
+  test("resume re-applies session model without rewriting selection", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5" },
+      recent: [{ dbId: "zhipu-id", model: "glm-5.2", appType: "codex", at: 1 }],
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "zhipu-glm-en",
+    });
+    // Selection stays on the default, not the session model.
+    expect(readSelection(state.fs, state.settingsPath)).toEqual({
+      dbId: "saved",
+      model: "gpt-5",
+    });
+  });
+
+  test("startup skips setModel when Pi already restored the session model", async () => {
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [zhipu],
+      selection: { dbId: "zhipu-id", model: "glm-5.2" },
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      activeModel: { provider: "zhipu-glm-en", id: "glm-5.2" },
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    await state.getSessionStart()?.({ reason: "startup" }, state.ctx);
+    expect(state.operations.map((item) => item.op)).toEqual(["register", "find"]);
+    expect(state.operations.some((item) => item.op === "setModel")).toBe(false);
+  });
+});
+
+describe("sessionModelFromBranch", () => {
+  test("returns last model_change", () => {
+    expect(
+      sessionModelFromBranch([
+        { type: "model_change", provider: "a", modelId: "m1" },
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ]),
+    ).toEqual({ provider: "zhipu-glm-en", modelId: "glm-5.2" });
+  });
+
+  test("assistant message updates model after model_change", () => {
+    expect(
+      sessionModelFromBranch([
+        { type: "model_change", provider: "a", modelId: "m1" },
+        {
+          type: "message",
+          message: { role: "assistant", provider: "b", model: "m2" },
+        },
+      ]),
+    ).toEqual({ provider: "b", modelId: "m2" });
+  });
+
+  test("empty branch yields undefined", () => {
+    expect(sessionModelFromBranch([])).toBeUndefined();
+    expect(sessionModelFromBranch(undefined)).toBeUndefined();
   });
 });

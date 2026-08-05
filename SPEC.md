@@ -419,10 +419,14 @@ v0.1 **不包含**：
 extension load
   → resolve sqlite3 path + 验证
   → read DB（只读 + busy_timeout=3000）→ parse all → 内存快照
-  → if piSwitchSelection.dbId 命中可切换 provider → register that one
-  → if dbId 未命中 → 不 setModel、不清除 selection、会话内警告一次
-session_start(startup)
-  → applyModel(selection) if still valid
+  → register selection + recent（可切换的 provider/model）
+    · 目的：Pi 在 session_start 之前恢复会话模型时，动态 provider 已在 registry
+  → if selection.dbId 未命中且无 recent 可注册 → 不 setModel、不清除 selection、会话内警告一次
+session_start(startup | resume | fork | reload)
+  → 优先 session branch 最后模型（若 piName 命中可切换 provider）
+    · setModel 成功但不改写 selection（会话连续 ≠ 改默认）
+  → 否则 applyModel(selection) if still valid（可规范化 [1M] tag）
+  → 若 Pi 已恢复到目标模型 → 只 setStatus，不再 setModel
   → setStatus
 /ps-config
   → 重新读 DB + 解析（刷新快照）
@@ -435,6 +439,8 @@ session_start(startup)
 | DB 缺失 / 首次读取失败 | notify；命令提示安装/配置 `CC_SWITCH_DB` |
 | 刷新时 busy/超时/临时失败 | 沿用**最后一次有效快照**；notify 警告 |
 | 保存的 dbId 不存在 | 不自动回退；不 setModel；保留 selection；会话警告一次 |
+| continue/resume 会话模型是 pi-switch provider | 预注册 + session_start 再激活；不覆盖 selection |
+| 会话模型不是 pi-switch / 无法解析 | 回退 selection；Pi 自带 fallback 警告可能仍出现 |
 | `CC_SWITCH_DB` | 覆盖默认路径 |
 | 默认路径 | `{homedir}/.cc-switch/cc-switch.db`（Windows/macOS/Linux 相同约定） |
 
