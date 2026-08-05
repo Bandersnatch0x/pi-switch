@@ -762,6 +762,10 @@ export async function runProbeCommand(
       precheck,
     };
     reportPrecheckStop(ctx, "ps-probe", halt);
+    // Headless / CI structured output (parity with post-runProbe path).
+    if (ctx.mode === "json" || ctx.mode === "print") {
+      console.log(formatProbeResultJson(halt));
+    }
     recordProbeCase(pi, halt, []);
     return;
   }

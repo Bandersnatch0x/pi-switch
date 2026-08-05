@@ -131,12 +131,28 @@ function makeRt(
     refreshSnapshot: () => ({ providers, error: undefined }),
     readSelectionCached: () => undefined,
     config: { providerOverrides: {} },
-    modelMetaFor: () => (opts.reasoning ? { reasoning: true } : undefined),
+    // Provide maxTokens so #63 registration gate admits the probe model.
+    modelMetaFor: () =>
+      opts.reasoning
+        ? { reasoning: true, maxTokens: 8_192 }
+        : { maxTokens: 8_192 },
     headerRules: [],
     headerOverrideOpts: () => ({}),
     rejectSink: () => undefined,
     modelsDevFor: () => undefined,
     headerVars: () => ({}),
+    capabilitiesFor: (provider: { api?: string | null; baseUrl: string }, modelId: string) => {
+      // Satisfies precheck capability soft-check when present.
+      void provider;
+      void modelId;
+      return {
+        contextWindow: { value: 128_000, source: "user-override" },
+        maxTokens: { value: 8_192, source: "user-override" },
+        reasoning: { value: Boolean(opts.reasoning), source: "user-override" },
+        vision: { value: false, source: "conservative-default" },
+        conflicts: [],
+      };
+    },
     home: "/home/user",
     fsLike: (): FsLike =>
       ({

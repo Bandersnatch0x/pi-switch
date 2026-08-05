@@ -139,8 +139,17 @@ describe("effective config summary", () => {
       }),
       headerVars: () => ({}),
       rejectSink: () => undefined,
+      // Trusted maxTokens so registration is eligible under issue #63.
       modelMetaFor: () => ({ contextWindow: 400_000, maxTokens: 32_000 }),
       providerWireCompatFor: () => undefined,
+      modelsDevFor: () => undefined,
+      capabilitiesFor: () => ({
+        contextWindow: { value: 400_000, source: "user-override" },
+        maxTokens: { value: 32_000, source: "user-override" },
+        reasoning: { value: true, source: "user-override" },
+        vision: { value: false, source: "conservative-default" },
+        conflicts: [],
+      }),
     };
     const ctx = {
       model: { provider: currentProvider.piName, id: "gpt-5" },
