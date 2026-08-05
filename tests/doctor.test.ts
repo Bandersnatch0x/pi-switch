@@ -153,6 +153,39 @@ describe("runDoctor", () => {
     expect(check?.fix).toContain("providerOverrides");
   });
 
+  test("stale Chat wire override on a non-Chat selection does not crash doctor", () => {
+    const p = mk({
+      id: "claude-relay",
+      displayName: "claude",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+    });
+    // Leftover Chat compat after API change: soft-fail to undefined, doctor still runs.
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: p,
+      override: { api: "openai-completions", supportsStore: true },
+    });
+    expect(providerWireCompat).toBeUndefined();
+
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [p],
+      selection: { dbId: p.id, model: "m1" },
+      config: {},
+      headerRuleCount: 1,
+      providerWireCompat,
+    });
+
+    expect(report.summary.fail).toBe(0);
+    expect(
+      report.checks.find((candidate) => candidate.id === "provider-wire-compat"),
+    ).toBeUndefined();
+  });
+
   test("warns when fingerprint uses fallbacks", () => {
     const report = runDoctor({
       home: "/h",

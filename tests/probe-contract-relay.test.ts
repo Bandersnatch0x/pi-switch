@@ -308,6 +308,7 @@ function transport(geminiMode?: "AUTO") {
 function registeredChatModel(
   baseUrl: string,
   supportsStore?: boolean,
+  options?: { resolveDefault?: boolean },
 ): Model<Api> {
   const provider: CcProvider = {
     id: "chat-relay",
@@ -328,7 +329,9 @@ function registeredChatModel(
           provider,
           override: { api: "openai-completions", supportsStore },
         })
-      : undefined;
+      : options?.resolveDefault
+        ? resolveProviderWireCompat({ provider })
+        : undefined;
   const config = buildProviderConfig(provider, ["relay-model"], {
     rules: [],
     providerWireCompat,
@@ -587,6 +590,37 @@ describe("Provider wire compat request characterization", () => {
       expect(relay.rejections).toEqual([
         { status: 400, field: "store", rule: "forbidden" },
       ]);
+    } finally {
+      relay.close();
+    }
+  });
+
+  test("official OpenAI leaves compat.supportsStore unset and adapter still emits store:false", async () => {
+    // Capture body against a local strict relay while resolving as official
+    // OpenAI so registration omits supportsStore and pi-ai adapter facts win.
+    const relay = createStrictRelay(
+      "openai-completions",
+      OFFICIAL_PROFILES["openai-completions"],
+    );
+    const model = registeredChatModel("https://api.openai.com/v1", undefined, {
+      resolveDefault: true,
+    });
+    // Point the live request at the capture relay without changing registration.
+    const request = makeRequest({ ...model, baseUrl: relay.baseUrl });
+    const contextBefore = structuredClone(request.context);
+
+    try {
+      expect(model.compat?.supportsStore).toBeUndefined();
+
+      const result = await transport()(request);
+
+      expect(result.message.stopReason).toBe("stop");
+      expect(request.context).toEqual(contextBefore);
+      expect(relay.requests).toHaveLength(1);
+      // Adapter-native store (not a registration override): body includes store.
+      expect(relay.requests[0]?.body).toEqual(expectedRegisteredChatBody(true));
+      expect(relay.requests[0]?.body).toHaveProperty("store", false);
+      expect(relay.rejections).toEqual([]);
     } finally {
       relay.close();
     }

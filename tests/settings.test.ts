@@ -372,6 +372,18 @@ describe("provider wire compat persistence", () => {
       },
       {
         providerOverrides: {
+          codex: {
+            "provider-1": {
+              modelMeta: {
+                reasoning: false,
+                compat: { api: "openai-completions", supportsStore: true },
+              },
+            },
+          },
+        },
+      },
+      {
+        providerOverrides: {
           codex: { "provider-1": { compat: null } },
         },
       },

@@ -10,6 +10,7 @@ import { resolveRegistrationMeta } from "./capabilities/registration.ts";
 import {
   providerWireCompatForRegistration,
   resolveProviderWireCompat,
+  type ProviderWireCompat,
   type ResolvedProviderWireCompat,
 } from "./provider-wire-compat.ts";
 
@@ -87,10 +88,21 @@ type RegisterOpts = {
    */
   modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
   /**
-   * Resolved Provider Chat wire fact. When omitted, registration resolves the
-   * Provider-only default (official native vs conservative relay false).
+   * Pre-resolved Provider Chat wire fact (preferred). Pass the result of
+   * `Runtime.providerWireCompatFor(provider)` so user overrides are applied.
+   *
+   * When omitted, registration falls back to `providerWireOverride` (if any)
+   * plus Provider-only defaults (official native vs conservative relay false).
+   * Omitting both intentionally does **not** consult `providerOverrides` —
+   * callers that hold user config must pass one of these fields.
    */
   providerWireCompat?: ResolvedProviderWireCompat;
+  /**
+   * Raw Provider-scoped wire override used only when `providerWireCompat` is
+   * omitted. Lets callers pass the parsed `providerOverrides.*.compat` without
+   * resolving first.
+   */
+  providerWireOverride?: ProviderWireCompat;
 };
 
 export function buildProviderConfig(
@@ -104,6 +116,7 @@ export function buildProviderConfig(
     opts.providerWireCompat ??
     resolveProviderWireCompat({
       provider: { api: provider.api, baseUrl: provider.baseUrl },
+      override: opts.providerWireOverride,
     });
   const registrationWire = providerWireCompatForRegistration(resolvedWire);
   const models = ids.filter(Boolean).map((raw) => {

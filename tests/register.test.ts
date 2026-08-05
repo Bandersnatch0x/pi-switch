@@ -362,4 +362,32 @@ describe("buildProviderConfig", () => {
     expect(official?.models[0]?.compat?.supportsStore).toBeUndefined();
     expect(anthropic?.models[0]?.compat?.supportsStore).toBeUndefined();
   });
+
+  test("omitting providerWireCompat applies defaults only; providerWireOverride restores user fact", () => {
+    const relay = mk({
+      id: "chat-relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+
+    // Footgun lock: bare opts never consult providerOverrides — only defaults.
+    const defaultsOnly = buildProviderConfig(relay, ["relay-model"], {
+      rules: [],
+    });
+    expect(defaultsOnly?.models[0]?.compat).toMatchObject({
+      supportsStore: false,
+    });
+
+    const withOverride = buildProviderConfig(relay, ["relay-model"], {
+      rules: [],
+      providerWireOverride: {
+        api: "openai-completions",
+        supportsStore: true,
+      },
+    });
+    expect(withOverride?.models[0]?.compat).toMatchObject({
+      supportsStore: true,
+    });
+  });
 });

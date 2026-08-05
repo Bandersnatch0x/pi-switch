@@ -133,15 +133,23 @@ describe("resolveProviderWireCompat", () => {
     ]);
   });
 
-  test("does not apply to another API and rejects a discriminator mismatch", () => {
+  test("does not apply to another API and soft-fails on a stale discriminator", () => {
     expect(
       resolveProviderWireCompat({ provider: provider("anthropic-messages") }),
     ).toBeUndefined();
-    expect(() =>
+    // Leftover Chat compat on a non-Chat (or API-changed) provider must not throw
+    // so doctor / info / switch stay operational.
+    expect(
       resolveProviderWireCompat({
         provider: provider("openai-responses"),
         override: { api: "openai-completions", supportsStore: true },
       }),
-    ).toThrow(/does not match provider api/i);
+    ).toBeUndefined();
+    expect(
+      resolveProviderWireCompat({
+        provider: provider("anthropic-messages"),
+        override: { api: "openai-completions", supportsStore: false },
+      }),
+    ).toBeUndefined();
   });
 });

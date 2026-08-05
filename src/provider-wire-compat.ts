@@ -88,24 +88,29 @@ function isOfficialOpenAiEndpoint(baseUrl: string): boolean {
 /**
  * Resolve Provider wire authority without consulting model ids, models.dev, or
  * CC Switch metadata.
+ *
+ * Soft-fails on stale/mismatched overrides: non-Chat providers and Chat
+ * overrides whose api discriminator no longer matches the live provider return
+ * `undefined` (or ignore the override) instead of throwing, so doctor / info /
+ * switch paths stay operational.
  */
 export function resolveProviderWireCompat(input: {
   provider: Pick<CcProvider, "api" | "baseUrl">;
   override?: ProviderWireCompat;
 }): ResolvedProviderWireCompat | undefined {
   const { provider, override } = input;
-  if (override && override.api !== provider.api) {
-    throw new Error(
-      `provider compat api ${override.api} does not match provider api ${provider.api ?? "unsupported"}`,
-    );
-  }
+  // Non-Chat first: leftover Chat compat must not crash doctor/info/switch.
   if (provider.api !== CHAT_COMPLETIONS_API) return undefined;
+
+  // Ignore stale overrides whose discriminator no longer matches the live API.
+  const effectiveOverride =
+    override && override.api === provider.api ? override : undefined;
 
   const officialValue = isOfficialOpenAiEndpoint(provider.baseUrl)
     ? true
     : undefined;
-  if (typeof override?.supportsStore === "boolean") {
-    const value = override.supportsStore;
+  if (typeof effectiveOverride?.supportsStore === "boolean") {
+    const value = effectiveOverride.supportsStore;
     const conflicts: ProviderWireCompatConflict[] =
       typeof officialValue === "boolean" && value !== officialValue
         ? [
@@ -127,7 +132,7 @@ export function resolveProviderWireCompat(input: {
     };
   }
 
-  if (officialValue) {
+  if (officialValue === true) {
     return {
       api: CHAT_COMPLETIONS_API,
       value: true,
