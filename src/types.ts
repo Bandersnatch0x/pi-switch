@@ -1,6 +1,8 @@
 /** @see src/compat/gemini-tool-compat.ts — single source of truth */
 import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
+import type { ProviderWireCompat } from "./provider-wire-compat.ts";
 export type { GeminiToolCompatConfig };
+export type { ProviderWireCompat };
 
 /** Supported Pi API protocols for registration. */
 export type PiApi =
@@ -202,6 +204,8 @@ export interface PiSwitchConfig {
        * `defaultModelMeta`. Most specific glob wins.
        */
       modelOverrides?: Record<string, ModelMetaOverride>;
+      /** Provider-scoped request-wire compatibility, discriminated by API. */
+      compat?: ProviderWireCompat;
       /**
        * Force Claude Code compat on/off for this provider.
        * undefined = follow global claudeCodeCompat.mode rules.

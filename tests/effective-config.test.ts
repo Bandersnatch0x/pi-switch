@@ -8,6 +8,7 @@ import {
   formatEffectiveConfigSummary,
 } from "../src/effective-config.ts";
 import type { BuiltProviderConfig } from "../src/register.ts";
+import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function provider(): CcProvider {
@@ -81,6 +82,43 @@ describe("effective config summary", () => {
     expect(text).not.toContain("Bearer hidden");
   });
 
+  test("shows Provider supportsStore value, scope, and authority source", () => {
+    const chatProvider = {
+      ...provider(),
+      api: "openai-completions" as const,
+      baseUrl: "https://relay.example/v1",
+    };
+    const config = {
+      ...builtConfig(),
+      api: "openai-completions" as const,
+      baseUrl: chatProvider.baseUrl,
+      models: [
+        {
+          ...builtConfig().models[0]!,
+          compat: { supportsStore: false },
+        },
+      ],
+    };
+    const providerWireCompat = resolveProviderWireCompat({ provider: chatProvider });
+    const summary = createEffectiveConfigSummary({
+      source: "active",
+      provider: chatProvider,
+      modelId: "gpt-5",
+      config,
+      providerWireCompat,
+    });
+    const text = formatEffectiveConfigSummary(summary);
+
+    expect(summary.providerWireCompat).toEqual({
+      supportsStore: false,
+      scope: "provider",
+      source: "conservative-default",
+    });
+    expect(text).toContain(
+      "providerWireCompat: supportsStore=false scope=provider source=conservative-default",
+    );
+  });
+
   test("command prefers the active runtime model and registers ps-info", () => {
     const notifications: string[] = [];
     const logs = spyOn(console, "log").mockImplementation(() => undefined);
@@ -102,6 +140,7 @@ describe("effective config summary", () => {
       headerVars: () => ({}),
       rejectSink: () => undefined,
       modelMetaFor: () => ({ contextWindow: 400_000, maxTokens: 32_000 }),
+      providerWireCompatFor: () => undefined,
     };
     const ctx = {
       model: { provider: currentProvider.piName, id: "gpt-5" },

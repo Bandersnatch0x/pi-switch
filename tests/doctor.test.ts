@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { compareSemver } from "../src/settings.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
+import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function mk(
@@ -116,6 +117,40 @@ describe("runDoctor", () => {
     expect(check?.detail).toContain("alpha/gone-model");
     // globs are never reported stale
     expect(check?.detail).not.toContain("gpt-5*");
+  });
+
+  test("warns when an explicit Provider wire override conflicts with official adapter facts", () => {
+    const p = mk({
+      id: "openai",
+      displayName: "official",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1?secret=hidden",
+    });
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: p,
+      override: { api: "openai-completions", supportsStore: false },
+    });
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [p],
+      selection: { dbId: p.id, model: "m1" },
+      config: {},
+      headerRuleCount: 1,
+      providerWireCompat,
+    });
+
+    const check = report.checks.find((candidate) => candidate.id === "provider-wire-compat");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain(
+      "supportsStore=false(user-provider, scope=provider)",
+    );
+    expect(check?.detail).toContain("official-adapter");
+    expect(check?.detail).not.toContain("secret");
+    expect(check?.fix).toContain("providerOverrides");
   });
 
   test("warns when fingerprint uses fallbacks", () => {

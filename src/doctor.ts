@@ -21,6 +21,7 @@ import {
   summarizeModelMeta,
 } from "./model-meta.ts";
 import { resolveProviderOverride } from "./provider-override.ts";
+import type { ResolvedProviderWireCompat } from "./provider-wire-compat.ts";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -79,6 +80,8 @@ export interface DoctorInput {
   migrationSummary?: IdentityMigrationSummary;
   /** Probed CC Switch schema capabilities (W1). Undefined when not available. */
   schemaCapabilities?: DbCapabilities;
+  /** Resolved Provider Chat wire fact for the current selection (issue #62). */
+  providerWireCompat?: ResolvedProviderWireCompat;
 }
 
 export interface DoctorReport {
@@ -489,6 +492,27 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       detail,
       fix: warnRows.length
         ? "冲突：可显式 override 钉值；过期：清缓存重拉（pi-switch-cache.json 或 config.capabilitiesRefresh）"
+        : undefined,
+    });
+  }
+
+  // 11.5 Provider wire compat (issue #62): provenance + override conflicts
+  if (input.providerWireCompat) {
+    const wire = input.providerWireCompat;
+    const conflictRows = wire.conflicts.map(
+      (c) =>
+        `${c.field}=${c.effective}(${c.effectiveSource}, scope=${wire.scope}) vs ${c.overridden}(${c.overriddenSource})`,
+    );
+    const detail = conflictRows.length
+      ? conflictRows.join("；")
+      : `supportsStore=${wire.value}(${wire.source}, scope=${wire.scope})`;
+    checks.push({
+      id: "provider-wire-compat",
+      title: "Provider 请求线兼容",
+      status: conflictRows.length ? "warn" : "pass",
+      detail,
+      fix: conflictRows.length
+        ? "显式 providerOverrides.<provider>.compat 覆盖了官方 adapter 事实；确认中转是否真的不支持 store，或删除该覆写"
         : undefined,
     });
   }

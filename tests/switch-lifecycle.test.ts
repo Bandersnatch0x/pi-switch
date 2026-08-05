@@ -156,6 +156,7 @@ function setup(options?: {
     rejectSink: () => undefined,
     modelMetaFor: () => undefined,
     modelsDevFor: () => undefined,
+    providerWireCompatFor: () => undefined,
     scheduleModelsDevRefresh: (modelId: string) => {
       scheduleCalls.push(modelId);
     },

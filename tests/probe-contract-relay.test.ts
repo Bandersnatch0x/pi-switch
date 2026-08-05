@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { createProbeTransport } from "../extensions/probe-commands.ts";
 import type { ProbeRequest } from "../src/probe/index.ts";
+import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
+import { buildProviderConfig } from "../src/register.ts";
+import type { CcProvider } from "../src/types.ts";
 import {
   createStrictRelay,
   type StrictRelayProfile,
@@ -302,6 +305,54 @@ function transport(geminiMode?: "AUTO") {
   });
 }
 
+function registeredChatModel(
+  baseUrl: string,
+  supportsStore?: boolean,
+): Model<Api> {
+  const provider: CcProvider = {
+    id: "chat-relay",
+    piName: "ps-codex-chat-relay",
+    displayName: "Chat relay",
+    appType: "codex",
+    api: "openai-completions",
+    baseUrl,
+    apiKey: "test-key",
+    authHeader: true,
+    configModels: ["relay-model"],
+    meta: {},
+    isCurrentInCc: false,
+  };
+  const providerWireCompat =
+    typeof supportsStore === "boolean"
+      ? resolveProviderWireCompat({
+          provider,
+          override: { api: "openai-completions", supportsStore },
+        })
+      : undefined;
+  const config = buildProviderConfig(provider, ["relay-model"], {
+    rules: [],
+    providerWireCompat,
+  });
+  const model = config?.models[0];
+  if (!config || !model) throw new Error("failed to build registered Chat model");
+  return {
+    ...model,
+    api: config.api,
+    provider: provider.piName,
+    baseUrl: config.baseUrl,
+  };
+}
+
+function expectedRegisteredChatBody(supportsStore: boolean): Record<string, unknown> {
+  const body = structuredClone(
+    EXPECTED_BODIES["openai-completions"],
+  ) as Record<string, unknown>;
+  delete body.store;
+  delete body.reasoning_effort;
+  if (supportsStore) body.store = false;
+  return body;
+}
+
 describe("strict relay profile validation", () => {
   test("returns field-level 400 for disallowed, missing, and nested forbidden fields", async () => {
     const cases: Array<{
@@ -479,6 +530,63 @@ describe("Probe Contract request characterization", () => {
           functionCallingConfig: { mode: "AUTO" },
         },
       });
+    } finally {
+      relay.close();
+    }
+  });
+});
+
+describe("Provider wire compat request characterization", () => {
+  test("explicit false and an absent unknown-relay override omit store", async () => {
+    for (const supportsStore of [false, undefined] as const) {
+      const relay = createStrictRelay(
+        "openai-completions",
+        OFFICIAL_PROFILES["openai-completions"],
+      );
+      const request = makeRequest(
+        registeredChatModel(relay.baseUrl, supportsStore),
+      );
+      const contextBefore = structuredClone(request.context);
+
+      try {
+        const result = await transport()(request);
+
+        expect(result.message.stopReason).toBe("stop");
+        expect(request.context).toEqual(contextBefore);
+        expect(relay.requests).toHaveLength(1);
+        expect(relay.requests[0]?.body).toEqual(
+          expectedRegisteredChatBody(false),
+        );
+        expect(relay.requests[0]?.body).not.toHaveProperty("store");
+        expect(relay.rejections).toEqual([]);
+      } finally {
+        relay.close();
+      }
+    }
+  });
+
+  test("explicit true emits store:false and exposes one upstream 400 without retry", async () => {
+    const relay = createStrictRelay("openai-completions", {
+      ...OFFICIAL_PROFILES["openai-completions"],
+      name: "chat-relay-without-store",
+      forbiddenFields: ["store"],
+    });
+    const request = makeRequest(registeredChatModel(relay.baseUrl, true));
+    const contextBefore = structuredClone(request.context);
+
+    try {
+      const result = await transport()(request);
+
+      expect(result.message.stopReason).toBe("error");
+      expect(result.message.errorMessage).toContain("store");
+      expect(request.context).toEqual(contextBefore);
+      expect(relay.requests).toHaveLength(1);
+      expect(relay.requests[0]?.body).toEqual(
+        expectedRegisteredChatBody(true),
+      );
+      expect(relay.rejections).toEqual([
+        { status: 400, field: "store", rule: "forbidden" },
+      ]);
     } finally {
       relay.close();
     }

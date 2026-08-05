@@ -614,6 +614,7 @@ function findOrRegisterProbeModel(
         onReject: rt.rejectSink(),
         modelMetaFor: (id) => rt.modelMetaFor(provider, id),
         modelsDevFor: (id) => rt.modelsDevFor?.(id),
+        providerWireCompat: rt.providerWireCompatFor?.(provider),
       },
     );
   } catch {

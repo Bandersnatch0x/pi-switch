@@ -301,6 +301,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     refreshFailure: rt.lastRefreshFailure(),
     migrationSummary: rt.migrationSummary,
     schemaCapabilities,
+    providerWireCompat: selMatch ? rt.providerWireCompatFor?.(selMatch) : undefined,
   });
 
   const text = formatDoctorReport(report);
@@ -354,6 +355,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
 
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
+  const providerWireCompat = rt.providerWireCompatFor?.(provider);
   const config = buildProviderConfig(provider, [resolvedModelId], {
     rules: rt.headerRules,
     ...rt.headerOverrideOpts(provider),
@@ -362,6 +364,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     onReject: rt.rejectSink(),
     modelMetaFor: (id) => rt.modelMetaFor(provider, id),
     modelsDevFor: (id) => rt.modelsDevFor?.(id),
+    providerWireCompat,
   });
   if (!config) {
     ctx.ui?.notify?.(
@@ -382,6 +385,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     modelId: resolvedModelId,
     config,
     fingerprint,
+    providerWireCompat,
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {

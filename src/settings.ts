@@ -24,6 +24,10 @@ import {
 import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
 import { parseGeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 import {
+  parseProviderWireCompat,
+  type ProviderWireCompat,
+} from "./provider-wire-compat.ts";
+import {
   readJsonObjectLenient,
   updateJsonObjectAtomic,
   type FsLike,
@@ -218,8 +222,92 @@ function parseRecent(raw: unknown): RecentEntry[] | undefined {
   return out;
 }
 
+const PROVIDER_OVERRIDE_ENTRY_KEYS = new Set([
+  "label",
+  "fingerprint",
+  "headers",
+  "modelMeta",
+  "modelOverrides",
+  "compat",
+  "claudeCodeCompat",
+  "geminiToolCompat",
+]);
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function rejectNestedWireCompat(value: unknown, path: string): void {
+  if (isPlainObject(value) && hasOwn(value, "compat")) {
+    throw new Error(
+      `invalid ${path}.compat scope: Provider wire compat belongs under providerOverrides.<provider>.compat`,
+    );
+  }
+}
+
+function parseProviderOverrideEntry(
+  raw: Record<string, unknown>,
+  path: string,
+): Record<string, unknown> {
+  rejectNestedWireCompat(raw.modelMeta, `${path}.modelMeta`);
+  if (isPlainObject(raw.modelOverrides)) {
+    for (const [modelId, modelOverride] of Object.entries(raw.modelOverrides)) {
+      rejectNestedWireCompat(modelOverride, `${path}.modelOverrides.${modelId}`);
+    }
+  }
+
+  const next = { ...raw };
+  if (hasOwn(raw, "compat")) {
+    next.compat = parseProviderWireCompat(raw.compat, `${path}.compat`);
+  }
+  return next;
+}
+
+function parseProviderOverrides(
+  raw: unknown,
+): PiSwitchConfig["providerOverrides"] | undefined {
+  if (!isPlainObject(raw)) return undefined;
+
+  const parsed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!isPlainObject(value)) {
+      parsed[key] = value;
+      continue;
+    }
+
+    const isEntry = Object.keys(value).some((field) =>
+      PROVIDER_OVERRIDE_ENTRY_KEYS.has(field),
+    );
+    if (isEntry) {
+      parsed[key] = parseProviderOverrideEntry(
+        value,
+        `providerOverrides.${key}`,
+      );
+      continue;
+    }
+
+    const group: Record<string, unknown> = {};
+    for (const [providerId, entry] of Object.entries(value)) {
+      group[providerId] = isPlainObject(entry)
+        ? parseProviderOverrideEntry(
+            entry,
+            `providerOverrides.${key}.${providerId}`,
+          )
+        : entry;
+    }
+    parsed[key] = group;
+  }
+  return parsed as PiSwitchConfig["providerOverrides"];
+}
+
 export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
   const raw = readJsonFile(fs, path);
+  if (hasOwn(raw, "compat")) {
+    throw new Error(
+      "invalid compat scope: Provider wire compat belongs under providerOverrides.<provider>.compat",
+    );
+  }
+  rejectNestedWireCompat(raw.defaultModelMeta, "defaultModelMeta");
   const varsRaw =
     raw.vars && typeof raw.vars === "object" && !Array.isArray(raw.vars)
       ? (raw.vars as Record<string, unknown>)
@@ -244,10 +332,7 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
     defaultModelMeta: parseModelMeta(raw.defaultModelMeta),
     claudeCodeCompat: parseClaudeCodeCompatConfig(raw.claudeCodeCompat),
     geminiToolCompat: parseGeminiToolCompatConfig(raw.geminiToolCompat),
-    providerOverrides:
-      raw.providerOverrides && typeof raw.providerOverrides === "object"
-        ? (raw.providerOverrides as PiSwitchConfig["providerOverrides"])
-        : undefined,
+    providerOverrides: parseProviderOverrides(raw.providerOverrides),
     pins: parsePins(raw.pins),
     recent: parseRecent(raw.recent),
     recentLimit: typeof raw.recentLimit === "number" && raw.recentLimit > 0
@@ -274,6 +359,7 @@ export type MutableOverrideEntry = {
   headers?: Record<string, string>;
   modelMeta?: ModelMetaOverride;
   modelOverrides?: Record<string, ModelMetaOverride>;
+  compat?: ProviderWireCompat;
   /** Force Claude Code compat on/off (provider scope; written by Repair Recipe2). */
   claudeCodeCompat?: boolean;
   /** Force Gemini tool compat on/off (provider scope; written by Repair Recipe3). */
@@ -335,6 +421,7 @@ export function entryIsEmpty(entry: MutableOverrideEntry): boolean {
     !entry.modelMeta &&
     !entry.headers &&
     !entry.fingerprint &&
+    !entry.compat &&
     !entry.claudeCodeCompat &&
     !entry.geminiToolCompat &&
     modelCount === 0
@@ -451,6 +538,49 @@ export function writeModelMetaOverride(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Persist or clear Provider-scoped request-wire compatibility. */
+export function writeProviderWireCompat(
+  fs: FsLike,
+  configPath: string,
+  provider: Pick<CcProvider, "id" | "displayName" | "api"> & {
+    appType?: string;
+  },
+  compat: ProviderWireCompat | null,
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const parsed = compat
+      ? parseProviderWireCompat(compat, "provider compat")
+      : undefined;
+    if (parsed && parsed.api !== provider.api) {
+      return {
+        ok: false,
+        error: `provider compat api ${parsed.api} does not match provider api ${provider.api ?? "unsupported"}`,
+      };
+    }
+
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const document = updateOverrideEntry(raw, provider, (entry) => {
+        const next = { ...entry };
+        if (parsed) {
+          next.compat = parsed;
+          next.label = next.label ?? provider.displayName;
+        } else {
+          delete next.compat;
+        }
+        return next;
+      });
+      return { document, result: undefined };
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
