@@ -354,10 +354,13 @@ Supported `modelMeta` fields (stored flat in `pi-switch.json`; registration resh
 | `contextWindow` | Context window size (drives Pi compact: `contextTokens > contextWindow - reserveTokens`) |
 | `maxTokens` | Max output tokens |
 | `thinkingLevelMap` | Optional map of Pi levels (`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`) → provider effort strings, or `null` for unsupported → registered top-level |
+| `supportsDeveloperRole` | OpenAI-compatible upstream accepts `role: "developer"`; set `true` to preserve it, otherwise pi-switch conservatively rewrites it to `system` |
 | `requiresReasoningContentOnAssistantMessages` | OpenAI-compat: require empty `reasoning_content` on assistant turns → registered under `compat` |
 | `useBuiltInCompat` | pi-switch only (not sent to Pi): `false` disables the whole built-in compat profile; unset/`true` keeps the default (apply when id matches) |
 
 The UI edits the common scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`) plus the **内置compat** toggle. Object fields such as `thinkingLevelMap` are config-only (edit `pi-switch.json` or call the write APIs). Each form row shows **override / inherit / built-in / default** (built-in = matched profile and not opted out).
+
+Advanced fields such as `supportsDeveloperRole` (exact-model tuple / flat meta) are config-only (edit `pi-switch.json` or call the write APIs).
 
 ### Built-in compat profiles
 
@@ -381,7 +384,6 @@ Precedence: **user override > built-in profile**. Profiles never set `contextWin
 ```
 
 Provider-scope `modelMeta.useBuiltInCompat: false` turns it off for all matching models under that provider; a model-scope `true` re-enables one id. `/ps-doctor` and the post-switch notify share the same effective meta; doctor sources look like `用户: …；内置: deepseek*` (omitted when disabled).
-
 ### DeepSeek V4 Flash example
 
 Compact is executed by Pi itself; pi-switch does not compress sessions. Per-switch registration means the same model id can use different `contextWindow` / compat under different providers.

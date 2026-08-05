@@ -351,6 +351,7 @@ describe("buildProviderConfig", () => {
           contextWindow: 1_000_000,
           maxTokens: 32_000,
           thinkingFormat: "deepseek",
+          supportsDeveloperRole: false,
           requiresReasoningContentOnAssistantMessages: true,
         },
       },
@@ -369,6 +370,7 @@ describe("buildProviderConfig", () => {
     expect(a.contextWindow).toBe(1_000_000);
     expect(a.compat).toMatchObject({
       thinkingFormat: "deepseek",
+      supportsDeveloperRole: false,
       requiresReasoningContentOnAssistantMessages: true,
       supportsStore: false,
     });

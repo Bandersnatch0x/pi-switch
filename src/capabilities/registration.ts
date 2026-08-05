@@ -161,6 +161,10 @@ export function resolveRegistrationCapability(input: {
     out.requiresReasoningContentOnAssistantMessages =
       compat.requiresReasoningContentOnAssistantMessages;
   }
+  // Developer-role flag: user-only (not in built-in profiles); request-hook uses it.
+  if (typeof input.userMeta?.supportsDeveloperRole === "boolean") {
+    out.supportsDeveloperRole = input.userMeta.supportsDeveloperRole;
+  }
   return {
     resolved,
     meta: out,

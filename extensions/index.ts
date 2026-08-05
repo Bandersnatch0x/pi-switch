@@ -15,6 +15,7 @@ import { registerCommands } from "./commands.ts";
 import { createSwitchLifecycle } from "./switch-lifecycle.ts";
 import { installClaudeCodeCompat } from "./claude-code-compat.ts";
 import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
+import { installDeveloperRoleCompat } from "./developer-role-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
   const [cp, cryptoMod, fs, osMod, moduleMod, pathMod, urlMod, httpMod] = await Promise.all([
@@ -97,5 +98,6 @@ export default async function (pi: ExtensionAPI) {
   lifecycle.install();
   installClaudeCodeCompat(pi, rt);
   installGeminiToolCompat(pi, rt);
+  installDeveloperRoleCompat(pi, rt);
   registerCommands(pi, rt, lifecycle);
 }

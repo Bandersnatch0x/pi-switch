@@ -85,6 +85,12 @@ describe("cleanModelMeta", () => {
       cleanModelMeta({ requiresReasoningContentOnAssistantMessages: "yes" as any }),
     ).toBeUndefined();
   });
+  test("keeps supportsDeveloperRole boolean", () => {
+    expect(cleanModelMeta({ supportsDeveloperRole: true })).toEqual({
+      supportsDeveloperRole: true,
+    });
+    expect(cleanModelMeta({ supportsDeveloperRole: "yes" as any })).toBeUndefined();
+  });
   test("undefined for empty", () => {
     expect(cleanModelMeta({})).toBeUndefined();
     expect(cleanModelMeta(null)).toBeUndefined();
@@ -118,8 +124,14 @@ describe("summarizeModelMeta", () => {
     expect(summarizeModelMeta(undefined)).toBe("默认协议档");
   });
   test("lists fields", () => {
-    expect(summarizeModelMeta({ reasoning: false, maxTokens: 8 })).toBe(
-      "reasoning=false, maxTokens=8",
+    expect(
+      summarizeModelMeta({
+        reasoning: false,
+        maxTokens: 8,
+        supportsDeveloperRole: true,
+      }),
+    ).toBe(
+      "reasoning=false, maxTokens=8, supportsDeveloperRole=true",
     );
   });
 });
