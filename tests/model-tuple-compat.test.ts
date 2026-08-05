@@ -291,14 +291,18 @@ describe("settings + registration for Chat tuple compat", () => {
           : undefined,
     });
     const models = cfg?.models as Array<{ id: string; compat?: Record<string, unknown> }>;
+    // Provider wire (#62) adds supportsStore=false for unknown Chat relays;
+    // exact-model tuple (#64) fields still apply only to the targeted model.
     expect(models[0]?.compat).toEqual({
       supportsDeveloperRole: false,
       supportsReasoningEffort: false,
       maxTokensField: "max_tokens",
       thinkingFormat: "openai",
       requiresReasoningContentOnAssistantMessages: true,
+      supportsStore: false,
     });
-    expect(models[1]?.compat).toBeUndefined();
+    expect(models[1]?.compat).toEqual({ supportsStore: false });
+    expect(models[1]?.compat).not.toHaveProperty("supportsDeveloperRole");
   });
 
   test("official OpenAI registration does not downgrade developer role", () => {
