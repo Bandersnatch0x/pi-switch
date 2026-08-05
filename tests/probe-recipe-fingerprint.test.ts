@@ -323,7 +323,13 @@ describe("matchRepairRecipes Recipe2 (ticket 5)", () => {
 
     const plan = buildRepairPlan(evidence);
     expect(plan.preview.recipeOrder).toEqual(["client-fingerprint"]);
-    expect(plan.preview.patches[0]!.scope).toMatch(/provider/i);
+    expect(plan.preview.patches[0]).toEqual({
+      recipeId: "client-fingerprint",
+      description: m.summary,
+      scope: "provider-wide",
+      provider: target.provider,
+    });
+    expect(plan.preview.patches[0]).not.toHaveProperty("affectedModels");
   });
 
   test("unique Codex / Gemini signatures map to matching fingerprint presets", () => {

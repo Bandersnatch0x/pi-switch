@@ -88,6 +88,19 @@ function reasoningRejected(): ProbeTransportResult {
   };
 }
 
+function claudeCodeClientGateRejected(): ProbeTransportResult {
+  return {
+    httpStatus: 403,
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage:
+        "Forbidden: client must identify as claude-cli (Claude Code); invalid User-Agent for this channel",
+    },
+  };
+}
+
 /** Transport where basic+tool pass but reasoning fails (drives Recipe1). */
 function recipe1Transport() {
   const calls: ProbeRequest[] = [];
@@ -575,11 +588,13 @@ describe("runRepairCommand (command flow)", () => {
     expect(entries).toHaveLength(1); // probe evidence kept
   });
 
-  test("confirmation preview names every affected model", async () => {
+  test("exact-model confirmation preview names only the target model once", async () => {
     let preview = "";
+    let confirmationCount = 0;
     const { pi } = makePi();
     const { ctx } = makeCtx({
       confirm: async (_title, message) => {
+        confirmationCount += 1;
         preview = message;
         return false;
       },
@@ -592,8 +607,81 @@ describe("runRepairCommand (command flow)", () => {
       buildPrecheck: precheckPass,
     });
 
+    expect(confirmationCount).toBe(1);
+    expect(preview).toContain("exact-model");
     expect(preview).toContain("影响模型");
     expect(preview).toContain("m1");
+  });
+
+  test("provider-wide confirmation preview discloses all applicable provider models once", async () => {
+    let preview = "";
+    let confirmationCount = 0;
+    const { pi } = makePi();
+    const { ctx } = makeCtx({
+      confirm: async (_title, message) => {
+        confirmationCount += 1;
+        preview = message;
+        return false;
+      },
+    });
+    const transport: ProbeTransport = async (req) => {
+      if (req.contract === "basic") return claudeCodeClientGateRejected();
+      throw new Error(`unexpected contract ${req.contract}`);
+    };
+
+    await runRepairCommand(pi, rt, makeLifecycle().lifecycle, ctx, {
+      transport,
+      configStore: makeStore().store,
+      buildPrecheck: precheckPass,
+    });
+
+    expect(confirmationCount).toBe(1);
+    expect(preview).toContain("provider-wide");
+    expect(preview).toContain("provider ps-p1 下的全部适用模型");
+    expect(preview).not.toContain("影响模型: m1");
+  });
+
+  test("provider-wide committed Repair Case records the provider instead of the probe model", async () => {
+    const { pi, entries } = makePi();
+    const { ctx } = makeCtx({
+      confirm: async (title) => title === "确认执行修复？",
+    });
+    const transport: ProbeTransport = async (req) => {
+      if (req.target.fingerprint !== "claude-code") {
+        if (req.contract === "basic") return claudeCodeClientGateRejected();
+        throw new Error(`unexpected unpatched contract ${req.contract}`);
+      }
+      if (req.contract === "tool") return okTool();
+      if (req.contract === "basic" || req.contract === "reasoning") {
+        return okText();
+      }
+      throw new Error(`unexpected patched contract ${req.contract}`);
+    };
+
+    await runRepairCommand(pi, rt, makeLifecycle().lifecycle, ctx, {
+      transport,
+      configStore: makeStore().store,
+      buildPrecheck: precheckPass,
+    });
+
+    const detail = entries[0]!.data as {
+      repair?: {
+        recipe?: {
+          recipeId: string;
+          signatureId: string;
+          scope: string;
+          provider?: string;
+          affectedModels?: string[];
+        };
+      };
+    };
+    expect(detail.repair?.recipe).toEqual({
+      recipeId: "client-fingerprint",
+      signatureId: "client_gate_claude_code",
+      scope: "provider-wide",
+      provider: "ps-p1",
+    });
+    expect(detail.repair?.recipe).not.toHaveProperty("affectedModels");
   });
 
   test("confirmed → verify twice → CAS commit → explicit switch accepted", async () => {
@@ -623,12 +711,18 @@ describe("runRepairCommand (command flow)", () => {
       repair?: {
         status: string;
         persisted: boolean;
+        recipe?: {
+          scope: string;
+          affectedModels?: string[];
+        };
         verificationAttempts: unknown[];
         switch?: { status: string };
       };
     };
     expect(detail.repair?.status).toBe("committed");
     expect(detail.repair?.persisted).toBe(true);
+    expect(detail.repair?.recipe?.scope).toBe("exact-model");
+    expect(detail.repair?.recipe?.affectedModels).toEqual(["m1"]);
     expect(detail.repair?.verificationAttempts).toHaveLength(2);
     expect(detail.repair?.switch?.status).toBe("succeeded");
     expect(JSON.stringify(sent)).toContain("repair=committed");

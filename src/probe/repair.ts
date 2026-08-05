@@ -27,12 +27,26 @@ import type {
 
 // ── Plan ────────────────────────────────────────────────────────────────────
 
-export interface RepairPlanPreviewPatch {
+interface RepairPlanPreviewPatchBase {
   recipeId: RepairRecipeId;
   description: string;
-  scope: string;
+}
+
+export interface RepairPlanPreviewExactModelPatch
+  extends RepairPlanPreviewPatchBase {
+  scope: "exact-model";
   affectedModels: string[];
 }
+
+export interface RepairPlanPreviewProviderPatch
+  extends RepairPlanPreviewPatchBase {
+  scope: "provider-wide";
+  provider: string;
+}
+
+export type RepairPlanPreviewPatch =
+  | RepairPlanPreviewExactModelPatch
+  | RepairPlanPreviewProviderPatch;
 
 export interface RepairPlanPreview {
   target: string;
@@ -63,12 +77,7 @@ export function buildRepairPlan(evidence: NormalizedProbeRunEvidence): RepairPla
     preview: {
       target: `${target.provider}/${target.modelId}`,
       recipeOrder: recipes.map((r) => r.recipeId),
-      patches: recipes.map((r) => ({
-        recipeId: r.recipeId,
-        description: r.summary,
-        scope: formatPatchScope(r.patch),
-        affectedModels: [...r.affectedModels],
-      })),
+      patches: recipes.map(buildRepairPlanPreviewPatch),
     },
   };
 }
@@ -320,19 +329,37 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
   };
 }
 
-function formatPatchScope(patch: RepairPatch): string {
-  if (patch.kind === "modelMeta") return `model:${patch.modelId}`;
-  if (patch.kind === "fingerprint") return `provider:${patch.provider}`;
-  if (patch.kind === "geminiToolCompat") return `provider:${patch.provider}`;
-  return "unknown";
+function buildRepairPlanPreviewPatch(
+  recipe: RepairRecipeMatch,
+): RepairPlanPreviewPatch {
+  const base = {
+    recipeId: recipe.recipeId,
+    description: recipe.summary,
+  };
+  if (recipe.patch.scope === "model") {
+    return {
+      ...base,
+      scope: "exact-model",
+      affectedModels: [recipe.patch.modelId],
+    };
+  }
+  return {
+    ...base,
+    scope: "provider-wide",
+    provider: recipe.patch.provider,
+  };
 }
 
 function formatPlanPreviewSummary(plan: RepairPlan): string {
   if (plan.recipes.length === 0) {
     return `repair plan for ${plan.preview.target}: no matching recipes`;
   }
-  const parts = plan.preview.patches.map(
-    (p) => `${p.recipeId}[${p.scope}] → ${p.affectedModels.join(",")}`,
-  );
+  const parts = plan.preview.patches.map((patch) => {
+    const affected =
+      patch.scope === "exact-model"
+        ? patch.affectedModels.join(",")
+        : `all applicable models under provider ${patch.provider}`;
+    return `${patch.recipeId}[${patch.scope}] → ${affected}`;
+  });
   return `repair plan for ${plan.preview.target}: ${parts.join("; ")} (awaiting confirmation)`;
 }
