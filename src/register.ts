@@ -7,6 +7,12 @@ import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
 import { resolveRegistrationMeta } from "./capabilities/registration.ts";
+import {
+  providerWireCompatForRegistration,
+  resolveProviderWireCompat,
+  type ProviderWireCompat,
+  type ResolvedProviderWireCompat,
+} from "./provider-wire-compat.ts";
 
 /** Minimal ExtensionAPI surface used by register helpers. */
 export interface PiRegisterApi {
@@ -61,33 +67,58 @@ export type BuiltProviderConfig = {
   models: BuiltModelConfig[];
 };
 
+type RegisterOpts = {
+  rules: HeaderRule[];
+  overrideHeaders?: Record<string, string>;
+  /** fingerprint:"none" — skip defaults/provider-headers rules */
+  skipRules?: boolean;
+  vars?: Record<string, string>;
+  debug?: boolean;
+  onReject?: (name: string, reason: string) => void;
+  /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
+  modelMeta?: ModelMetaOverride;
+  /**
+   * Per-model resolver; wins over `modelMeta` when it returns a value.
+   * Lets one provider register models with different reasoning/ctx settings.
+   */
+  modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+  /**
+   * Read-only models.dev cache lookup by exact model id (no network).
+   * Stale last-good entries are still used; missing key = layer absent.
+   */
+  modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
+  /**
+   * Pre-resolved Provider Chat wire fact (preferred). Pass the result of
+   * `Runtime.providerWireCompatFor(provider)` so user overrides are applied.
+   *
+   * When omitted, registration falls back to `providerWireOverride` (if any)
+   * plus Provider-only defaults (official native vs conservative relay false).
+   * Omitting both intentionally does **not** consult `providerOverrides` —
+   * callers that hold user config must pass one of these fields.
+   */
+  providerWireCompat?: ResolvedProviderWireCompat;
+  /**
+   * Raw Provider-scoped wire override used only when `providerWireCompat` is
+   * omitted. Lets callers pass the parsed `providerOverrides.*.compat` without
+   * resolving first.
+   */
+  providerWireOverride?: ProviderWireCompat;
+};
+
 export function buildProviderConfig(
   provider: CcProvider,
   modelIds: string[],
-  opts: {
-    rules: HeaderRule[];
-    overrideHeaders?: Record<string, string>;
-    /** fingerprint:"none" — skip defaults/provider-headers rules */
-    skipRules?: boolean;
-    vars?: Record<string, string>;
-    debug?: boolean;
-    onReject?: (name: string, reason: string) => void;
-    /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
-    modelMeta?: ModelMetaOverride;
-    /**
-     * Per-model resolver; wins over `modelMeta` when it returns a value.
-     * Lets one provider register models with different reasoning/ctx settings.
-     */
-    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
-    /**
-     * Read-only models.dev cache lookup by exact model id (no network).
-     * Stale last-good entries are still used; missing key = layer absent.
-     */
-    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
-  },
+  opts: RegisterOpts,
 ): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
+  const resolvedWire =
+    opts.providerWireCompat ??
+    resolveProviderWireCompat({
+      provider: { api: provider.api, baseUrl: provider.baseUrl },
+      override: opts.providerWireOverride,
+    });
+  const registrationWire = providerWireCompatForRegistration(resolvedWire);
   const models = ids.filter(Boolean).map((raw) => {
     const id = raw.trim();
     const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
@@ -98,7 +129,15 @@ export function buildProviderConfig(
       userMeta,
       modelsDev: opts.modelsDevFor?.(id),
     });
-    return toModelConfig(id, provider.api, meta);
+    const model = toModelConfig(id, provider.api, meta);
+    if (!registrationWire) return model;
+    return {
+      ...model,
+      compat: {
+        ...(model.compat ?? {}),
+        ...registrationWire,
+      },
+    };
   });
   if (!models.length) return undefined;
 
@@ -133,17 +172,7 @@ export function registerProvider(
   pi: PiRegisterApi,
   provider: CcProvider,
   modelIds: string[],
-  opts: {
-    rules: HeaderRule[];
-    overrideHeaders?: Record<string, string>;
-    skipRules?: boolean;
-    vars?: Record<string, string>;
-    debug?: boolean;
-    onReject?: (name: string, reason: string) => void;
-    modelMeta?: ModelMetaOverride;
-    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
-    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
-  },
+  opts: RegisterOpts,
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);
   if (!config) return false;

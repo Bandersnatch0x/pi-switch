@@ -12,6 +12,7 @@ import {
   writePins,
   writeModelMetaOverride,
   writeProviderModelMeta,
+  writeProviderWireCompat,
   writeRecent,
   writeSelection,
   type FsLike,
@@ -316,6 +317,172 @@ describe("provider modelMeta overrides", () => {
     });
     const cfg = readPiSwitchConfig(fs, "/c.json");
     expect(cfg.geminiToolCompat).toBeUndefined();
+  });
+});
+
+describe("provider wire compat persistence", () => {
+  test("loads nested Provider compat and preserves false", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          codex: {
+            "provider-1": {
+              compat: { api: "openai-completions", supportsStore: false },
+            },
+          },
+        },
+      }),
+    });
+
+    const cfg = readPiSwitchConfig(fs, "/c.json");
+    const entry = resolveProviderOverride(cfg.providerOverrides, {
+      id: "provider-1",
+      piName: "ps-codex-provider-1",
+      displayName: "relay",
+      appType: "codex",
+    });
+
+    expect(entry?.compat).toEqual({
+      api: "openai-completions",
+      supportsStore: false,
+    });
+  });
+
+  test("rejects compat outside Provider scope and malformed Provider compat", () => {
+    const invalidDocuments = [
+      { compat: { api: "openai-completions", supportsStore: true } },
+      {
+        defaultModelMeta: {
+          reasoning: false,
+          compat: { api: "openai-completions", supportsStore: true },
+        },
+      },
+      {
+        providerOverrides: {
+          codex: {
+            "provider-1": {
+              modelOverrides: {
+                model: {
+                  compat: { api: "openai-completions", supportsStore: true },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        providerOverrides: {
+          codex: {
+            "provider-1": {
+              modelMeta: {
+                reasoning: false,
+                compat: { api: "openai-completions", supportsStore: true },
+              },
+            },
+          },
+        },
+      },
+      {
+        providerOverrides: {
+          codex: { "provider-1": { compat: null } },
+        },
+      },
+      {
+        providerOverrides: {
+          codex: {
+            "provider-1": {
+              compat: { api: "openai-responses", supportsStore: true },
+            },
+          },
+        },
+      },
+      {
+        providerOverrides: {
+          codex: {
+            "provider-1": {
+              compat: {
+                api: "openai-completions",
+                supportsStore: true,
+                unknown: false,
+              },
+            },
+          },
+        },
+      },
+    ];
+
+    for (const document of invalidDocuments) {
+      const fs = memFs({ "/c.json": JSON.stringify(document) });
+      expect(() => readPiSwitchConfig(fs, "/c.json")).toThrow(/compat/i);
+    }
+  });
+
+  test("writes true and false at Provider scope and clears only compat", () => {
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          codex: {
+            "provider-1": { headers: { "User-Agent": "test" } },
+          },
+        },
+      }),
+    });
+    const chatProvider = {
+      ...provider("provider-1", "relay"),
+      api: "openai-completions" as const,
+    };
+
+    expect(
+      writeProviderWireCompat(
+        fs,
+        "/c.json",
+        chatProvider,
+        { api: "openai-completions", supportsStore: false },
+        1,
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      resolveProviderOverride(readPiSwitchConfig(fs, "/c.json").providerOverrides, chatProvider)
+        ?.compat?.supportsStore,
+    ).toBe(false);
+
+    expect(
+      writeProviderWireCompat(
+        fs,
+        "/c.json",
+        chatProvider,
+        { api: "openai-completions", supportsStore: true },
+        1,
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      resolveProviderOverride(readPiSwitchConfig(fs, "/c.json").providerOverrides, chatProvider)
+        ?.compat?.supportsStore,
+    ).toBe(true);
+
+    expect(writeProviderWireCompat(fs, "/c.json", chatProvider, null, 1)).toEqual({
+      ok: true,
+    });
+    const entry = resolveProviderOverride(
+      readPiSwitchConfig(fs, "/c.json").providerOverrides,
+      chatProvider,
+    );
+    expect(entry?.compat).toBeUndefined();
+    expect(entry?.headers).toEqual({ "User-Agent": "test" });
+  });
+
+  test("rejects writing Chat compat for a non-Chat Provider", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const result = writeProviderWireCompat(
+      fs,
+      "/c.json",
+      provider("provider-1", "relay"),
+      { api: "openai-completions", supportsStore: true },
+      1,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/does not match provider api/i);
   });
 });
 

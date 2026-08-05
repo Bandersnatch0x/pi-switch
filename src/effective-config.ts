@@ -1,4 +1,5 @@
 import type { BuiltProviderConfig } from "./register.ts";
+import type { ResolvedProviderWireCompat } from "./provider-wire-compat.ts";
 import type { CcProvider, FingerprintPreset } from "./types.ts";
 
 const SENSITIVE_HEADER_NAMES = new Set([
@@ -11,6 +12,12 @@ const SENSITIVE_HEADER_NAMES = new Set([
 ]);
 
 export type EffectiveConfigSource = "active" | "saved";
+
+export type EffectiveProviderWireCompatSummary = {
+  supportsStore: boolean;
+  scope: "provider";
+  source: ResolvedProviderWireCompat["source"];
+};
 
 export type EffectiveConfigSummary = {
   source: EffectiveConfigSource;
@@ -34,6 +41,7 @@ export type EffectiveConfigSummary = {
     thinkingLevelMap?: Record<string, string | null>;
     requiresReasoningContentOnAssistantMessages?: boolean;
   };
+  providerWireCompat?: EffectiveProviderWireCompatSummary;
 };
 
 function redactEndpoint(raw: string): string {
@@ -72,6 +80,7 @@ export function createEffectiveConfigSummary(input: {
   modelId: string;
   config: BuiltProviderConfig;
   fingerprint?: FingerprintPreset;
+  providerWireCompat?: ResolvedProviderWireCompat;
 }): EffectiveConfigSummary {
   const model =
     input.config.models.find((candidate) => candidate.id === input.modelId) ??
@@ -85,6 +94,14 @@ export function createEffectiveConfigSummary(input: {
           requiresReasoningContentOnAssistantMessages?: boolean;
         })
       : undefined;
+
+  const providerWireCompat = input.providerWireCompat
+    ? {
+        supportsStore: input.providerWireCompat.value,
+        scope: input.providerWireCompat.scope,
+        source: input.providerWireCompat.source,
+      }
+    : undefined;
 
   return {
     source: input.source,
@@ -113,6 +130,7 @@ export function createEffectiveConfigSummary(input: {
           }
         : {}),
     },
+    ...(providerWireCompat ? { providerWireCompat } : {}),
   };
 }
 
@@ -129,7 +147,7 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     typeof summary.model.requiresReasoningContentOnAssistantMessages === "boolean"
       ? ` requiresReasoningContentOnAssistantMessages=${summary.model.requiresReasoningContentOnAssistantMessages}`
       : "";
-  return [
+  const lines = [
     "pi-switch effective config",
     `source: ${source}`,
     `provider: ${summary.providerName} (${summary.appType}) [${summary.piName}]`,
@@ -140,5 +158,12 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     `fingerprint: ${summary.fingerprint}`,
     `headers: ${headers}`,
     `modelMeta: reasoning=${summary.model.reasoning} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${requiresRc}`,
-  ].join("\n");
+  ];
+  if (summary.providerWireCompat) {
+    const wire = summary.providerWireCompat;
+    lines.push(
+      `providerWireCompat: supportsStore=${wire.supportsStore} scope=${wire.scope} source=${wire.source}`,
+    );
+  }
+  return lines.join("\n");
 }

@@ -10,9 +10,15 @@ import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PiSwitchConfig, RecentEntry } from "../src/types.ts";
 import type { Runtime } from "../extensions/runtime.ts";
 import { createLocalState } from "../src/local-state.ts";
+import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 
 type Operation =
-  | { op: "register"; name: string; models?: string[] }
+  | {
+      op: "register";
+      name: string;
+      models?: string[];
+      supportsStore?: boolean;
+    }
   | { op: "find"; name: string }
   | { op: "setModel" }
   | { op: "unregister"; name: string };
@@ -80,6 +86,8 @@ function setup(options?: {
   activeModel?: { provider: string; id: string };
   /** Session branch for getBranch (continue/resume model recovery). */
   branch?: Array<Record<string, unknown>>;
+  /** Stub for Runtime.providerWireCompatFor (issue #62). */
+  providerWireCompatFor?: Runtime["providerWireCompatFor"];
 }) {
   const home = "/home/test";
   const settingsPath = `${home}/.pi/agent/settings.json`;
@@ -109,11 +117,17 @@ function setup(options?: {
   let sessionStart: SessionStartHandler | undefined;
 
   const pi = {
-    registerProvider: (name: string, config?: { models?: Array<{ id: string }> }) => {
+    registerProvider: (
+      name: string,
+      config?: {
+        models?: Array<{ id: string; compat?: { supportsStore?: boolean } }>;
+      },
+    ) => {
       operations.push({
         op: "register",
         name,
         models: config?.models?.map((m) => m.id),
+        supportsStore: config?.models?.[0]?.compat?.supportsStore,
       });
     },
     setModel: async () => {
@@ -156,6 +170,8 @@ function setup(options?: {
     rejectSink: () => undefined,
     modelMetaFor: () => undefined,
     modelsDevFor: () => undefined,
+    providerWireCompatFor:
+      options?.providerWireCompatFor ?? (() => undefined),
     scheduleModelsDevRefresh: (modelId: string) => {
       scheduleCalls.push(modelId);
     },
@@ -240,6 +256,36 @@ describe("switch lifecycle interface", () => {
     );
     const calls = (state.runtime as unknown as { scheduleCalls: string[] }).scheduleCalls;
     expect(calls).toEqual(["gpt-5"]);
+  });
+
+  test("activate forwards providerWireCompat into registered model compat (#62)", async () => {
+    const chatProvider = provider({
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+      configModels: ["relay-model"],
+    });
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: chatProvider,
+      override: { api: "openai-completions", supportsStore: true },
+    });
+    const state = setup({
+      providers: [chatProvider],
+      providerWireCompatFor: () => providerWireCompat,
+    });
+
+    const result = await state.lifecycle.activate(
+      { provider: chatProvider, modelId: "relay-model", commit: "selection" },
+      state.ctx,
+    );
+
+    expect(result.kind).toBe("activated");
+    const registerOp = state.operations.find((item) => item.op === "register");
+    expect(registerOp).toMatchObject({
+      op: "register",
+      name: chatProvider.piName,
+      models: ["relay-model"],
+      supportsStore: true,
+    });
   });
 
   test("activate register failure does not schedule models.dev refresh (#39)", async () => {

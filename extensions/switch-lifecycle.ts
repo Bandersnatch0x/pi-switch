@@ -152,6 +152,7 @@ export function createSwitchLifecycle(
       onReject: rt.rejectSink(),
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
       modelsDevFor: (id) => rt.modelsDevFor?.(id),
+      providerWireCompat: rt.providerWireCompatFor?.(provider),
     });
     // Fire-and-forget models.dev refresh after successful registration (issue #39).
     if (ok) rt.scheduleModelsDevRefresh?.(modelId);
@@ -189,6 +190,7 @@ export function createSwitchLifecycle(
       onReject: rt.rejectSink(),
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
       modelsDevFor: (id) => rt.modelsDevFor?.(id),
+      providerWireCompat: rt.providerWireCompatFor?.(provider),
     });
     if (!ok) return false;
     for (const id of ids) rt.scheduleModelsDevRefresh?.(id);

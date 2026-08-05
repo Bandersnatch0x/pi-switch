@@ -9,6 +9,10 @@ import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { providerHeadersPath, type FsLike } from "../src/settings.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
+import {
+  resolveProviderWireCompat,
+  type ResolvedProviderWireCompat,
+} from "../src/provider-wire-compat.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
@@ -540,6 +544,22 @@ export class Runtime {
     modelId?: string,
   ) {
     return resolveEffectiveModelMeta(this.config, provider, modelId);
+  }
+
+  /**
+   * Provider-scoped Chat wire compat (issue #62). Uses providerOverrides.compat
+   * only — never models.dev, model id tags, or CC Switch meta.
+   */
+  providerWireCompatFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName" | "api" | "baseUrl"> & {
+      appType?: string;
+    },
+  ): ResolvedProviderWireCompat | undefined {
+    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
+    return resolveProviderWireCompat({
+      provider,
+      override: entry?.compat,
+    });
   }
 
   /** Full layer breakdown (base / provider / model) for dialog + doctor. */

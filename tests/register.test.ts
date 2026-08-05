@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { buildProviderConfig } from "../src/register.ts";
+import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function mk(partial: Partial<CcProvider> & Pick<CcProvider, "id" | "appType">): CcProvider {
@@ -256,6 +257,7 @@ describe("buildProviderConfig", () => {
     expect(m.compat).toEqual({
       thinkingFormat: "deepseek",
       requiresReasoningContentOnAssistantMessages: true,
+      supportsStore: false,
     });
     // Never emit legacy top-level thinkingFormat
     expect(m.thinkingFormat).toBeUndefined();
@@ -289,8 +291,103 @@ describe("buildProviderConfig", () => {
     expect(a.compat).toEqual({
       thinkingFormat: "deepseek",
       requiresReasoningContentOnAssistantMessages: true,
+      supportsStore: false,
     });
     expect(b.contextWindow).toBe(128_000);
-    expect(b.compat).toEqual({ thinkingFormat: "openai" });
+    expect(b.compat).toEqual({ thinkingFormat: "openai", supportsStore: false });
+  });
+
+  test("unknown Chat relay defaults supportsStore to false", () => {
+    const cfg = buildProviderConfig(
+      mk({
+        id: "chat-relay",
+        appType: "codex",
+        api: "openai-completions",
+        baseUrl: "https://relay.example/v1",
+      }),
+      ["relay-model"],
+      { rules: [] },
+    );
+
+    expect(cfg?.models[0]?.compat).toMatchObject({ supportsStore: false });
+  });
+
+  test("explicit Provider supportsStore true and false reach every registered model", () => {
+    const relay = mk({
+      id: "chat-relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+
+    for (const supportsStore of [true, false]) {
+      const providerWireCompat = resolveProviderWireCompat({
+        provider: relay,
+        override: { api: "openai-completions", supportsStore },
+      });
+      const cfg = buildProviderConfig(relay, ["model-a", "model-b"], {
+        rules: [],
+        providerWireCompat,
+      });
+
+      expect(cfg?.models.map((model) => model.compat?.supportsStore)).toEqual([
+        supportsStore,
+        supportsStore,
+      ]);
+    }
+  });
+
+  test("official OpenAI and non-Chat APIs do not receive a model compat override", () => {
+    const official = buildProviderConfig(
+      mk({
+        id: "official-openai",
+        appType: "codex",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      ["gpt-5"],
+      { rules: [] },
+    );
+    const anthropic = buildProviderConfig(
+      mk({
+        id: "anthropic-relay",
+        appType: "claude",
+        api: "anthropic-messages",
+        baseUrl: "https://relay.example",
+      }),
+      ["claude-model"],
+      { rules: [] },
+    );
+
+    expect(official?.models[0]?.compat?.supportsStore).toBeUndefined();
+    expect(anthropic?.models[0]?.compat?.supportsStore).toBeUndefined();
+  });
+
+  test("omitting providerWireCompat applies defaults only; providerWireOverride restores user fact", () => {
+    const relay = mk({
+      id: "chat-relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+
+    // Footgun lock: bare opts never consult providerOverrides — only defaults.
+    const defaultsOnly = buildProviderConfig(relay, ["relay-model"], {
+      rules: [],
+    });
+    expect(defaultsOnly?.models[0]?.compat).toMatchObject({
+      supportsStore: false,
+    });
+
+    const withOverride = buildProviderConfig(relay, ["relay-model"], {
+      rules: [],
+      providerWireOverride: {
+        api: "openai-completions",
+        supportsStore: true,
+      },
+    });
+    expect(withOverride?.models[0]?.compat).toMatchObject({
+      supportsStore: true,
+    });
   });
 });
