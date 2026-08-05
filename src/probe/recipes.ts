@@ -83,8 +83,6 @@ export interface RepairRecipeMatch {
    */
   verifyContracts: ProbeContractId[];
   patch: RepairPatch;
-  /** Models affected by the patch (plan preview). */
-  affectedModels: string[];
   summary: string;
 }
 
@@ -164,7 +162,6 @@ function matchRecipe1(
       modelId,
       modelMeta: { reasoning: false },
     },
-    affectedModels: [modelId],
     summary:
       `Set modelOverrides["${modelId}"].reasoning=false ` +
       `(exact model; upstream rejected reasoning/thinking parameter)`,
@@ -201,8 +198,6 @@ function matchRecipe2(
     sourceContract: stage.contract,
     verifyContracts: recipe2VerifyContracts(evidence),
     patch,
-    // Provider-level fingerprint applies to all models on this provider.
-    affectedModels: [target.modelId],
     summary:
       fingerprint === "claude-code"
         ? `Set providerOverrides["${target.provider}"].fingerprint="claude-code" ` +
@@ -241,7 +236,6 @@ function matchRecipe3(
       provider: target.provider,
       geminiToolCompat: true,
     },
-    affectedModels: [target.modelId],
     summary:
       `Set providerOverrides["${target.provider}"].geminiToolCompat=true ` +
       `(provider scope only; empty-args/schema tool evidence)`,

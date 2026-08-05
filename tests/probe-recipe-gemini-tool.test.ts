@@ -284,7 +284,13 @@ describe("matchRepairRecipes Recipe3 (ticket 6)", () => {
 
     const plan = buildRepairPlan(evidence);
     expect(plan.preview.recipeOrder).toEqual(["gemini-tool-compat"]);
-    expect(plan.preview.patches[0]!.scope).toMatch(/provider/i);
+    expect(plan.preview.patches[0]).toEqual({
+      recipeId: "gemini-tool-compat",
+      description: m.summary,
+      scope: "provider-wide",
+      provider: target.provider,
+    });
+    expect(plan.preview.patches[0]).not.toHaveProperty("affectedModels");
   });
 
   test("already-enabled geminiToolCompat still failing → no candidate (report only)", () => {

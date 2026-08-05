@@ -212,8 +212,6 @@ describe("matchRepairRecipes / buildRepairPlan (ticket 4)", () => {
     }
     // Exact model only — never provider-level
     expect(m.patch).not.toHaveProperty("providerMeta");
-    expect(m.affectedModels).toEqual([target.modelId]);
-
     const plan = buildRepairPlan(evidence);
     expect(plan.target).toEqual({
       provider: target.provider,
@@ -222,8 +220,12 @@ describe("matchRepairRecipes / buildRepairPlan (ticket 4)", () => {
     });
     expect(plan.recipes).toHaveLength(1);
     expect(plan.preview.recipeOrder).toEqual(["reasoning-false"]);
-    expect(plan.preview.patches[0]!.scope).toMatch(/model/i);
-    expect(plan.preview.patches[0]!.affectedModels).toEqual([target.modelId]);
+    expect(plan.preview.patches[0]).toEqual({
+      recipeId: "reasoning-false",
+      description: m.summary,
+      scope: "exact-model",
+      affectedModels: [target.modelId],
+    });
     expect(plan.preview.target).toContain(target.provider);
     expect(plan.preview.target).toContain(target.modelId);
   });

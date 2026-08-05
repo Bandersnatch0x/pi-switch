@@ -77,6 +77,8 @@ import {
   type RepairConfigStore,
   type RepairCaseRepairRecord,
   type RepairOutcome,
+  type RepairPlanPreview,
+  type RepairPlanPreviewPatch,
   type ResolveProbeTargetResult,
 } from "../src/probe/index.ts";
 import type { Runtime } from "./runtime.ts";
@@ -966,24 +968,20 @@ function reportPrecheckStop(
   ctx.ui.notify(`${command} stopped: ${result.precheck.summary}`, "error");
 }
 
-function formatRepairPreview(
-  preview: {
-    target: string;
-    recipeOrder: string[];
-    patches: Array<{
-      recipeId: string;
-      description: string;
-      scope: string;
-      affectedModels: string[];
-    }>;
-  },
-): string {
+function formatRepairPreview(preview: RepairPlanPreview): string {
   const parts = preview.patches.map(
     (p) =>
       `• ${p.recipeId}[${p.scope}]: ${p.description}` +
-      `\n  影响模型: ${p.affectedModels.join(", ") || "(none)"}`,
+      `\n  ${formatRepairPreviewImpact(p)}`,
   );
   return `目标: ${preview.target}\n方案: ${preview.recipeOrder.join(" → ")}\n${parts.join("\n")}`;
+}
+
+function formatRepairPreviewImpact(patch: RepairPlanPreviewPatch): string {
+  if (patch.scope === "exact-model") {
+    return `影响模型: ${patch.affectedModels.join(", ")} (仅此模型)`;
+  }
+  return `影响范围: provider ${patch.provider} 下的全部适用模型`;
 }
 
 function notifyRepairOutcome(ctx: PiSwitchCtx, outcome: RepairOutcome): void {
@@ -1012,19 +1010,14 @@ function buildRepairCaseRecord(
           (item) => item.recipeId === outcome.recipe.recipeId,
         )
       : undefined;
+  const recipeRecord =
+    recipePreview && "recipe" in outcome
+      ? buildRepairCaseRecipeRecord(outcome.recipe, recipePreview)
+      : undefined;
   return {
     status: outcome.status,
     persisted: outcome.persisted,
-    ...(recipePreview && "recipe" in outcome
-      ? {
-          recipe: {
-            recipeId: outcome.recipe.recipeId,
-            signatureId: outcome.recipe.signatureId,
-            scope: recipePreview.scope,
-            affectedModels: [...recipePreview.affectedModels],
-          },
-        }
-      : {}),
+    ...(recipeRecord ? { recipe: recipeRecord } : {}),
     verificationAttempts: attempts.map((attempt, index) => ({
       pass: index + 1,
       ok: attempt.ok,
@@ -1043,6 +1036,28 @@ function buildRepairCaseRecord(
       })),
     })),
     switch: switchRecord,
+  };
+}
+
+function buildRepairCaseRecipeRecord(
+  recipe: { recipeId: string; signatureId: string },
+  preview: RepairPlanPreviewPatch,
+): NonNullable<RepairCaseRepairRecord["recipe"]> {
+  const base = {
+    recipeId: recipe.recipeId,
+    signatureId: recipe.signatureId,
+  };
+  if (preview.scope === "exact-model") {
+    return {
+      ...base,
+      scope: preview.scope,
+      affectedModels: [...preview.affectedModels],
+    };
+  }
+  return {
+    ...base,
+    scope: preview.scope,
+    provider: preview.provider,
   };
 }
 

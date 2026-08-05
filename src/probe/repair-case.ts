@@ -59,12 +59,19 @@ export interface RepairCaseVerificationAttempt {
 export interface RepairCaseRepairRecord {
   status: RepairOutcome["status"] | "cancelled";
   persisted: boolean;
-  recipe?: {
-    recipeId: string;
-    signatureId: string;
-    scope: string;
-    affectedModels: string[];
-  };
+  recipe?:
+    | {
+        recipeId: string;
+        signatureId: string;
+        scope: "exact-model";
+        affectedModels: string[];
+      }
+    | {
+        recipeId: string;
+        signatureId: string;
+        scope: "provider-wide";
+        provider: string;
+      };
   verificationAttempts: RepairCaseVerificationAttempt[];
   switch?: {
     status: "not-offered" | "declined" | "succeeded" | "failed";
