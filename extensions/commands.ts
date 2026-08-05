@@ -366,6 +366,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     modelMetaFor: (id) => rt.modelMetaFor(provider, id),
     modelsDevFor: (id) => rt.modelsDevFor?.(id),
     providerWireCompat,
+    tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
   });
   if (!config) {
     const maxUnresolved =

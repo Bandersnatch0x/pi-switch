@@ -11,6 +11,13 @@ import {
   resolveRegistrationCapability,
 } from "./capabilities/registration.ts";
 import {
+  isOfficialOpenAiChatEndpoint,
+  resolveChatTupleCompat,
+  tupleCompatForRegistration,
+  type ChatTupleCompat,
+  type ResolvedChatTupleCompat,
+} from "./model-tuple-compat.ts";
+import {
   providerWireCompatForRegistration,
   resolveProviderWireCompat,
   type ProviderWireCompat,
@@ -37,13 +44,25 @@ export function toModelConfig(
   api?: PiApi | null,
   /** Per-provider overrides from pi-switch.json providerOverrides[dbId].modelMeta. */
   meta?: ModelMetaOverride,
+  /** Exact-model Chat tuple wire dialect (issue #64). */
+  tupleCompat?: ResolvedChatTupleCompat,
 ) {
   const tier = api ? API_MODEL_META[api] : undefined;
   const compat: Record<string, unknown> = {};
-  if (meta?.thinkingFormat) compat.thinkingFormat = meta.thinkingFormat;
-  if (typeof meta?.requiresReasoningContentOnAssistantMessages === "boolean") {
-    compat.requiresReasoningContentOnAssistantMessages =
-      meta.requiresReasoningContentOnAssistantMessages;
+  // Tuple registration wins; legacy flat thinkingFormat still flows via
+  // resolveChatTupleCompat → tupleCompatForRegistration when no tuple set.
+  const registrationTuple = tupleCompatForRegistration(tupleCompat);
+  if (registrationTuple) {
+    Object.assign(compat, registrationTuple);
+  } else {
+    if (meta?.thinkingFormat) compat.thinkingFormat = meta.thinkingFormat;
+    if (typeof meta?.requiresReasoningContentOnAssistantMessages === "boolean") {
+      compat.requiresReasoningContentOnAssistantMessages =
+        meta.requiresReasoningContentOnAssistantMessages;
+    }
+    if (typeof meta?.supportsDeveloperRole === "boolean") {
+      compat.supportsDeveloperRole = meta.supportsDeveloperRole;
+    }
   }
   // Issue #63: never invent protocol maxTokens; require an explicit resolved value.
   // reasoning defaults to conservative false (not protocol true) when absent.
@@ -77,48 +96,43 @@ export type BuiltProviderConfig = {
   models: BuiltModelConfig[];
 };
 
-type RegisterOpts = {
-  rules: HeaderRule[];
-  overrideHeaders?: Record<string, string>;
-  /** fingerprint:"none" — skip defaults/provider-headers rules */
-  skipRules?: boolean;
-  vars?: Record<string, string>;
-  debug?: boolean;
-  onReject?: (name: string, reason: string) => void;
-  /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
-  modelMeta?: ModelMetaOverride;
-  /**
-   * Per-model resolver; wins over `modelMeta` when it returns a value.
-   * Lets one provider register models with different reasoning/ctx settings.
-   */
-  modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
-  /**
-   * Read-only models.dev cache lookup by exact model id (no network).
-   * Stale last-good entries are still used; missing key = layer absent.
-   */
-  modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
-  /**
-   * Pre-resolved Provider Chat wire fact (preferred). Pass the result of
-   * `Runtime.providerWireCompatFor(provider)` so user overrides are applied.
-   *
-   * When omitted, registration falls back to `providerWireOverride` (if any)
-   * plus Provider-only defaults (official native vs conservative relay false).
-   * Omitting both intentionally does **not** consult `providerOverrides` —
-   * callers that hold user config must pass one of these fields.
-   */
-  providerWireCompat?: ResolvedProviderWireCompat;
-  /**
-   * Raw Provider-scoped wire override used only when `providerWireCompat` is
-   * omitted. Lets callers pass the parsed `providerOverrides.*.compat` without
-   * resolving first.
-   */
-  providerWireOverride?: ProviderWireCompat;
-};
-
 export function buildProviderConfig(
   provider: CcProvider,
   modelIds: string[],
-  opts: RegisterOpts,
+  opts: {
+    rules: HeaderRule[];
+    overrideHeaders?: Record<string, string>;
+    /** fingerprint:"none" — skip defaults/provider-headers rules */
+    skipRules?: boolean;
+    vars?: Record<string, string>;
+    debug?: boolean;
+    onReject?: (name: string, reason: string) => void;
+    /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
+    modelMeta?: ModelMetaOverride;
+    /**
+     * Per-model resolver; wins over `modelMeta` when it returns a value.
+     * Lets one provider register models with different reasoning/ctx settings.
+     */
+    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    /**
+     * Read-only models.dev cache lookup by exact model id (no network).
+     * Stale last-good entries are still used; missing key = layer absent.
+     */
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
+    /**
+     * Pre-resolved Provider Chat wire fact (preferred).
+     */
+    providerWireCompat?: ResolvedProviderWireCompat;
+    /** Raw Provider-scoped wire override when providerWireCompat omitted. */
+    providerWireOverride?: ProviderWireCompat;
+    /**
+     * Exact-model Chat tuple compat resolver (issue #64).
+     * Independent of model capability and Provider wire compat.
+     */
+    tupleCompatFor?: (modelId: string) =>
+      | { tuple?: ChatTupleCompat; legacyFlat?: ModelMetaOverride }
+      | undefined;
+  },
 ): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
@@ -144,7 +158,24 @@ export function buildProviderConfig(
       });
       // Issue #63: skip models with no trusted maxTokens authority.
       if (decision.maxTokensUnresolved || !decision.meta) return [];
-      const model = toModelConfig(id, provider.api, decision.meta);
+      const tupleInput = opts.tupleCompatFor?.(id);
+      const tupleResolved = resolveChatTupleCompat({
+        modelId: id,
+        providerApi: provider.api,
+        tuple: tupleInput?.tuple,
+        legacyFlat: tupleInput?.legacyFlat ?? userMeta,
+        officialOpenAi:
+          provider.api === "openai-completions" &&
+          isOfficialOpenAiChatEndpoint(provider.baseUrl),
+      });
+      // Strip wire-dialect fields from capability meta so they only flow via tuple.
+      const {
+        thinkingFormat: _tf,
+        requiresReasoningContentOnAssistantMessages: _rr,
+        supportsDeveloperRole: _sd,
+        ...capabilityMeta
+      } = decision.meta;
+      const model = toModelConfig(id, provider.api, capabilityMeta, tupleResolved);
       if (!registrationWire) return [model];
       return [
         {
@@ -189,7 +220,22 @@ export function registerProvider(
   pi: PiRegisterApi,
   provider: CcProvider,
   modelIds: string[],
-  opts: RegisterOpts,
+  opts: {
+    rules: HeaderRule[];
+    overrideHeaders?: Record<string, string>;
+    skipRules?: boolean;
+    vars?: Record<string, string>;
+    debug?: boolean;
+    onReject?: (name: string, reason: string) => void;
+    modelMeta?: ModelMetaOverride;
+    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
+    providerWireCompat?: ResolvedProviderWireCompat;
+    providerWireOverride?: ProviderWireCompat;
+    tupleCompatFor?: (modelId: string) =>
+      | { tuple?: ChatTupleCompat; legacyFlat?: ModelMetaOverride }
+      | undefined;
+  },
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);
   if (!config) return false;

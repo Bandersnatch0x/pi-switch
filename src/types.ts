@@ -1,8 +1,10 @@
 /** @see src/compat/gemini-tool-compat.ts — single source of truth */
 import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 import type { ProviderWireCompat } from "./provider-wire-compat.ts";
+import type { ChatTupleCompat } from "./model-tuple-compat.ts";
 export type { GeminiToolCompatConfig };
 export type { ProviderWireCompat };
+export type { ChatTupleCompat };
 
 /** Supported Pi API protocols for registration. */
 export type PiApi =
@@ -119,7 +121,21 @@ export interface ModelMetaOverride {
   thinkingLevelMap?: ThinkingLevelMap;
   /** OpenAI-compat: replay empty reasoning_content on assistant turns. */
   requiresReasoningContentOnAssistantMessages?: boolean;
+  /**
+   * Legacy flat Chat developer-role dialect (issue #64).
+   * Prefer exact-model `compat.supportsDeveloperRole`; kept for deprecation path.
+   */
+  supportsDeveloperRole?: boolean;
 }
+
+/**
+ * Exact-model override entry: capability/meta fields + optional tuple compat.
+ * `compat` is Chat-only and never inherits across models/providers (#64).
+ */
+export type ModelOverrideEntry = ModelMetaOverride & {
+  compat?: ChatTupleCompat;
+};
+
 
 /** Local pin of a provider+model pair (not an expose center). */
 export interface PinEntry {
@@ -203,7 +219,7 @@ export interface PiSwitchConfig {
        * Merged on top of provider `modelMeta`, which merges on top of
        * `defaultModelMeta`. Most specific glob wins.
        */
-      modelOverrides?: Record<string, ModelMetaOverride>;
+      modelOverrides?: Record<string, ModelOverrideEntry>;
       /** Provider-scoped request-wire compatibility, discriminated by API. */
       compat?: ProviderWireCompat;
       /**

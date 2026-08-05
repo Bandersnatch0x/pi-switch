@@ -615,6 +615,7 @@ function findOrRegisterProbeModel(
         modelMetaFor: (id) => rt.modelMetaFor(provider, id),
         modelsDevFor: (id) => rt.modelsDevFor?.(id),
         providerWireCompat: rt.providerWireCompatFor?.(provider),
+        tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
       },
     );
   } catch {
