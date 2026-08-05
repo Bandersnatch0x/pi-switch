@@ -177,6 +177,22 @@ function makePi(registerProvider?: () => void) {
   };
 }
 
+function expectRecordedPrecheckCase(
+  entries: Array<{ type: string; data: unknown }>,
+  sent: unknown[],
+): void {
+  expect(entries).toHaveLength(1);
+  expect(sent).toHaveLength(1);
+
+  const detail = entries[0]!.data as {
+    caseId: string;
+    evidence: { stoppedReason?: string };
+  };
+  const summary = sent[0] as { details?: { caseId?: string } };
+  expect(summary.details?.caseId).toBe(detail.caseId);
+  expect(detail.evidence.stoppedReason).toBe("precheck");
+}
+
 function makeLifecycle(activateImpl?: () => unknown) {
   const activated: unknown[] = [];
   return {
@@ -392,24 +408,47 @@ describe("runProbeCommand (command flow)", () => {
     expect(entries).toHaveLength(0);
   });
 
-  test("doctor precheck fail → blocks probing (error), no network", async () => {
-    const { pi, entries } = makePi();
-    const { ctx, msgs } = makeCtx();
-    let calls = 0;
-    const transport: ProbeTransport = async () => {
-      calls += 1;
-      return okText();
+  test("doctor precheck fail completes TUI/headless results with no network", async () => {
+    const log = console.log.bind(console);
+    const jsonOutputs: string[] = [];
+    console.log = (message?: unknown) => {
+      if (typeof message === "string") jsonOutputs.push(message);
+      return undefined as never;
     };
 
-    await runProbeCommand(pi, makeRt(providers), ctx, {
-      transport,
-      buildPrecheck: precheckFail,
-    });
+    try {
+      for (const mode of ["tui", "json"]) {
+        const { pi, entries, sent } = makePi();
+        const { ctx, msgs } = makeCtx({ mode });
+        let calls = 0;
+        const transport: ProbeTransport = async () => {
+          calls += 1;
+          return okText();
+        };
 
-    expect(calls).toBe(0);
-    expect(msgs.some((m) => m.msg.startsWith("ps-probe stopped"))).toBe(true);
-    expect(msgs[msgs.length - 1]!.level).toBe("error");
-    expect(entries).toHaveLength(0);
+        await runProbeCommand(pi, makeRt(providers), ctx, {
+          transport,
+          buildPrecheck: precheckFail,
+        });
+
+        expect(calls).toBe(0);
+        expect(msgs.some((m) => m.msg.startsWith("ps-probe stopped"))).toBe(true);
+        expect(msgs[msgs.length - 1]!.level).toBe("error");
+        expect(ctx.model).toEqual({ provider: "ps-p1", id: "m1" });
+        expectRecordedPrecheckCase(entries, sent);
+
+        if (mode === "json") {
+          const output = JSON.parse(jsonOutputs[jsonOutputs.length - 1] ?? "") as {
+            stoppedReason?: string;
+            requestCount?: number;
+          };
+          expect(output.stoppedReason).toBe("precheck");
+          expect(output.requestCount).toBe(0);
+        }
+      }
+    } finally {
+      console.log = log;
+    }
   });
 
   test("unresolvable target → error notify, no case", async () => {
@@ -473,6 +512,32 @@ describe("runRepairCommand (command flow)", () => {
     expect(commits).toHaveLength(0);
     expect(msgs.some((m) => m.msg.includes("requires interactive confirmation"))).toBe(true);
     expect(entries).toHaveLength(0);
+  });
+
+  test("doctor precheck fail records a case without network, commit, or switch", async () => {
+    const { pi, entries, sent } = makePi();
+    const { ctx, msgs } = makeCtx();
+    const { store, commits } = makeStore();
+    const { lifecycle, activated } = makeLifecycle();
+    let calls = 0;
+    const transport: ProbeTransport = async () => {
+      calls += 1;
+      return okText();
+    };
+
+    await runRepairCommand(pi, rt, lifecycle, ctx, {
+      transport,
+      configStore: store,
+      buildPrecheck: precheckFail,
+    });
+
+    expect(calls).toBe(0);
+    expect(commits).toHaveLength(0);
+    expect(activated).toHaveLength(0);
+    expect(msgs.some((m) => m.msg.startsWith("ps-repair stopped"))).toBe(true);
+    expect(msgs[msgs.length - 1]!.level).toBe("error");
+    expect(ctx.model).toEqual({ provider: "ps-p1", id: "m1" });
+    expectRecordedPrecheckCase(entries, sent);
   });
 
   test("no matching recipe → warning, case recorded, zero commit", async () => {
