@@ -136,6 +136,7 @@ describe("buildProviderConfig anyrouter adapt", () => {
             },
           },
         ],
+        modelMeta: { maxTokens: 64_000 },
       },
     );
     expect(cfg).toBeDefined();
@@ -164,6 +165,7 @@ describe("buildProviderConfig anyrouter adapt", () => {
             headers: { "anthropic-beta": "claude-code-20250219" },
           },
         ],
+        modelMeta: { maxTokens: 64_000 },
       },
     );
     const headers = cfg!.headers as Record<string, string>;

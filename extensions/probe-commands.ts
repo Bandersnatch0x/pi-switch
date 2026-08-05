@@ -646,6 +646,49 @@ async function buildPrecheck(
         }
       : undefined;
 
+  // Issue #63: surface unresolved maxTokens / conservative reasoning before network.
+  let capabilities: { status: "pass" | "warn" | "fail"; detail: string; fix?: string } | undefined;
+  if (provider) {
+    const resolved = rt.capabilitiesFor(provider, target.modelId);
+    const maxUnresolved =
+      resolved.maxTokens.source === "unresolved" ||
+      typeof resolved.maxTokens.value !== "number";
+    const reasonConservative = resolved.reasoning.source === "conservative-default";
+    const staleWarn =
+      resolved.maxTokens.source === "models-dev" && resolved.maxTokens.stale
+        ? `；models.dev@${resolved.maxTokens.fetchedAt ?? "?"} 过期（保留 last-good）`
+        : "";
+    const label = `${provider.appType}/${provider.displayName}`;
+    if (maxUnresolved) {
+      capabilities = {
+        status: "fail",
+        detail:
+          `${label} · ${target.modelId}: maxTokens=unresolved` +
+          (reasonConservative ? " · reasoning=unknown→conservative false" : "") +
+          staleWarn,
+        fix:
+          `在 providerOverrides 为 model "${target.modelId}" 写 exact-model ` +
+          `maxTokens（modelOverrides.<id>.maxTokens）；不切换 Session Model`,
+      };
+    } else {
+      const parts = [
+        `maxTokens=${resolved.maxTokens.value}(${resolved.maxTokens.source})`,
+        reasonConservative
+          ? "reasoning=unknown→conservative false"
+          : `reasoning=${resolved.reasoning.value}(${resolved.reasoning.source})`,
+      ];
+      capabilities = {
+        status: reasonConservative || Boolean(staleWarn) ? "warn" : "pass",
+        detail: `${label} · ${target.modelId}: ${parts.join(" · ")}${staleWarn}`,
+        fix: reasonConservative
+          ? `可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置`
+          : staleWarn
+            ? "过期：清缓存重拉（pi-switch-cache.json）或显式 override"
+            : undefined,
+      };
+    }
+  }
+
   return runTargetDoctorPrecheck({
     target,
     dbExists: rt.io.existsSync(dbPath),
@@ -654,6 +697,7 @@ async function buildPrecheck(
     ...(providersError ? { providersError } : {}),
     ...(routingProbe ? { routingProbe } : {}),
     ...(fingerprint ? { fingerprint } : {}),
+    ...(capabilities ? { capabilities } : {}),
   });
 }
 
@@ -702,18 +746,39 @@ export async function runProbeCommand(
   }
   const { target, provider, modelId } = resolved;
 
+  // Precheck runs before registry/network so unresolved maxTokens fails closed
+  // without inventing a registration or switching Session Model (issue #63).
+  const precheck = deps.buildPrecheck
+    ? await deps.buildPrecheck(rt, providers, error, target)
+    : await buildPrecheck(rt, providers, error, target);
+  if (precheck && precheck.status === "fail") {
+    const halt = {
+      ok: false as const,
+      target,
+      stages: [],
+      requestCount: 0,
+      stoppedReason: "precheck" as const,
+      budget: { maxRequests: 0, used: 0, maxTokens: 0, timeoutMs: 0 },
+      precheck,
+    };
+    reportPrecheckStop(ctx, "ps-probe", halt);
+    // Headless / CI structured output (parity with post-runProbe path).
+    if (ctx.mode === "json" || ctx.mode === "print") {
+      console.log(formatProbeResultJson(halt));
+    }
+    recordProbeCase(pi, halt, []);
+    return;
+  }
+
   const model = findOrRegisterProbeModel(pi, rt, ctx, provider, modelId);
   if (!model) {
     ctx.ui.notify(
-      `model not found in pi registry: ${provider.piName}/${modelId}`,
+      `model not found in pi registry: ${provider.piName}/${modelId}` +
+        `（若 maxTokens 未解析，请先写 exact-model maxTokens override）`,
       "error",
     );
     return;
   }
-
-  const precheck = deps.buildPrecheck
-    ? await deps.buildPrecheck(rt, providers, error, target)
-    : await buildPrecheck(rt, providers, error, target);
 
   const observations: RawProbeObservation[] = [];
   const transport = deps.transport ?? buildTransport(rt, ctx, observations);

@@ -40,6 +40,11 @@ export type EffectiveConfigSummary = {
     thinkingFormat?: string;
     thinkingLevelMap?: Record<string, string | null>;
     requiresReasoningContentOnAssistantMessages?: boolean;
+    /**
+     * When reasoning was unknown and runtime used conservative false (issue #63).
+     * Display-only; never written back to config/cache.
+     */
+    reasoningProvenance?: "resolved" | "unknown→conservative false";
   };
   providerWireCompat?: EffectiveProviderWireCompatSummary;
 };
@@ -81,6 +86,8 @@ export function createEffectiveConfigSummary(input: {
   config: BuiltProviderConfig;
   fingerprint?: FingerprintPreset;
   providerWireCompat?: ResolvedProviderWireCompat;
+  /** When true, reasoning was derived as unknown→conservative false (issue #63). */
+  reasoningConservative?: boolean;
 }): EffectiveConfigSummary {
   const model =
     input.config.models.find((candidate) => candidate.id === input.modelId) ??
@@ -129,6 +136,9 @@ export function createEffectiveConfigSummary(input: {
               compat.requiresReasoningContentOnAssistantMessages,
           }
         : {}),
+      ...(input.reasoningConservative
+        ? { reasoningProvenance: "unknown→conservative false" as const }
+        : { reasoningProvenance: "resolved" as const }),
     },
     ...(providerWireCompat ? { providerWireCompat } : {}),
   };
@@ -147,6 +157,10 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     typeof summary.model.requiresReasoningContentOnAssistantMessages === "boolean"
       ? ` requiresReasoningContentOnAssistantMessages=${summary.model.requiresReasoningContentOnAssistantMessages}`
       : "";
+  const reasoningNote =
+    summary.model.reasoningProvenance === "unknown→conservative false"
+      ? " (unknown→conservative false)"
+      : "";
   const lines = [
     "pi-switch effective config",
     `source: ${source}`,
@@ -157,7 +171,7 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     `auth: apiKey=${summary.apiKeyMode} authHeader=${summary.authHeader}`,
     `fingerprint: ${summary.fingerprint}`,
     `headers: ${headers}`,
-    `modelMeta: reasoning=${summary.model.reasoning} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${requiresRc}`,
+    `modelMeta: reasoning=${summary.model.reasoning}${reasoningNote} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${requiresRc}`,
   ];
   if (summary.providerWireCompat) {
     const wire = summary.providerWireCompat;

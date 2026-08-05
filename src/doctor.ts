@@ -440,10 +440,18 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     });
   }
 
-  // 11. capabilities (W4): provenance, conflicts, staleness for current model
+  // 11. capabilities (W4 + #63): provenance, conflicts, staleness, unresolved maxTokens
   if (input.capabilities) {
     const cap = input.capabilities.resolved;
-    const fieldLine = (label: string, e: { value: number | boolean; source: CapabilitySource; fetchedAt?: string; stale?: boolean }) => {
+    const fieldLine = (
+      label: string,
+      e: {
+        value: number | boolean | undefined;
+        source: CapabilitySource;
+        fetchedAt?: string;
+        stale?: boolean;
+      },
+    ) => {
       const src =
         e.source === "models-dev"
           ? `models.dev@${e.fetchedAt ?? "?"}${e.stale ? "(过期)" : ""}`
@@ -451,10 +459,28 @@ export function runDoctor(input: DoctorInput): DoctorReport {
             ? "模型 id 标签"
             : e.source === "host-adaptation"
               ? "宿主适配"
-              : e.source;
+              : e.source === "conservative-default"
+                ? "unknown→conservative"
+                : e.source === "unresolved"
+                  ? "unresolved"
+                  : e.source;
+      if (e.source === "unresolved") return `${label}=unresolved`;
+      if (e.source === "conservative-default" && label === "reasoning") {
+        return `${label}=unknown→conservative false`;
+      }
       return `${label}=${e.value}(${src})`;
     };
+    const failRows: string[] = [];
     const warnRows: string[] = [];
+    if (
+      cap.maxTokens.source === "unresolved" ||
+      typeof cap.maxTokens.value !== "number"
+    ) {
+      failRows.push("maxTokens=unresolved（不可注册）");
+    }
+    if (cap.reasoning.source === "conservative-default") {
+      warnRows.push("reasoning=unknown→conservative false（不写回配置）");
+    }
     for (const c of cap.conflicts) {
       warnRows.push(`${c.field}=${c.effective}(${c.effectiveSource}) vs ${c.overridden}(${c.overriddenSource})`);
     }
@@ -483,16 +509,24 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         fieldLine("reasoning", cap.reasoning),
         fieldLine("vision", cap.vision),
       ].join(" · ") +
+      (failRows.length ? `；${failRows.join("；")}` : "") +
       (warnRows.length ? `；${warnRows.join("；")}` : "") +
       (infoRows.length ? `；${infoRows.join("；")}` : "");
+    const status: DoctorStatus = failRows.length
+      ? "fail"
+      : warnRows.length
+        ? "warn"
+        : "pass";
     checks.push({
       id: "capabilities",
       title: "模型能力元数据",
-      status: warnRows.length ? "warn" : "pass",
+      status,
       detail,
-      fix: warnRows.length
-        ? "冲突：可显式 override 钉值；过期：清缓存重拉（pi-switch-cache.json 或 config.capabilitiesRefresh）"
-        : undefined,
+      fix: failRows.length
+        ? `在 providerOverrides 为 model "${input.capabilities.modelId}" 写 exact-model maxTokens（modelOverrides.<id>.maxTokens）`
+        : warnRows.length
+          ? "冲突：可显式 override 钉值；过期：清缓存重拉（pi-switch-cache.json 或 config.capabilitiesRefresh）；reasoning unknown 可钉 exact-model reasoning"
+          : undefined,
     });
   }
 
