@@ -32,6 +32,8 @@ pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会�
 - 默认注入类官方 CLI 指纹（Codex UA + `originator` + `X-Codex-Window-ID`、Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`、GeminiCLI UA + `x-goog-api-client`）。
 - 通过预设或原生弹窗覆写模型参数（`/ps-override` 或快捷键 `o`），例如 **中转兼容** 关闭被拒的 `reasoning`。
 - `/ps-doctor` 结构化体检（PASS/WARN/FAIL + 修复建议）。
+- `/ps-probe` 兼容性探针（只读）：对当前/指定 Target 跑 basic/reasoning/tool 三类契约，输出结构化证据（宽类别失败原因，模糊即 `unknown`），headless/CI 可输出 JSON。
+- `/ps-repair` 证据驱动修复（交互）：重新探针 → 白名单 Recipe → 计划确认 → 内存候选验证（同一契约连续两次通过）→ CAS 提交，不切换 Session Model。
 - 选中后注册 Pi Provider，并持久化最近一次选择，方便下次高亮与复用。
 - 附带 `diagnose-upstream` skill 作为补充知识，便于排查上游 / 中转问题。
 
@@ -180,6 +182,36 @@ Pi 包通常会安装到 `~/.pi/agent/npm/`；如果使用项目局部安装，�
 ```
 
 在三列选择器中，进入 **名称** 列后按 **`o`**，可对当前 Provider 打开同样的参数覆写弹窗；页脚会显示 `o override`。
+
+### 兼容性探针与修复
+
+切换 Provider/模型后，“模型能列出”不等于“请求真能用”。用带外（out-of-band）验证与修复：
+
+```text
+/ps-probe
+```
+
+只读探针。对当前/指定 Target 发送隔离合成请求（**永不携带会话历史**），验证：
+
+- `basic` — 基础文本契约
+- `reasoning` — 受控思考契约（仅当 Target 声明支持 reasoning 时）
+- `tool` — `probe_echo` 无副作用工具契约
+
+输出结构化证据，失败归类为宽类别（auth / model / protocol / streaming / tool / client-gate），证据模糊即 `unknown`（不猜）。硬预算：最多 9 请求、每请求 15s、输出 ≤32 token；401/429/5xx 立即停止。headless/CI 下输出 JSON。
+
+```text
+/ps-repair
+```
+
+证据驱动修复，**仅交互**（headless 被拒，需用户确认）。每次重新探针 → 匹配白名单 Repair Recipe → 计划级确认一次（目标、配方顺序、每项 patch、受影响模型）→ 候选先在内存探针目标上验证（同一契约**连续两次通过**才提交）→ CAS 提交一条配方。**不切换 Session Model**，成功后提供“切换到已修复目标”选项。
+
+首版白名单配方：
+
+1. 上游明确拒收 `reasoning`/`thinking` 参数 → 精确模型 `reasoning=false`。
+2. 客户端指纹门槛，签名唯一映射 Claude Code / Codex / Gemini → Provider 级 `fingerprint`（可选 `claudeCodeCompat`）；不唯一即 `unknown`。
+3. Gemini tool 空参数/Schema 证据 → 启用 per-provider `geminiToolCompat`（已启用仍失败则只报告）。
+
+每次写入前校验配置版本（CAS）；外部手动修改落地即中止，保留外部内容。探针/修复记录为 Repair Case（摘要进上下文，详细脱敏证据不进）。
 
 典型流程：
 
@@ -420,6 +452,20 @@ bun run typecheck
 ```bash
 bun run prepublishOnly
 ```
+
+运行隔离的 `/ps-repair` 端到端冒烟（需要 `pi`、`sqlite3` 在 `PATH`）：
+
+```bash
+bun run smoke:probe-repair
+```
+
+该脚本在临时 HOME 下启动最小 cc-switch DB、本地假 OpenAI relay 和真实 Pi RPC 子进程。它运行 **3 条修复场景**：
+
+1. **`reasoning-false`** — 假 Target 的 basic/tool 请求通过、reasoning 被拒，命中 `reasoning-false`。写入 `modelOverrides[model].reasoning=false`。
+2. **`client-fingerprint`** — 设置 `fingerprint="codex"`；relay 校验真实 `originator: codex_cli_rs` header 和 `User-Agent`。
+3. **`gemini-tool-compat`** — 设置 `geminiToolCompat=true`；relay 校验 Gemini payload（`toolConfig.functionCallingConfig.mode=AUTO`、`parameters` 替代 `parametersJsonSchema`）。
+
+每条场景：在内存候选上连续验证两次、拒绝修复后的 Session Model 切换、断言真实 `pi-switch.json` hash 未变、成功后删除全部临时状态。使用 `--recipe=<id>` 单跑一条场景，或 `--keep` / `KEEP_SMOKE_TEMP=1` 保留临时文件。
 
 ### 发布与 GitHub 自动发包
 

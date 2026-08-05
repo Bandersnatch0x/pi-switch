@@ -225,6 +225,16 @@ describe("formatFooterHints override key", () => {
     expect(s).toContain("override");
   });
 
+  test("hides mutating actions in read-only mode", () => {
+    const s = formatFooterHints(undefined, {
+      revealed: 2,
+      col: 2,
+      readOnly: true,
+    });
+    expect(s).not.toContain("override");
+    expect(s).not.toContain("pin");
+  });
+
   test("esc hint is 返回 when revealed, 退出 at root", () => {
     expect(formatFooterHints(undefined, { revealed: 0, col: 0 })).toContain("esc 退出");
     expect(formatFooterHints(undefined, { revealed: 1, col: 1 })).toContain("esc 返回");

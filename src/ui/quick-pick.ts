@@ -8,6 +8,13 @@ export interface QuickEntry {
   modelId: string;
   pinned: boolean;
   label: string;
+  /**
+   * Stored pin behind a starred row. Unpin must toggle with THIS identity:
+   * the resolved provider may carry a different appType (dbId fallback for
+   * stale/composite identities), which misses sameEntry and would add a
+   * duplicate instead of removing the pin.
+   */
+  pin?: PinEntry;
 }
 
 /** ponytail: hard cap keeps /ps a single screen; the 3-level picker covers the long tail. */
@@ -31,7 +38,7 @@ export function buildQuickEntries(
   const seen = new Set<string>();
   const out: QuickEntry[] = [];
 
-  const push = (appType: string, dbId: string, modelId: string, pinned: boolean): void => {
+  const push = (appType: string, dbId: string, modelId: string, pin?: PinEntry): void => {
     if (out.length >= QUICK_LIMIT) return;
     const provider = byId.get(`${appType}\n${dbId}`) ?? byIdAny.get(dbId);
     if (!provider || !isSwitchable(provider)) return;
@@ -41,15 +48,17 @@ export function buildQuickEntries(
     if (seen.has(key)) return;
     seen.add(key);
     const icon = getAppTypeIcon(provider.appType);
+    const pinned = Boolean(pin);
     const badge = pinned ? "* " : "  ";
     out.push({
       provider,
       modelId,
       pinned,
       label: `${badge}${icon} ${provider.appType}/${provider.displayName} · ${modelId}`,
+      pin,
     });
   };
-  for (const p of pins) push(p.appType ?? "", p.dbId, p.model, true);
-  for (const r of [...recent].sort((a, b) => b.at - a.at)) push(r.appType ?? "", r.dbId, r.model, false);
+  for (const p of pins) push(p.appType ?? "", p.dbId, p.model, p);
+  for (const r of [...recent].sort((a, b) => b.at - a.at)) push(r.appType ?? "", r.dbId, r.model);
   return out;
 }

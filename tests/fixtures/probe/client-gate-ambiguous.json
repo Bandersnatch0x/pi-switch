@@ -1,0 +1,8 @@
+{
+  "id": "client-gate-ambiguous-403",
+  "description": "403 with non-unique client-gate wording — must stay unknown (no fingerprint guess)",
+  "httpStatus": 403,
+  "errorMessage": "Forbidden: invalid User-Agent; official client required",
+  "expectedSignatureId": "unknown",
+  "expectedCategory": "unknown"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "gemini-tool-empty-args",
+  "description": "Tool contract returns probe_echo (or read-like) call with empty arguments — Gemini proxy schema not enforced without geminiToolCompat",
+  "httpStatus": 200,
+  "toolCall": {
+    "name": "probe_echo",
+    "arguments": {}
+  },
+  "expectedSignatureId": "gemini_tool_empty_args",
+  "expectedCategory": "tool",
+  "expectedRecipeId": "gemini-tool-compat",
+  "notes": "Classic symptom: model returns functionCall.args = {} when toolConfig/schema not applied through third-party Gemini proxies (see docs/gemini-tool-call-compat-research.md)"
+}

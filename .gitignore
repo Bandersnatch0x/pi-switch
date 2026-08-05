@@ -34,6 +34,9 @@ Thumbs.db
 
 # Scratch
 .scratch/
+.grok/
+.pi-subagents/
+prototypes/ps-probe-feasibility/
 
 # Package tarballs
 *.tgz

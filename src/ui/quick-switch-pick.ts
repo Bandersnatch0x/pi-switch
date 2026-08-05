@@ -16,6 +16,7 @@
  */
 
 import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
+import { isPinned } from "../settings.ts";
 import { buildQuickEntries, type QuickEntry } from "./quick-pick.ts";
 import { formatKeyHint } from "./three-level-pick.ts";
 import type { PiSwitchCtx } from "../pi-context.ts";
@@ -168,22 +169,41 @@ async function quickSwitchCustom(
             ctx.ui.notify("未配置 pin 持久化", "warning");
             return;
           }
-          void (async () => {
-            try {
-              const next = await opts.onTogglePin!({
+          // Unpin with the *stored* pin identity, not the resolved provider's:
+          // the row may render via the dbId fallback with a different appType,
+          // which misses sameEntry and silently adds a duplicate (unpinnable ★).
+          // Legacy appType-less pins take the provider appType so the toggle
+          // also heals appType-less duplicate twins.
+          const toggleEntry: PinEntry = e.pinned && e.pin
+            ? {
+                dbId: e.pin.dbId,
+                model: e.pin.model,
+                appType: e.pin.appType ?? e.provider.appType,
+                label: e.pin.label ?? `${e.provider.displayName} · ${e.modelId}`,
+              }
+            : {
                 dbId: e.provider.id,
                 model: e.modelId,
                 appType: e.provider.appType,
                 label: `${e.provider.displayName} · ${e.modelId}`,
-              });
+              };
+          void (async () => {
+            try {
+              const next = await opts.onTogglePin!(toggleEntry);
               const fresh = buildQuickEntries(next, opts.recent, opts.providers);
               state = {
                 entries: fresh,
                 idx: Math.min(state.idx, Math.max(0, fresh.length - 1)),
                 scroll: Math.min(state.scroll, Math.max(0, fresh.length - 1)),
               };
+              const nowPinned = isPinned(
+                next,
+                toggleEntry.dbId,
+                toggleEntry.model,
+                toggleEntry.appType,
+              );
               ctx.ui.notify(
-                `已 ${e.pinned ? "取消 pin" : "pin"} · ${e.provider.displayName} · ${e.modelId}`,
+                `${nowPinned ? "已 pin" : "已取消 pin"} · ${e.provider.displayName} · ${e.modelId}`,
                 "info",
               );
               tui.requestRender();

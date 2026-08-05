@@ -1,0 +1,9 @@
+{
+  "id": "client-gate-gemini-403",
+  "description": "403 client-gate with distinctive GeminiCLI UA rejection body",
+  "httpStatus": 403,
+  "errorMessage": "Forbidden: User-Agent must be GeminiCLI; x-goog-api-client header required",
+  "expectedSignatureId": "client_gate_gemini",
+  "expectedFingerprint": "gemini",
+  "expectedCategory": "client-gate"
+}

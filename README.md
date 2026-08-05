@@ -32,6 +32,8 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 - Inject CLI-like fingerprints by default (Codex UA + `originator` + `X-Codex-Window-ID`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
 - Override model parameters via presets or a native dialog (`/ps-override` or picker key `o`) — e.g. **中转兼容** sets `reasoning=false` when a relay rejects thinking.
 - Run structured health checks with `/ps-doctor` (PASS/WARN/FAIL + fix hints).
+- Run a read-only compatibility probe with `/ps-probe` (basic / reasoning / tool contracts, structured evidence, JSON in headless/CI).
+- Repair evidence-driven with `/ps-repair` (interactive only): re-probe → whitelist Recipe → confirm → in-memory candidate verify → CAS commit, without switching the Session Model.
 - Persist the latest selection so the next switcher session can highlight and reuse it.
 - Ship a `diagnose-upstream` skill as supplemental knowledge for upstream / relay troubleshooting.
 
@@ -182,6 +184,36 @@ To edit model parameter overrides (for example disable `reasoning` for a Claude-
 ```
 
 In the provider picker, after the **Name** column is revealed, press **`o`** to open the same override dialog for the focused provider. The footer shows `o override`.
+
+### Compatibility probe & repair
+
+Switching a provider/model means “the model is listed” ≠ “requests actually work”. Verify and repair out-of-band:
+
+```text
+/ps-probe
+```
+
+Read-only probe against the current/selected Target. Sends isolated synthetic requests (**never your conversation history**):
+
+- `basic` — plain-text contract
+- `reasoning` — controlled thinking contract (only when the target claims reasoning support)
+- `tool` — side-effect-free `probe_echo` tool contract
+
+Outputs structured evidence grouped into wide failure categories (auth / model / protocol / streaming / tool / client-gate); ambiguous evidence yields `unknown` (no guessing). Hard budget: max 9 requests, 15s each, ≤32 output tokens; 401/429/5xx stop immediately. headless/CI emits JSON.
+
+```text
+/ps-repair
+```
+
+Evidence-driven repair, **interactive only** (headless is rejected — a persistent config change needs consent). Re-probes fresh each run → matches a whitelist Repair Recipe → one plan-level confirmation (target, recipe order, each patch, affected models) → candidate verified on an in-memory probe target first (the same contract must pass **twice consecutively** before commit) → CAS commit of one recipe. **Session Model stays unchanged**; an explicit “switch to repaired target” is offered on success.
+
+First-version whitelist recipes:
+
+1. Upstream rejects `reasoning`/`thinking` → exact-model `reasoning=false`.
+2. Client fingerprint gate, signature uniquely mapped to Claude Code / Codex / Gemini → provider-level `fingerprint` (+ optional `claudeCodeCompat`); non-unique → `unknown`.
+3. Gemini tool empty-args / schema evidence → enable per-provider `geminiToolCompat` (report-only when already enabled and still failing).
+
+Every write re-checks the config version (CAS); a concurrent external edit aborts the repair and preserves external content. Each probe/repair is recorded as a Repair Case (redacted summary in context, detailed redacted evidence out of context).
 
 Typical flow:
 
@@ -422,6 +454,20 @@ Pre-publish check:
 ```bash
 bun run prepublishOnly
 ```
+
+Run the isolated end-to-end `/ps-repair` smoke (requires `pi` and `sqlite3` on `PATH`):
+
+```bash
+bun run smoke:probe-repair
+```
+
+This starts a local faux OpenAI relay and a Pi RPC subprocess under a temporary HOME. It runs **3 repair scenarios** against the same faux target:
+
+1. **`reasoning-false`** — The faux target passes basic/tool requests but rejects reasoning, matching `reasoning-false`. Writes `modelOverrides[model].reasoning=false`.
+2. **`client-fingerprint`** — Sets `fingerprint="codex"`; the relay validates real `originator: codex_cli_rs` headers and `User-Agent`.
+3. **`gemini-tool-compat`** — Sets `geminiToolCompat=true`; the relay validates Gemini-style payload (`toolConfig.functionCallingConfig.mode=AUTO`, `parameters` instead of `parametersJsonSchema`).
+
+Each scenario: verifies the candidate twice, declines the post-repair Session Model switch, asserts real `pi-switch.json` hash unchanged, and deletes temporary state after success. Use `--recipe=<id>` to run a single scenario, or `--keep` / `KEEP_SMOKE_TEMP=1` to retain temp files.
 
 ### Release and GitHub auto-publish
 

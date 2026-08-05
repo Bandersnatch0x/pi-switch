@@ -38,6 +38,7 @@ import type {
   ActivationResult,
   ActivationStageResult,
 } from "./switch-lifecycle.ts";
+import { runProbeCommand, runRepairCommand } from "./probe-commands.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -610,6 +611,22 @@ export function registerCommands(
     description: "诊断 pi-switch 环境（sqlite3 / DB / 指纹 / modelMeta / pin）",
     handler: async (_args, ctx) => {
       await runDoctorCommand(rt, ctx);
+    },
+  });
+
+  pi.registerCommand("ps-probe", {
+    description:
+      "兼容性探针（只读）：对当前/指定 Target 跑 basic/reasoning/tool 契约，输出结构化证据",
+    handler: async (_args, ctx) => {
+      await runProbeCommand(pi, rt, ctx);
+    },
+  });
+
+  pi.registerCommand("ps-repair", {
+    description:
+      "证据驱动修复（交互）：重新 Probe → 白名单 Recipe → 确认 → 内存候选验证 → CAS 提交，不切换 Session Model",
+    handler: async (_args, ctx) => {
+      await runRepairCommand(pi, rt, lifecycle, ctx);
     },
   });
 

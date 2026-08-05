@@ -268,12 +268,16 @@ export type ModelMetaScope =
   | { kind: "provider" }
   | { kind: "model"; modelId: string };
 
-type MutableOverrideEntry = {
+export type MutableOverrideEntry = {
   label?: string;
   fingerprint?: FingerprintPreset;
   headers?: Record<string, string>;
   modelMeta?: ModelMetaOverride;
   modelOverrides?: Record<string, ModelMetaOverride>;
+  /** Force Claude Code compat on/off (provider scope; written by Repair Recipe2). */
+  claudeCodeCompat?: boolean;
+  /** Force Gemini tool compat on/off (provider scope; written by Repair Recipe3). */
+  geminiToolCompat?: boolean;
 };
 
 function validateModelMetaWrite(
@@ -325,9 +329,16 @@ function validateModelMetaWrite(
 }
 
 /** An override entry is only worth keeping when it carries real config. */
-function entryIsEmpty(entry: MutableOverrideEntry): boolean {
+export function entryIsEmpty(entry: MutableOverrideEntry): boolean {
   const modelCount = entry.modelOverrides ? Object.keys(entry.modelOverrides).length : 0;
-  return !entry.modelMeta && !entry.headers && !entry.fingerprint && modelCount === 0;
+  return (
+    !entry.modelMeta &&
+    !entry.headers &&
+    !entry.fingerprint &&
+    !entry.claudeCodeCompat &&
+    !entry.geminiToolCompat &&
+    modelCount === 0
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -343,7 +354,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * written somewhere the resolver ignores. Without appType, the legacy
  * top-level slot is used as before.
  */
-function updateOverrideEntry(
+export function updateOverrideEntry(
   raw: Record<string, unknown>,
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   mutate: (prev: MutableOverrideEntry) => MutableOverrideEntry,

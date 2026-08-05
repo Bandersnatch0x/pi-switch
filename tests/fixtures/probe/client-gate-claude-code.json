@@ -1,0 +1,9 @@
+{
+  "id": "client-gate-claude-code-403",
+  "description": "403 client-gate with distinctive Claude Code UA / Agent SDK rejection body",
+  "httpStatus": 403,
+  "errorMessage": "Forbidden: client must identify as claude-cli (Claude Code); invalid User-Agent for this channel",
+  "expectedSignatureId": "client_gate_claude_code",
+  "expectedFingerprint": "claude-code",
+  "expectedCategory": "client-gate"
+}
