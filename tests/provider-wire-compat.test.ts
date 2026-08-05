@@ -101,9 +101,18 @@ describe("resolveProviderWireCompat", () => {
     });
     expect(providerWireCompatForRegistration(falseResult)).toEqual({
       supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
     });
+    // Explicit true on store only; other fields stay conservative for unknown relay.
     expect(providerWireCompatForRegistration(trueResult)).toEqual({
       supportsStore: true,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
     });
   });
 
@@ -132,6 +141,10 @@ describe("resolveProviderWireCompat", () => {
     });
     expect(providerWireCompatForRegistration(result)).toEqual({
       supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
     });
   });
 
@@ -292,5 +305,116 @@ describe("Anthropic Provider wire compat (#65)", () => {
         supportsStore: false,
       }),
     ).toThrow(/unknown key/);
+  });
+});
+
+describe("Chat Provider wire remaining fields (#66)", () => {
+  test("parses four additional Chat wire fields without truthy cleanup", () => {
+    expect(
+      parseProviderWireCompat({
+        api: "openai-completions",
+        supportsStore: true,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+        requiresToolResultName: true,
+        requiresAssistantAfterToolResult: true,
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      supportsStore: true,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: true,
+    });
+  });
+
+  test("unknown Chat relay defaults all five fields conservatively", () => {
+    const result = resolveProviderWireCompat({
+      provider: provider("openai-completions", "https://relay.example/v1"),
+    });
+    expect(result?.api).toBe("openai-completions");
+    if (result?.api !== "openai-completions") throw new Error("expected chat");
+    expect(result.fields).toEqual({
+      supportsStore: { value: false, source: "conservative-default" },
+      supportsUsageInStreaming: { value: false, source: "conservative-default" },
+      supportsStrictMode: { value: false, source: "conservative-default" },
+      requiresToolResultName: { value: false, source: "conservative-default" },
+      requiresAssistantAfterToolResult: {
+        value: false,
+        source: "conservative-default",
+      },
+    });
+  });
+
+  test("explicit Chat wire overrides resolve independently on unknown relay", () => {
+    const result = resolveProviderWireCompat({
+      provider: provider("openai-completions", "https://relay.example/v1"),
+      override: {
+        api: "openai-completions",
+        supportsUsageInStreaming: false,
+        supportsStrictMode: true,
+        requiresToolResultName: true,
+        // store + assistantAfter absent → conservative false
+      },
+    });
+    expect(result?.api).toBe("openai-completions");
+    if (result?.api !== "openai-completions") throw new Error("expected chat");
+    expect(result.fields.supportsStore).toEqual({
+      value: false,
+      source: "conservative-default",
+    });
+    expect(result.fields.supportsUsageInStreaming).toEqual({
+      value: false,
+      source: "user-provider",
+    });
+    expect(result.fields.supportsStrictMode).toEqual({
+      value: true,
+      source: "user-provider",
+    });
+    expect(result.fields.requiresToolResultName).toEqual({
+      value: true,
+      source: "user-provider",
+    });
+    expect(result.fields.requiresAssistantAfterToolResult).toEqual({
+      value: false,
+      source: "conservative-default",
+    });
+    expect(providerWireCompatForRegistration(result)).toEqual({
+      supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: true,
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: false,
+    });
+  });
+
+  test("official OpenAI conflict on supportsStrictMode surfaces WARN facts", () => {
+    const result = resolveProviderWireCompat({
+      provider: provider("openai-completions", "https://api.openai.com/v1"),
+      override: {
+        api: "openai-completions",
+        supportsStrictMode: false,
+      },
+    });
+    expect(result?.api).toBe("openai-completions");
+    if (result?.api !== "openai-completions") throw new Error("expected chat");
+    expect(result.fields.supportsStrictMode).toEqual({
+      value: false,
+      source: "user-provider",
+    });
+    // Official facts for unset fields remain official-adapter.
+    expect(result.fields.supportsUsageInStreaming.source).toBe("official-adapter");
+    expect(result.conflicts).toContainEqual(
+      expect.objectContaining({
+        field: "supportsStrictMode",
+        effective: false,
+        overridden: true,
+      }),
+    );
+    // Only non-official fields are registered.
+    expect(providerWireCompatForRegistration(result)).toEqual({
+      supportsStrictMode: false,
+    });
   });
 });

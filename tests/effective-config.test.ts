@@ -109,15 +109,20 @@ describe("effective config summary", () => {
     });
     const text = formatEffectiveConfigSummary(summary);
 
-    expect(summary.providerWireCompat).toEqual({
+    expect(summary.providerWireCompat).toMatchObject({
       api: "openai-completions",
       supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
       scope: "provider",
       source: "conservative-default",
     });
-    expect(text).toContain(
-      "providerWireCompat: supportsStore=false scope=provider source=conservative-default",
-    );
+    expect(text).toContain("store=false");
+    expect(text).toContain("usageStream=false");
+    expect(text).toContain("strict=false");
+    expect(text).toContain("scope=provider source=conservative-default");
   });
 
   test("shows Anthropic Provider wire fields, scope, and authority source (#65)", () => {

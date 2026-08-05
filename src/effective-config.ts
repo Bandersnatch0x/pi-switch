@@ -17,8 +17,12 @@ export type EffectiveProviderWireCompatSummary = {
   api: ResolvedProviderWireCompat["api"];
   scope: "provider";
   source: ResolvedProviderWireCompat["source"];
-  /** Chat (#62). */
+  /** Chat (#62 + #66). */
   supportsStore?: boolean;
+  supportsUsageInStreaming?: boolean;
+  supportsStrictMode?: boolean;
+  requiresToolResultName?: boolean;
+  requiresAssistantAfterToolResult?: boolean;
   /** Anthropic (#65). */
   supportsEagerToolInputStreaming?: boolean;
   supportsCacheControlOnTools?: boolean;
@@ -114,9 +118,14 @@ export function createEffectiveConfigSummary(input: {
     if (wire.api === "openai-completions") {
       providerWireCompat = {
         api: wire.api,
-        supportsStore: wire.value,
         scope: wire.scope,
         source: wire.source,
+        supportsStore: wire.fields.supportsStore.value,
+        supportsUsageInStreaming: wire.fields.supportsUsageInStreaming.value,
+        supportsStrictMode: wire.fields.supportsStrictMode.value,
+        requiresToolResultName: wire.fields.requiresToolResultName.value,
+        requiresAssistantAfterToolResult:
+          wire.fields.requiresAssistantAfterToolResult.value,
       };
     } else {
       providerWireCompat = {
@@ -198,7 +207,7 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     const wire = summary.providerWireCompat;
     if (wire.api === "openai-completions") {
       lines.push(
-        `providerWireCompat: supportsStore=${wire.supportsStore} scope=${wire.scope} source=${wire.source}`,
+        `providerWireCompat: store=${wire.supportsStore} usageStream=${wire.supportsUsageInStreaming} strict=${wire.supportsStrictMode} toolResultName=${wire.requiresToolResultName} assistantAfterTool=${wire.requiresAssistantAfterToolResult} scope=${wire.scope} source=${wire.source}`,
       );
     } else {
       lines.push(
