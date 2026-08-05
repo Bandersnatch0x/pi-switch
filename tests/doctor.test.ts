@@ -435,8 +435,8 @@ describe("runDoctor", () => {
         modelId: "m1",
         resolved: {
           contextWindow: { value: 200000, source: "protocol-default" },
-          maxTokens: { value: 64000, source: "protocol-default" },
-          reasoning: { value: true, source: "protocol-default" },
+          maxTokens: { value: 64000, source: "user-override" },
+          reasoning: { value: true, source: "user-override" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
         },
@@ -445,6 +445,35 @@ describe("runDoctor", () => {
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
     expect(check?.detail).toContain("context=200000(protocol-default)");
+  });
+
+  test("capabilities #63: unresolved maxTokens fails with exact-model fix", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "1", displayName: "relay", appType: "codex" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "unknown-relay-model",
+        resolved: {
+          contextWindow: { value: 128000, source: "protocol-default" },
+          maxTokens: { value: undefined, source: "unresolved" },
+          reasoning: { value: false, source: "conservative-default" },
+          vision: { value: false, source: "conservative-default" },
+          conflicts: [],
+        },
+      },
+    });
+    const check = report.checks.find((c) => c.id === "capabilities");
+    expect(check?.status).toBe("fail");
+    expect(check?.detail).toContain("maxOutput=unresolved");
+    expect(check?.detail).toContain("unknown→conservative false");
+    expect(check?.detail).not.toContain("secret");
+    expect(check?.fix).toContain("modelOverrides");
+    expect(check?.fix).toContain("unknown-relay-model");
   });
 
   test("capabilities W4: conflict warns with effective vs overridden", () => {

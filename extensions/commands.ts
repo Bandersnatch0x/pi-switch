@@ -356,6 +356,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
   const providerWireCompat = rt.providerWireCompatFor?.(provider);
+  const caps = rt.capabilitiesFor(provider, resolvedModelId);
   const config = buildProviderConfig(provider, [resolvedModelId], {
     rules: rt.headerRules,
     ...rt.headerOverrideOpts(provider),
@@ -367,8 +368,13 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     providerWireCompat,
   });
   if (!config) {
+    const maxUnresolved =
+      caps.maxTokens.source === "unresolved" ||
+      typeof caps.maxTokens.value !== "number";
     ctx.ui?.notify?.(
-      `无法构建有效配置：${provider.parseError ?? provider.displayName}`,
+      maxUnresolved
+        ? `无法构建有效配置：${provider.displayName} · ${resolvedModelId} maxTokens=unresolved；请写 exact-model maxTokens override`
+        : `无法构建有效配置：${provider.parseError ?? provider.displayName}`,
       "error",
     );
     return;
@@ -386,6 +392,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     config,
     fingerprint,
     providerWireCompat,
+    reasoningConservative: caps.reasoning.source === "conservative-default",
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {

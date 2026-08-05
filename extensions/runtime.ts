@@ -421,20 +421,20 @@ export class Runtime {
     return this.capabilitiesCache().capabilities[modelId];
   }
 
-  /** Resolve capability facts for a provider/model (full #36 priority chain). */
+  /** Resolve capability facts for a provider/model (full #36/#63 priority chain). */
   capabilitiesFor(provider: CcProvider, modelId: string) {
     const cache = this.modelsDevFor(modelId);
     const user = this.modelMetaFor(provider, modelId);
     const api = provider.api;
     const tier = api ? API_MODEL_META[api] : undefined;
+    // Issue #63: protocol defaults supply contextWindow/vision only — never
+    // invent maxTokens or reasoning for unknown models.
     const defaults = tier
       ? {
           contextWindow: tier.contextWindow,
-          maxTokens: tier.maxTokens,
-          reasoning: tier.reasoning,
           vision: tier.input?.includes("image"),
         }
-      : undefined;
+      : { contextWindow: 200_000 };
     const ccMeta = ccMetaFrom(provider.meta);
     const cw = bracketContextWindow(modelId);
     const idTag = cw !== undefined ? { contextWindow: cw } : undefined;

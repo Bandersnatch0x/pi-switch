@@ -168,7 +168,8 @@ function setup(options?: {
     headerOverrideOpts: () => ({}),
     headerVars: () => ({}),
     rejectSink: () => undefined,
-    modelMetaFor: () => undefined,
+    // Trusted maxTokens so registration is eligible under issue #63.
+    modelMetaFor: () => ({ maxTokens: 32_000, reasoning: true }),
     modelsDevFor: () => undefined,
     providerWireCompatFor:
       options?.providerWireCompatFor ?? (() => undefined),

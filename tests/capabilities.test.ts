@@ -191,10 +191,20 @@ describe("resolveModelCapabilities (W4)", () => {
     );
   });
 
-  test("protocol default is the floor when no other layer supplies a field", () => {
-    const r = resolveModelCapabilities({ defaults });
+  test("protocol default may floor contextWindow; maxTokens/reasoning do not invent floors (#63)", () => {
+    const r = resolveModelCapabilities({
+      defaults: { contextWindow: 400000 },
+    });
     expect(r.contextWindow).toMatchObject({ value: 400000, source: "protocol-default" });
-    expect(r.reasoning).toMatchObject({ value: true, source: "protocol-default" });
+    expect(r.maxTokens).toMatchObject({ value: undefined, source: "unresolved" });
+    expect(r.reasoning).toMatchObject({ value: false, source: "conservative-default" });
+  });
+
+  test("legacy defaults.maxTokens still wins if a caller supplies it", () => {
+    // Callers (registration/runtime) must not pass protocol maxTokens; the
+    // pick layer still honours an explicit defaults entry for tests/tools.
+    const r = resolveModelCapabilities({ defaults });
+    expect(r.maxTokens).toMatchObject({ value: 128000, source: "protocol-default" });
   });
 
   test("stale models.dev fact is flagged and keeps last-good", () => {

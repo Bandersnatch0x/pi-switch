@@ -6,7 +6,10 @@ import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
-import { resolveRegistrationMeta } from "./capabilities/registration.ts";
+import {
+  ccMetaFrom,
+  resolveRegistrationCapability,
+} from "./capabilities/registration.ts";
 import {
   providerWireCompatForRegistration,
   resolveProviderWireCompat,
@@ -42,14 +45,21 @@ export function toModelConfig(
     compat.requiresReasoningContentOnAssistantMessages =
       meta.requiresReasoningContentOnAssistantMessages;
   }
+  // Issue #63: never invent protocol maxTokens; require an explicit resolved value.
+  // reasoning defaults to conservative false (not protocol true) when absent.
+  if (typeof meta?.maxTokens !== "number" || meta.maxTokens <= 0) {
+    throw new Error(
+      `toModelConfig: maxTokens unresolved for ${modelId} (issue #63 — refuse protocol floor)`,
+    );
+  }
   return {
     id: modelId,
     name: modelId,
-    reasoning: meta?.reasoning ?? tier?.reasoning ?? true,
+    reasoning: meta?.reasoning ?? false,
     input: (tier?.input ?? ["text"]) as ("text" | "image")[],
     cost: DEFAULT_MODEL_META.cost,
     contextWindow: meta?.contextWindow ?? tier?.contextWindow ?? DEFAULT_MODEL_META.contextWindow,
-    maxTokens: meta?.maxTokens ?? tier?.maxTokens ?? DEFAULT_MODEL_META.maxTokens,
+    maxTokens: meta.maxTokens,
     ...(meta?.thinkingLevelMap ? { thinkingLevelMap: meta.thinkingLevelMap } : {}),
     ...(Object.keys(compat).length ? { compat } : {}),
   };
@@ -119,26 +129,33 @@ export function buildProviderConfig(
       override: opts.providerWireOverride,
     });
   const registrationWire = providerWireCompatForRegistration(resolvedWire);
-  const models = ids.filter(Boolean).map((raw) => {
-    const id = raw.trim();
-    const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
-    const meta = resolveRegistrationMeta({
-      modelId: id,
-      api: provider.api,
-      baseUrl: provider.baseUrl,
-      userMeta,
-      modelsDev: opts.modelsDevFor?.(id),
+  const models = ids
+    .filter(Boolean)
+    .map((raw) => raw.trim())
+    .flatMap((id) => {
+      const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
+      const decision = resolveRegistrationCapability({
+        modelId: id,
+        api: provider.api,
+        baseUrl: provider.baseUrl,
+        userMeta,
+        modelsDev: opts.modelsDevFor?.(id),
+        ccMeta: ccMetaFrom(provider.meta),
+      });
+      // Issue #63: skip models with no trusted maxTokens authority.
+      if (decision.maxTokensUnresolved || !decision.meta) return [];
+      const model = toModelConfig(id, provider.api, decision.meta);
+      if (!registrationWire) return [model];
+      return [
+        {
+          ...model,
+          compat: {
+            ...(model.compat ?? {}),
+            ...registrationWire,
+          },
+        },
+      ];
     });
-    const model = toModelConfig(id, provider.api, meta);
-    if (!registrationWire) return model;
-    return {
-      ...model,
-      compat: {
-        ...(model.compat ?? {}),
-        ...registrationWire,
-      },
-    };
-  });
   if (!models.length) return undefined;
 
   let headers = mergeHeaders({
