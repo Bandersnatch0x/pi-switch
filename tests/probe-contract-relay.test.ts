@@ -1,0 +1,486 @@
+import { describe, expect, test } from "bun:test";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { createProbeTransport } from "../extensions/probe-commands.ts";
+import type { ProbeRequest } from "../src/probe/index.ts";
+import {
+  createStrictRelay,
+  type StrictRelayProfile,
+  type StrictRelayProtocol,
+} from "./helpers/strict-relay.ts";
+
+const PROTOCOLS = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const satisfies readonly StrictRelayProtocol[];
+
+const ZERO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const OFFICIAL_PROFILES = {
+  "openai-completions": {
+    name: "openai-chat-official-capable",
+    allowedFields: [
+      "model",
+      "messages",
+      "stream",
+      "stream_options",
+      "store",
+      "max_completion_tokens",
+      "tools",
+      "reasoning_effort",
+    ],
+    requiredFields: ["model", "messages", "stream"],
+  },
+  "openai-responses": {
+    name: "openai-responses-official-capable",
+    allowedFields: [
+      "model",
+      "input",
+      "stream",
+      "store",
+      "max_output_tokens",
+      "tools",
+      "reasoning",
+      "include",
+    ],
+    requiredFields: ["model", "input", "stream"],
+  },
+  "anthropic-messages": {
+    name: "anthropic-messages-official-capable",
+    allowedFields: [
+      "model",
+      "messages",
+      "max_tokens",
+      "stream",
+      "system",
+      "tools",
+      "thinking",
+    ],
+    requiredFields: ["model", "messages", "max_tokens", "stream"],
+  },
+  "google-generative-ai": {
+    name: "gemini-generate-content-official-capable",
+    allowedFields: [
+      "contents",
+      "systemInstruction",
+      "tools",
+      "toolConfig",
+      "generationConfig",
+    ],
+    requiredFields: ["contents"],
+  },
+} as const satisfies Record<StrictRelayProtocol, StrictRelayProfile>;
+
+const FORBIDDEN_FIELDS = {
+  "openai-completions": "store",
+  "openai-responses": "store",
+  "anthropic-messages": "thinking",
+  "google-generative-ai": "generationConfig.thinkingConfig",
+} as const satisfies Record<StrictRelayProtocol, string>;
+
+const EXPECTED_PATHS = {
+  "openai-completions": "/v1/chat/completions",
+  "openai-responses": "/v1/responses",
+  "anthropic-messages": "/v1/messages",
+  "google-generative-ai": "/models/relay-model:streamGenerateContent",
+} as const satisfies Record<StrictRelayProtocol, string>;
+
+const EXPECTED_BODIES = {
+  "openai-completions": {
+    model: "relay-model",
+    messages: [
+      { role: "system", content: "probe system" },
+      { role: "user", content: "probe request" },
+    ],
+    stream: true,
+    stream_options: { include_usage: true },
+    store: false,
+    max_completion_tokens: 32,
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "probe_echo",
+          description: "Echo probe",
+          parameters: {
+            type: "object",
+            properties: { msg: { type: "string" } },
+            required: ["msg"],
+          },
+          strict: false,
+        },
+      },
+    ],
+    reasoning_effort: "low",
+  },
+  "openai-responses": {
+    model: "relay-model",
+    input: [
+      { role: "developer", content: "probe system" },
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "probe request" }],
+      },
+    ],
+    stream: true,
+    store: false,
+    max_output_tokens: 32,
+    tools: [
+      {
+        type: "function",
+        name: "probe_echo",
+        description: "Echo probe",
+        parameters: {
+          type: "object",
+          properties: { msg: { type: "string" } },
+          required: ["msg"],
+        },
+        strict: false,
+      },
+    ],
+    reasoning: { effort: "low", summary: "auto" },
+    include: ["reasoning.encrypted_content"],
+  },
+  "anthropic-messages": {
+    model: "relay-model",
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "probe request",
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      },
+    ],
+    max_tokens: 2048,
+    stream: true,
+    system: [
+      {
+        type: "text",
+        text: "probe system",
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+    tools: [
+      {
+        name: "probe_echo",
+        description: "Echo probe",
+        eager_input_streaming: true,
+        input_schema: {
+          type: "object",
+          properties: { msg: { type: "string" } },
+          required: ["msg"],
+        },
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+    thinking: {
+      type: "enabled",
+      budget_tokens: 1024,
+      display: "summarized",
+    },
+  },
+  "google-generative-ai": {
+    contents: [{ parts: [{ text: "probe request" }], role: "user" }],
+    systemInstruction: {
+      parts: [{ text: "probe system" }],
+      role: "user",
+    },
+    tools: [
+      {
+        functionDeclarations: [
+          {
+            name: "probe_echo",
+            description: "Echo probe",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { msg: { type: "string" } },
+              required: ["msg"],
+            },
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      maxOutputTokens: 32,
+      thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+    },
+  },
+} as const satisfies Record<StrictRelayProtocol, Record<string, unknown>>;
+
+function modelFor(
+  protocol: StrictRelayProtocol,
+  baseUrl: string,
+): Model<Api> {
+  const common = {
+    id: "relay-model",
+    name: "Relay model",
+    baseUrl,
+    reasoning: true,
+    input: ["text"] as Array<"text" | "image">,
+    cost: ZERO_COST,
+    contextWindow: 8192,
+    maxTokens: 2048,
+  };
+
+  switch (protocol) {
+    case "openai-completions":
+      return {
+        ...common,
+        api: protocol,
+        provider: "openai",
+        compat: {
+          supportsStore: true,
+          supportsUsageInStreaming: true,
+          supportsStrictMode: true,
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: true,
+          maxTokensField: "max_completion_tokens",
+        },
+      };
+    case "openai-responses":
+      return { ...common, api: protocol, provider: "openai" };
+    case "anthropic-messages":
+      return { ...common, api: protocol, provider: "anthropic" };
+    case "google-generative-ai":
+      return { ...common, api: protocol, provider: "google" };
+  }
+}
+
+function makeRequest(
+  model: Model<Api>,
+  target: ProbeRequest["target"] = {
+    provider: `ps-${model.provider}`,
+    modelId: model.id,
+    reasoning: true,
+  },
+): ProbeRequest {
+  return {
+    contract: "reasoning",
+    target,
+    model,
+    context: {
+      systemPrompt: "probe system",
+      messages: [
+        { role: "user", content: "probe request", timestamp: 1 },
+      ],
+      tools: [
+        {
+          name: "probe_echo",
+          description: "Echo probe",
+          parameters: {
+            type: "object",
+            properties: { msg: { type: "string" } },
+            required: ["msg"],
+          },
+        },
+      ],
+    },
+    options: {
+      maxTokens: 32,
+      reasoning: "low",
+      signal: new AbortController().signal,
+    },
+  };
+}
+
+function transport(geminiMode?: "AUTO") {
+  return createProbeTransport({
+    resolveAuth: async () => ({ ok: true, apiKey: "test-key" }),
+    ...(geminiMode
+      ? { geminiCompat: { forceToolConfigMode: geminiMode } }
+      : {}),
+  });
+}
+
+describe("strict relay profile validation", () => {
+  test("returns field-level 400 for disallowed, missing, and nested forbidden fields", async () => {
+    const cases: Array<{
+      profile: StrictRelayProfile;
+      body: Record<string, unknown>;
+      field: string;
+      rule: "not_allowed" | "required" | "forbidden";
+    }> = [
+      {
+        profile: {
+          name: "allowed",
+          allowedFields: ["model"],
+          requiredFields: ["model"],
+        },
+        body: { model: "relay-model", extra: true },
+        field: "extra",
+        rule: "not_allowed",
+      },
+      {
+        profile: {
+          name: "required",
+          allowedFields: ["model"],
+          requiredFields: ["model"],
+        },
+        body: {},
+        field: "model",
+        rule: "required",
+      },
+      {
+        profile: {
+          name: "forbidden-nested",
+          allowedFields: ["model", "tools"],
+          requiredFields: ["model"],
+          forbiddenFields: ["tools[].function.strict"],
+        },
+        body: {
+          model: "relay-model",
+          tools: [{ function: { name: "probe_echo", strict: false } }],
+        },
+        field: "tools[].function.strict",
+        rule: "forbidden",
+      },
+    ];
+
+    for (const entry of cases) {
+      const relay = createStrictRelay("openai-completions", entry.profile);
+      try {
+        const response = await fetch(relay.endpointUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(entry.body),
+        });
+        const body = (await response.json()) as {
+          error: { field: string; rule: string };
+        };
+
+        expect(response.status).toBe(400);
+        expect(body.error).toMatchObject({
+          field: entry.field,
+          rule: entry.rule,
+        });
+      } finally {
+        relay.close();
+      }
+    }
+  });
+});
+
+describe("Probe Contract request characterization", () => {
+  for (const protocol of PROTOCOLS) {
+    test(`${protocol} captures an exact official-capable wire body`, async () => {
+      const relay = createStrictRelay(protocol, OFFICIAL_PROFILES[protocol]);
+      const request = makeRequest(modelFor(protocol, relay.baseUrl));
+      const contextBefore = structuredClone(request.context);
+      const probeTransport = transport();
+
+      try {
+        const first = await probeTransport(request);
+        const second = await probeTransport(request);
+
+        expect(first.message).toMatchObject({
+          stopReason: "stop",
+          content: [{ type: "text", text: "probe_ok" }],
+        });
+        expect(second.message).toMatchObject({
+          stopReason: "stop",
+          content: [{ type: "text", text: "probe_ok" }],
+        });
+        expect(request.context).toEqual(contextBefore);
+        expect(relay.rejections).toEqual([]);
+        expect(relay.requests).toHaveLength(2);
+        expect(relay.requests.map((capture) => capture.pathname)).toEqual([
+          EXPECTED_PATHS[protocol],
+          EXPECTED_PATHS[protocol],
+        ]);
+        expect(relay.requests.map((capture) => capture.body)).toEqual([
+          EXPECTED_BODIES[protocol],
+          EXPECTED_BODIES[protocol],
+        ]);
+      } finally {
+        relay.close();
+      }
+    });
+
+    test(`${protocol} subset profile exposes its field-level 400 without retry`, async () => {
+      const forbiddenField = FORBIDDEN_FIELDS[protocol];
+      const relay = createStrictRelay(protocol, {
+        ...OFFICIAL_PROFILES[protocol],
+        name: `${protocol}-subset`,
+        forbiddenFields: [forbiddenField],
+      });
+      const request = makeRequest(modelFor(protocol, relay.baseUrl));
+      const contextBefore = structuredClone(request.context);
+
+      try {
+        const result = await transport()(request);
+
+        expect(result.message.stopReason).toBe("error");
+        expect(result.message.errorMessage).toContain(forbiddenField);
+        expect(request.context).toEqual(contextBefore);
+        expect(relay.requests).toHaveLength(1);
+        expect(relay.requests[0]?.body).toEqual(EXPECTED_BODIES[protocol]);
+        expect(relay.rejections).toEqual([
+          { status: 400, field: forbiddenField, rule: "forbidden" },
+        ]);
+      } finally {
+        relay.close();
+      }
+    });
+  }
+
+  test("Gemini compat remains target-scoped and leaves the official Google target unchanged", async () => {
+    const relay = createStrictRelay(
+      "google-generative-ai",
+      OFFICIAL_PROFILES["google-generative-ai"],
+    );
+    const model = modelFor("google-generative-ai", relay.baseUrl);
+    const probeTransport = transport("AUTO");
+
+    try {
+      const official = await probeTransport(makeRequest(model));
+      const proxy = await probeTransport(
+        makeRequest(model, {
+          provider: "ps-gemini-proxy",
+          modelId: model.id,
+          reasoning: true,
+          geminiToolCompat: true,
+        }),
+      );
+
+      expect(official.message.stopReason).toBe("stop");
+      expect(proxy.message.stopReason).toBe("stop");
+      expect(relay.rejections).toEqual([]);
+      expect(relay.requests[0]?.body).toEqual(
+        EXPECTED_BODIES["google-generative-ai"],
+      );
+      expect(relay.requests[1]?.body).toEqual({
+        ...EXPECTED_BODIES["google-generative-ai"],
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "probe_echo",
+                description: "Echo probe",
+                parameters: {
+                  type: "OBJECT",
+                  properties: { msg: { type: "STRING" } },
+                  required: ["msg"],
+                },
+              },
+            ],
+          },
+        ],
+        toolConfig: {
+          functionCallingConfig: { mode: "AUTO" },
+        },
+      });
+    } finally {
+      relay.close();
+    }
+  });
+});
