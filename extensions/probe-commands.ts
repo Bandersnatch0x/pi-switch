@@ -711,13 +711,6 @@ export async function runProbeCommand(
   const precheck = deps.buildPrecheck
     ? await deps.buildPrecheck(rt, providers, error, target)
     : await buildPrecheck(rt, providers, error, target);
-  if (precheck && precheck.status === "fail") {
-    ctx.ui.notify(
-      `ps-probe stopped: ${precheck.summary}`,
-      "error",
-    );
-    return;
-  }
 
   const observations: RawProbeObservation[] = [];
   const transport = deps.transport ?? buildTransport(rt, ctx, observations);
@@ -777,10 +770,6 @@ export async function runRepairCommand(
   const precheck = deps.buildPrecheck
     ? await deps.buildPrecheck(rt, providers, error, target)
     : await buildPrecheck(rt, providers, error, target);
-  if (precheck && precheck.status === "fail") {
-    ctx.ui.notify(`ps-repair stopped: ${precheck.summary}`, "error");
-    return;
-  }
 
   const observations: RawProbeObservation[] = [];
   const transport = deps.transport ?? buildTransport(rt, ctx, observations);
@@ -792,6 +781,12 @@ export async function runRepairCommand(
     transport,
     precheck,
   });
+  if (probeResult.stoppedReason === "precheck") {
+    reportPrecheckStop(ctx, "ps-repair", probeResult);
+    recordProbeCase(pi, probeResult, observations);
+    return;
+  }
+
   reportProbeResult(ctx, probeResult);
 
   const evidence = normalizeProbeRun({
@@ -951,8 +946,24 @@ function buildTransport(
 }
 
 function reportProbeResult(ctx: PiSwitchCtx, result: ProbeRunResult): void {
+  if (result.stoppedReason === "precheck") {
+    reportPrecheckStop(ctx, "ps-probe", result);
+    return;
+  }
+
   const summary = formatProbeResultSummary(result);
   ctx.ui.notify(summary, result.ok ? "info" : "warning");
+}
+
+function reportPrecheckStop(
+  ctx: PiSwitchCtx,
+  command: "ps-probe" | "ps-repair",
+  result: ProbeRunResult,
+): void {
+  if (!result.precheck) {
+    throw new Error(`${command} precheck stop is missing its precheck snapshot`);
+  }
+  ctx.ui.notify(`${command} stopped: ${result.precheck.summary}`, "error");
 }
 
 function formatRepairPreview(
