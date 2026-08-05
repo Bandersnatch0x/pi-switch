@@ -22,12 +22,28 @@ export type ModelRegistryLike = {
   find?: (provider: string, modelId: string) => unknown;
 };
 
+/** Minimal session branch surface for recovering the last model on resume. */
+export type SessionBranchLike = {
+  getBranch?: () => Array<{
+    type?: string;
+    provider?: string;
+    modelId?: string;
+    message?: {
+      role?: string;
+      provider?: string;
+      model?: string;
+    };
+  }>;
+};
+
 /** Context with optional modelRegistry/model (commands + session handlers). */
 export type PiSwitchCtx = {
   ui: ExtensionUIContext;
   mode?: ExtensionContext["mode"];
   modelRegistry?: ModelRegistryLike;
   model?: ActiveModelLike | null | undefined;
+  /** Present on session_start; used to prefer session model over selection. */
+  sessionManager?: SessionBranchLike;
 };
 
 /** @deprecated Prefer PiSwitchCtx; kept for call-site clarity. */
