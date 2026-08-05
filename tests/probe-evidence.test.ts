@@ -323,6 +323,79 @@ describe("normalizeProbeRun / normalizeStageEvidence (ticket 2)", () => {
     expect(stage.category).toBe("unknown");
   });
 
+  test("explicit streaming frame evidence normalizes as unrepairable without persisting raw data", () => {
+    const stage = normalizeStageEvidence({
+      stage: {
+        contract: "basic",
+        status: "fail",
+        category: "unknown",
+        summary:
+          "provider request failed: malformed SSE stream frame at https://relay.example/v1?api_key=sk-live-STREAM",
+        requestCount: 1,
+      },
+      observation: {
+        contract: "basic",
+        response: {
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "failed to parse server-sent event stream frame",
+          },
+          rawBody: "data: sk-live-STREAM secret-api-key",
+        },
+      },
+    });
+
+    expect(stage.category).toBe("streaming");
+    expect(stage.signatureId).toBe("streaming_failure");
+    expect(stage.unrepairable).toBe(true);
+    assertNoSensitivePayload(JSON.stringify(stage));
+  });
+
+  test("adjacent non-stream protocol evidence remains protocol", () => {
+    const stage = normalizeStageEvidence({
+      stage: {
+        contract: "basic",
+        status: "fail",
+        category: "protocol",
+        summary: "basic contract: no text content in assistant response",
+        requestCount: 1,
+      },
+      observation: {
+        contract: "basic",
+        response: {
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+          },
+          rawBody: "invalid JSON response payload",
+        },
+      },
+    });
+
+    expect(stage.category).toBe("protocol");
+    expect(stage.signatureId).toBe("contract_basic_no_text");
+    expect(stage.unrepairable).toBeUndefined();
+  });
+
+  test("ambiguous connection failure remains unknown", () => {
+    const stage = normalizeStageEvidence({
+      stage: {
+        contract: "basic",
+        status: "fail",
+        category: "unknown",
+        summary: "provider request failed: connection closed unexpectedly",
+        requestCount: 1,
+      },
+    });
+
+    expect(stage.category).toBe("unknown");
+    expect(stage.signatureId).toBe("unknown");
+    expect(stage.unrepairable).toBeUndefined();
+  });
+
   test("known HTTP statuses map to stable signature ids without leaking bodies", () => {
     const s401 = normalizeStageEvidence({
       stage: {

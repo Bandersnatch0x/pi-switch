@@ -298,6 +298,46 @@ describe("runProbe (ticket 1)", () => {
     expect(basic.category).toBe("protocol");
   });
 
+  test("explicit SSE frame failure is streaming and unrepairable", async () => {
+    const { transport, calls } = recordingTransport(() => ({
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "SSE stream frame parse failed: malformed data event",
+      },
+    }));
+
+    const result = await runProbe({
+      target: { ...targetBase, reasoning: true },
+      model: {},
+      transport,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result.stoppedReason).toBe("unrepairable");
+    const basic = result.stages.find((s) => s.contract === "basic")!;
+    expect(basic.category).toBe("streaming");
+    expect(basic.unrepairable).toBe(true);
+  });
+
+  test("auth status retains priority over stream-like error text", async () => {
+    const { transport } = recordingTransport(() =>
+      httpError(401, "SSE stream frame failed after authentication rejection"),
+    );
+
+    const result = await runProbe({
+      target: { ...targetBase, reasoning: true },
+      model: {},
+      transport,
+    });
+
+    expect(result.stoppedReason).toBe("unrepairable");
+    const basic = result.stages.find((s) => s.contract === "basic")!;
+    expect(basic.category).toBe("auth");
+    expect(basic.httpStatus).toBe(401);
+  });
+
   test("non-fatal stage failure stops subsequent stages (no skip of earlier)", async () => {
     const { transport, calls } = recordingTransport((req) => {
       if (req.contract === "basic") {
