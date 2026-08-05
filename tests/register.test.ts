@@ -381,7 +381,7 @@ describe("buildProviderConfig", () => {
         baseUrl: "https://relay.example/v1",
       }),
       ["relay-model"],
-      { rules: [] },
+      { rules: [], modelMeta: TRUSTED_MAX },
     );
 
     expect(cfg?.models[0]?.compat).toMatchObject({ supportsStore: false });
@@ -402,6 +402,7 @@ describe("buildProviderConfig", () => {
       });
       const cfg = buildProviderConfig(relay, ["model-a", "model-b"], {
         rules: [],
+        modelMeta: TRUSTED_MAX,
         providerWireCompat,
       });
 
@@ -421,7 +422,7 @@ describe("buildProviderConfig", () => {
         baseUrl: "https://api.openai.com/v1",
       }),
       ["gpt-5"],
-      { rules: [] },
+      { rules: [], modelMeta: TRUSTED_MAX },
     );
     const anthropic = buildProviderConfig(
       mk({
@@ -431,9 +432,11 @@ describe("buildProviderConfig", () => {
         baseUrl: "https://relay.example",
       }),
       ["claude-model"],
-      { rules: [] },
+      { rules: [], modelMeta: TRUSTED_MAX },
     );
 
+    expect(official?.models[0]).toBeDefined();
+    expect(anthropic?.models[0]).toBeDefined();
     expect(official?.models[0]?.compat?.supportsStore).toBeUndefined();
     expect(anthropic?.models[0]?.compat?.supportsStore).toBeUndefined();
   });
@@ -449,6 +452,7 @@ describe("buildProviderConfig", () => {
     // Footgun lock: bare opts never consult providerOverrides — only defaults.
     const defaultsOnly = buildProviderConfig(relay, ["relay-model"], {
       rules: [],
+      modelMeta: TRUSTED_MAX,
     });
     expect(defaultsOnly?.models[0]?.compat).toMatchObject({
       supportsStore: false,
@@ -456,6 +460,7 @@ describe("buildProviderConfig", () => {
 
     const withOverride = buildProviderConfig(relay, ["relay-model"], {
       rules: [],
+      modelMeta: TRUSTED_MAX,
       providerWireOverride: {
         api: "openai-completions",
         supportsStore: true,

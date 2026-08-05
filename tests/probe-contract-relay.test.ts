@@ -334,6 +334,8 @@ function registeredChatModel(
         : undefined;
   const config = buildProviderConfig(provider, ["relay-model"], {
     rules: [],
+    // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+    modelMeta: { maxTokens: 64_000 },
     providerWireCompat,
   });
   const model = config?.models[0];
