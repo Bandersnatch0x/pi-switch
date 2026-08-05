@@ -222,8 +222,10 @@ export function classifyStageFailure(
   httpStatus?: number,
   errorText?: string,
 ): ClassifiedFailure {
-  const gateText = errorText?.trim() || evalResult.summary;
-  const gate = detectUniqueClientGate(gateText);
+  const evidenceText = [evalResult.summary, errorText]
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join("\n");
+  const gate = detectUniqueClientGate(evidenceText);
   if (gate) {
     return {
       category: "client-gate",
@@ -233,16 +235,49 @@ export function classifyStageFailure(
     };
   }
 
-  if (httpStatus !== undefined) {
-    const fromHttp = classifyHttpStatus(httpStatus);
-    if (fromHttp) return fromHttp;
+  const fromHttp =
+    httpStatus !== undefined ? classifyHttpStatus(httpStatus) : undefined;
+  if (
+    fromHttp &&
+    (fromHttp.category === "auth" || fromHttp.category === "model")
+  ) {
+    return fromHttp;
   }
+
+  if (detectExplicitStreamingFailure(evidenceText)) {
+    return {
+      category: "streaming",
+      unrepairable: true,
+      hardStop: true,
+      summary: "streaming response or frame failure",
+    };
+  }
+
+  if (fromHttp) return fromHttp;
   return {
     category: evalResult.category,
     unrepairable: false,
     hardStop: false,
     summary: evalResult.summary,
   };
+}
+
+/**
+ * Require both explicit stream context and a concrete failure marker.
+ * Generic connection, JSON, or protocol errors remain unknown/protocol.
+ */
+function detectExplicitStreamingFailure(text: string | undefined): boolean {
+  if (!text?.trim()) return false;
+  const normalized = text.toLowerCase();
+  const hasStreamContext =
+    /\b(?:sse|server[- ]sent events?|event[- ]stream|stream(?:ing)?(?: response| frame)?)\b/.test(
+      normalized,
+    );
+  const hasFailureMarker =
+    /\b(?:fail(?:ed|ure)?|error|malformed|invalid|corrupt(?:ed)?|truncat(?:ed|ion)|incomplete|unexpected(?:ly)?|premature|pars(?:e|ed|er|ing)|decod(?:e|ed|ing)|clos(?:ed|ure)|end(?:ed)?|terminat(?:ed|ion)|reset|eof|unsupported)\b/.test(
+      normalized,
+    ) || /\bnot supported\b/.test(normalized);
+  return hasStreamContext && hasFailureMarker;
 }
 
 // ── Ticket 5: unique client fingerprint gate detection ──────────────────────
@@ -334,6 +369,7 @@ export type ProbeEvidenceSignatureId =
   | "client_gate_claude_code"
   | "client_gate_codex"
   | "client_gate_gemini"
+  | "streaming_failure"
   | "unknown";
 
 /**
@@ -511,6 +547,7 @@ export function resolveSignatureId(input: {
   if (status === 403) return "http_auth_403";
   if (status === 429) return "http_rate_limit_429";
   if (status === 404) return "http_model_404";
+  if (detectExplicitStreamingFailure(combined)) return "streaming_failure";
   if (status !== undefined && status >= 500 && status <= 599) {
     return "http_server_5xx";
   }
@@ -577,6 +614,7 @@ function categoryForStage(
   ) {
     return "client-gate";
   }
+  if (signatureId === "streaming_failure") return "streaming";
   if (stage.category) return stage.category;
   if (stage.status === "skip" || stage.status === "stopped") return "unknown";
   return "unknown";
@@ -611,8 +649,9 @@ export function normalizeStageEvidence(input: {
   else if (observation?.response?.httpStatus !== undefined) {
     out.httpStatus = observation.response.httpStatus;
   }
-  // Unique client-gate is repairable even when HTTP layer marked 403 unrepairable.
-  if (
+  if (out.category === "streaming") {
+    out.unrepairable = true;
+  } else if (
     stage.unrepairable &&
     signatureId !== "client_gate_claude_code" &&
     signatureId !== "client_gate_codex" &&

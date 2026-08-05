@@ -159,6 +159,26 @@ function unknownFailureEvidence(): NormalizedProbeRunEvidence {
   };
 }
 
+function streamingFailureEvidence(): NormalizedProbeRunEvidence {
+  return {
+    ...unknownFailureEvidence(),
+    stages: [
+      {
+        contract: "basic",
+        status: "fail",
+        category: "streaming",
+        signatureId: "streaming_failure",
+        allowedHeaderNames: ["content-type"],
+        summary: "streaming response or frame failure",
+        unrepairable: true,
+        requestCount: 1,
+      },
+      ...unknownFailureEvidence().stages.slice(1),
+    ],
+    stoppedReason: "unrepairable",
+  };
+}
+
 function memoryConfigStore(options?: {
   initialVersion?: string;
   onCommit?: (input: {
@@ -245,6 +265,14 @@ describe("matchRepairRecipes / buildRepairPlan (ticket 4)", () => {
 
   test("unknown evidence yields no recipe (no guessing)", () => {
     const plan = buildRepairPlan(unknownFailureEvidence());
+    expect(plan.recipes).toHaveLength(0);
+    expect(plan.preview.recipeOrder).toEqual([]);
+  });
+
+  test("streaming evidence is unrepairable and yields no recipe", () => {
+    const plan = buildRepairPlan(streamingFailureEvidence());
+    expect(plan.evidence.stages[0]!.category).toBe("streaming");
+    expect(plan.evidence.stages[0]!.unrepairable).toBe(true);
     expect(plan.recipes).toHaveLength(0);
     expect(plan.preview.recipeOrder).toEqual([]);
   });
