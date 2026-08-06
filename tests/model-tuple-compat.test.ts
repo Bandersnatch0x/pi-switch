@@ -437,11 +437,20 @@ describe("Anthropic exact-model tuple compat (#67)", () => {
           : undefined,
     });
     const models = cfg?.models as Array<{ id: string; compat?: Record<string, unknown> }>;
+    // Provider wire (#65) adds conservative Anthropic wire defaults for unknown relays;
+    // exact-model tuple (#67) fields still apply only to the targeted model.
+    const anthropicWireDefaults = {
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+    };
     expect(models[0]?.compat).toEqual({
       forceAdaptiveThinking: true,
       supportsTemperature: false,
+      ...anthropicWireDefaults,
     });
-    expect(models[1]?.compat).toBeUndefined();
+    expect(models[1]?.compat).toEqual(anthropicWireDefaults);
+    expect(models[1]?.compat).not.toHaveProperty("forceAdaptiveThinking");
   });
 
   test("writeModelTupleCompat persists Anthropic exact-model fields", () => {
