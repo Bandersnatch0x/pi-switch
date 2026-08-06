@@ -242,8 +242,7 @@ describe("settings + registration for Chat tuple compat", () => {
     const p = provider({ id: "p1", appType: "codex" });
     expect(
       writeChatTupleCompat(
-        fs,
-        "/c.json",
+        { fs, configPath: "/c.json", pid: 1 },
         p,
         "relay-model",
         {
@@ -251,7 +250,6 @@ describe("settings + registration for Chat tuple compat", () => {
           supportsDeveloperRole: false,
           maxTokensField: "max_completion_tokens",
         },
-        1,
       ),
     ).toEqual({ ok: true });
 
@@ -267,7 +265,7 @@ describe("settings + registration for Chat tuple compat", () => {
     ).toBe(false);
     expect(loaded?.modelOverrides?.["relay-model"]?.reasoning).toBe(false);
 
-    expect(writeChatTupleCompat(fs, "/c.json", p, "relay-model", null, 1)).toEqual({
+    expect(writeChatTupleCompat({ fs, configPath: "/c.json", pid: 1 }, p, "relay-model", null)).toEqual({
       ok: true,
     });
     const cleared = resolveProviderOverride(
@@ -463,8 +461,7 @@ describe("Anthropic exact-model tuple compat (#67)", () => {
     });
     expect(
       writeModelTupleCompat(
-        fs,
-        "/c.json",
+        { fs, configPath: "/c.json", pid: 1 },
         p,
         "claude-opus",
         {
@@ -472,7 +469,6 @@ describe("Anthropic exact-model tuple compat (#67)", () => {
           forceAdaptiveThinking: true,
           supportsTemperature: false,
         },
-        1,
       ),
     ).toEqual({ ok: true });
 
@@ -489,12 +485,10 @@ describe("Anthropic exact-model tuple compat (#67)", () => {
     // Reject writing Anthropic tuple onto a Chat provider.
     expect(
       writeModelTupleCompat(
-        fs,
-        "/c.json",
+        { fs, configPath: "/c.json", pid: 1 },
         provider({ id: "chat", api: "openai-completions" }),
         "m",
         { api: "anthropic-messages", forceAdaptiveThinking: true },
-        1,
       ).ok,
     ).toBe(false);
   });

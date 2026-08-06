@@ -397,6 +397,17 @@ export type ModelMetaScope =
   | { kind: "provider" }
   | { kind: "model"; modelId: string };
 
+/**
+ * The atomic-write target for config edits: filesystem, config path, and the
+ * pid used for temp-file naming. Bundled because every override write passes
+ * these three unchanged to updateJsonObjectAtomic.
+ */
+export interface ConfigWriteTarget {
+  fs: FsLike;
+  configPath: string;
+  pid: number;
+}
+
 export type MutableOverrideEntry = {
   label?: string;
   fingerprint?: FingerprintPreset;
@@ -563,13 +574,12 @@ export function updateOverrideEntry(
  * per-model overrides; use clearAllModelMetaOverrides to wipe both.
  */
 export function writeModelMetaOverride(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
-  pid: number,
 ): { ok: boolean; error?: string } {
+  const { fs, configPath, pid } = target;
   try {
     if (modelMeta) {
       const valid = validateModelMetaWrite(modelMeta);
@@ -609,14 +619,13 @@ export function writeModelMetaOverride(
 
 /** Persist or clear Provider-scoped request-wire compatibility. */
 export function writeProviderWireCompat(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName" | "api"> & {
     appType?: string;
   },
   compat: ProviderWireCompat | null,
-  pid: number,
 ): { ok: boolean; error?: string } {
+  const { fs, configPath, pid } = target;
   try {
     const parsed = compat
       ? parseProviderWireCompat(compat, "provider compat")
@@ -652,11 +661,10 @@ export function writeProviderWireCompat(
 
 /** Drop provider-scope modelMeta and every per-model override for a provider. */
 export function clearAllModelMetaOverrides(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
-  pid: number,
 ): { ok: boolean; error?: string } {
+  const { fs, configPath, pid } = target;
   try {
     updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
       const document = updateOverrideEntry(raw, provider, (entry) => {
@@ -675,23 +683,20 @@ export function clearAllModelMetaOverrides(
 
 /** Back-compat wrapper: provider-scope write. */
 export function writeProviderModelMeta(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName">,
   modelMeta: ModelMetaOverride | null,
-  pid: number,
 ): { ok: boolean; error?: string } {
-  return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
+  return writeModelMetaOverride(target, provider, { kind: "provider" }, modelMeta);
 }
 
 export function writeModelTupleCompat(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName" | "api"> & { appType?: string },
   modelId: string,
   compat: ModelTupleCompat | null,
-  pid: number,
 ): { ok: boolean; error?: string } {
+  const { fs, configPath, pid } = target;
   try {
     const id = modelId.trim();
     if (!id) return { ok: false, error: "empty model id" };

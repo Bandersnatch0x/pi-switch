@@ -110,11 +110,9 @@ describe("provider modelMeta overrides", () => {
       }),
     });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "elysiver-claude" },
       { reasoning: false, maxTokens: 8192 },
-      7,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -139,11 +137,9 @@ describe("provider modelMeta overrides", () => {
       }),
     });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "elysiver-claude" },
       null,
-      7,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -176,11 +172,9 @@ describe("provider modelMeta overrides", () => {
   test("writeProviderModelMeta rejects invalid thinkingFormat", () => {
     const fs = memFs({ "/c.json": "{}" });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "abc", displayName: "x" },
       { thinkingFormat: "not-a-real-format" },
-      1,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toContain("invalid thinkingFormat");
@@ -189,11 +183,9 @@ describe("provider modelMeta overrides", () => {
   test("writeProviderModelMeta accepts valid thinkingFormat", () => {
     const fs = memFs({ "/c.json": "{}" });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "abc", displayName: "x" },
       { thinkingFormat: "deepseek", reasoning: true },
-      1,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -217,11 +209,9 @@ describe("provider modelMeta overrides", () => {
       },
     };
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "ds", displayName: "deepseek" },
       meta,
-      1,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -231,11 +221,9 @@ describe("provider modelMeta overrides", () => {
   test("writeProviderModelMeta rejects invalid thinkingLevelMap key", () => {
     const fs = memFs({ "/c.json": "{}" });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "abc", displayName: "x" },
       { thinkingLevelMap: { nope: "high" } as any },
-      1,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toContain("invalid thinkingLevelMap key");
@@ -244,11 +232,9 @@ describe("provider modelMeta overrides", () => {
   test("writeProviderModelMeta rejects invalid thinkingLevelMap value", () => {
     const fs = memFs({ "/c.json": "{}" });
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "abc", displayName: "x" },
       { thinkingLevelMap: { minimal: "  " } },
-      1,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toContain("invalid thinkingLevelMap value");
@@ -264,11 +250,9 @@ describe("provider modelMeta overrides", () => {
     });
     // clear modelMeta and no headers → entry removed
     const r = writeProviderModelMeta(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       { id: "abc", displayName: "x" },
       null,
-      1,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -434,11 +418,9 @@ describe("provider wire compat persistence", () => {
 
     expect(
       writeProviderWireCompat(
-        fs,
-        "/c.json",
+        { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
         { api: "openai-completions", supportsStore: false },
-        1,
       ),
     ).toEqual({ ok: true });
     const loadedFalse = resolveProviderOverride(
@@ -451,11 +433,9 @@ describe("provider wire compat persistence", () => {
 
     expect(
       writeProviderWireCompat(
-        fs,
-        "/c.json",
+        { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
         { api: "openai-completions", supportsStore: true },
-        1,
       ),
     ).toEqual({ ok: true });
     const loadedTrue = resolveProviderOverride(
@@ -466,7 +446,7 @@ describe("provider wire compat persistence", () => {
       loadedTrue && "supportsStore" in loadedTrue ? loadedTrue.supportsStore : undefined,
     ).toBe(true);
 
-    expect(writeProviderWireCompat(fs, "/c.json", chatProvider, null, 1)).toEqual({
+    expect(writeProviderWireCompat({ fs, configPath: "/c.json", pid: 1 }, chatProvider, null)).toEqual({
       ok: true,
     });
     const entry = resolveProviderOverride(
@@ -480,11 +460,9 @@ describe("provider wire compat persistence", () => {
   test("rejects writing Chat compat for a non-Chat Provider", () => {
     const fs = memFs({ "/c.json": "{}" });
     const result = writeProviderWireCompat(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 1 },
       provider("provider-1", "relay"),
       { api: "openai-completions", supportsStore: true },
-      1,
     );
 
     expect(result.ok).toBe(false);
@@ -614,7 +592,7 @@ describe("override write targets nested [appType][id] (shadowed override bug)", 
     });
     const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
     const r = writeModelMetaOverride(
-      fs, "/c.json", p, { kind: "model", modelId: "m" }, { maxTokens: 111 }, 1,
+      { fs, configPath: "/c.json", pid: 1 }, p, { kind: "model", modelId: "m" }, { maxTokens: 111 },
     );
     expect(r.ok).toBe(true);
     const cfg = readPiSwitchConfig(fs, "/c.json");
@@ -633,7 +611,7 @@ describe("override write targets nested [appType][id] (shadowed override bug)", 
       }),
     });
     const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
-    writeModelMetaOverride(fs, "/c.json", p, { kind: "model", modelId: "m" }, { maxTokens: 111 }, 1);
+    writeModelMetaOverride({ fs, configPath: "/c.json", pid: 1 }, p, { kind: "model", modelId: "m" }, { maxTokens: 111 });
     const cfg = readPiSwitchConfig(fs, "/c.json");
     const entry = resolveProviderOverride(cfg.providerOverrides, p);
     expect(entry?.modelOverrides?.m?.maxTokens).toBe(111);
@@ -657,7 +635,7 @@ describe("override write targets nested [appType][id] (shadowed override bug)", 
       }),
     });
     const p = { id: "1", piName: "ps-claude-1", displayName: "x", appType: "claude" };
-    const r = clearAllModelMetaOverrides(fs, "/c.json", p, 1);
+    const r = clearAllModelMetaOverrides({ fs, configPath: "/c.json", pid: 1 }, p);
     expect(r.ok).toBe(true);
     const cfg = readPiSwitchConfig(fs, "/c.json");
     const entry = resolveProviderOverride(cfg.providerOverrides, p);
@@ -675,12 +653,10 @@ describe("per-model modelMeta overrides", () => {
       }),
     });
     const r = writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "glm-4.6" },
       { maxTokens: 8192 },
-      7,
     );
     expect(r.ok).toBe(true);
     const raw = JSON.parse(fs.store["/c.json"]);
@@ -698,12 +674,10 @@ describe("per-model modelMeta overrides", () => {
       }),
     });
     writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "gpt-5-pro" },
       { reasoning: false },
-      7,
     );
     const raw = JSON.parse(fs.store["/c.json"]);
     expect(Object.keys(raw.providerOverrides.abc.modelOverrides).sort()).toEqual([
@@ -727,12 +701,10 @@ describe("per-model modelMeta overrides", () => {
       }),
     });
     writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "glm-4.6" },
       null,
-      7,
     );
     const raw = JSON.parse(fs.store["/c.json"]);
     expect(Object.keys(raw.providerOverrides.abc.modelOverrides)).toEqual(["gpt-5"]);
@@ -749,7 +721,7 @@ describe("per-model modelMeta overrides", () => {
         },
       }),
     });
-    writeProviderModelMeta(fs, "/c.json", { id: "abc", displayName: "relay" }, null, 7);
+    writeProviderModelMeta({ fs, configPath: "/c.json", pid: 7 }, { id: "abc", displayName: "relay" }, null);
     const raw = JSON.parse(fs.store["/c.json"]);
     expect(raw.providerOverrides.abc.modelMeta).toBeUndefined();
     expect(raw.providerOverrides.abc.modelOverrides["glm-4.6"]).toEqual({ maxTokens: 1 });
@@ -767,7 +739,7 @@ describe("per-model modelMeta overrides", () => {
         },
       }),
     });
-    clearAllModelMetaOverrides(fs, "/c.json", { id: "abc", displayName: "relay" }, 7);
+    clearAllModelMetaOverrides({ fs, configPath: "/c.json", pid: 7 }, { id: "abc", displayName: "relay" });
     const raw = JSON.parse(fs.store["/c.json"]);
     expect(raw.providerOverrides.abc).toBeUndefined();
   });
@@ -784,7 +756,7 @@ describe("per-model modelMeta overrides", () => {
         },
       }),
     });
-    clearAllModelMetaOverrides(fs, "/c.json", { id: "abc", displayName: "relay" }, 7);
+    clearAllModelMetaOverrides({ fs, configPath: "/c.json", pid: 7 }, { id: "abc", displayName: "relay" });
     const raw = JSON.parse(fs.store["/c.json"]);
     expect(raw.providerOverrides.abc.fingerprint).toBe("codex");
     expect(raw.providerOverrides.abc.modelOverrides).toBeUndefined();
@@ -793,12 +765,10 @@ describe("per-model modelMeta overrides", () => {
   test("model scope rejects invalid thinkingFormat", () => {
     const fs = memFs();
     const r = writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "glm-4.6" },
       { thinkingFormat: "nope" },
-      7,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toContain("invalid thinkingFormat");
@@ -807,12 +777,10 @@ describe("per-model modelMeta overrides", () => {
   test("model scope rejects non-boolean supportsDeveloperRole", () => {
     const fs = memFs();
     const r = writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "gpt-5" },
       { supportsDeveloperRole: "yes" as any },
-      7,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toContain("invalid supportsDeveloperRole");
@@ -822,12 +790,10 @@ describe("per-model modelMeta overrides", () => {
   test("model scope rejects empty model id", () => {
     const fs = memFs();
     const r = writeModelMetaOverride(
-      fs,
-      "/c.json",
+      { fs, configPath: "/c.json", pid: 7 },
       { id: "abc", displayName: "relay" },
       { kind: "model", modelId: "   " },
       { reasoning: false },
-      7,
     );
     expect(r.ok).toBe(false);
     expect(r.error).toBe("empty model id");
