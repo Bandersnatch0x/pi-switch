@@ -123,13 +123,13 @@ export interface ModelMetaOverride {
   maxTokens?: number;
   /** Maps pi thinking levels → provider effort strings (`null` = unsupported). */
   thinkingLevelMap?: ThinkingLevelMap;
-  /** OpenAI-compat: replay empty reasoning_content on assistant turns. */
-  requiresReasoningContentOnAssistantMessages?: boolean;
   /**
-   * Legacy flat Chat developer-role dialect (issue #64).
-   * Prefer exact-model `compat.supportsDeveloperRole`; kept for deprecation path.
+   * OpenAI-compat / exact-model tuple: whether upstream accepts `developer` role.
+   * Prefer modelOverrides.<id>.compat.supportsDeveloperRole; flat form kept for deprecation.
    */
   supportsDeveloperRole?: boolean;
+  /** OpenAI-compat: replay empty reasoning_content on assistant turns. */
+  requiresReasoningContentOnAssistantMessages?: boolean;
   /**
    * pi-switch only (not sent to Pi): whether to apply built-in compat profiles
    * (`deepseek*` / `qwen*`, …). `false` disables the whole profile for this

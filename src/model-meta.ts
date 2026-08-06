@@ -127,14 +127,14 @@ export function cleanModelMeta(meta: ModelMetaOverride | null | undefined): Mode
   if (typeof meta.maxTokens === "number" && Number.isFinite(meta.maxTokens) && meta.maxTokens > 0) {
     cleaned.maxTokens = Math.floor(meta.maxTokens);
   }
-  if (typeof meta.requiresReasoningContentOnAssistantMessages === "boolean") {
-    cleaned.requiresReasoningContentOnAssistantMessages =
-      meta.requiresReasoningContentOnAssistantMessages;
-  }
   // Legacy flat developer-role (issue #64); stripped from capability layers
   // elsewhere — kept here so deprecation resolution can still see it.
   if (typeof meta.supportsDeveloperRole === "boolean") {
     cleaned.supportsDeveloperRole = meta.supportsDeveloperRole;
+  }
+  if (typeof meta.requiresReasoningContentOnAssistantMessages === "boolean") {
+    cleaned.requiresReasoningContentOnAssistantMessages =
+      meta.requiresReasoningContentOnAssistantMessages;
   }
   // pi-switch only: opt out of built-in deepseek*/qwen* compat profiles (#71).
   if (typeof meta.useBuiltInCompat === "boolean") {
@@ -310,6 +310,9 @@ export function summarizeModelMeta(meta: ModelMetaOverride | undefined): string 
   if (typeof meta.maxTokens === "number") parts.push(`maxTokens=${meta.maxTokens}`);
   if (meta.thinkingLevelMap) {
     parts.push(`thinkingLevelMap=${Object.keys(meta.thinkingLevelMap).length}`);
+  }
+  if (typeof meta.supportsDeveloperRole === "boolean") {
+    parts.push(`supportsDeveloperRole=${meta.supportsDeveloperRole}`);
   }
   if (typeof meta.requiresReasoningContentOnAssistantMessages === "boolean") {
     parts.push(

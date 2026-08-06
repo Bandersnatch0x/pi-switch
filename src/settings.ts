@@ -447,6 +447,15 @@ function validateModelMetaWrite(
     }
   }
   if (
+    modelMeta.supportsDeveloperRole !== undefined &&
+    typeof modelMeta.supportsDeveloperRole !== "boolean"
+  ) {
+    return {
+      ok: false,
+      error: "invalid supportsDeveloperRole: expected boolean",
+    };
+  }
+  if (
     modelMeta.requiresReasoningContentOnAssistantMessages !== undefined &&
     typeof modelMeta.requiresReasoningContentOnAssistantMessages !== "boolean"
   ) {

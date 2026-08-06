@@ -804,6 +804,21 @@ describe("per-model modelMeta overrides", () => {
     expect(r.error).toContain("invalid thinkingFormat");
   });
 
+  test("model scope rejects non-boolean supportsDeveloperRole", () => {
+    const fs = memFs();
+    const r = writeModelMetaOverride(
+      fs,
+      "/c.json",
+      { id: "abc", displayName: "relay" },
+      { kind: "model", modelId: "gpt-5" },
+      { supportsDeveloperRole: "yes" as any },
+      7,
+    );
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("invalid supportsDeveloperRole");
+    expect(fs.store["/c.json"]).toBeUndefined();
+  });
+
   test("model scope rejects empty model id", () => {
     const fs = memFs();
     const r = writeModelMetaOverride(

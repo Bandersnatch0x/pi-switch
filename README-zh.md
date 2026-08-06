@@ -352,10 +352,13 @@ defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides
 | `contextWindow` | 上下文窗口（影响 Pi compact 触发：`contextTokens > contextWindow - reserveTokens`） |
 | `maxTokens` | 最大输出 token |
 | `thinkingLevelMap` | 可选：Pi 思考档位（`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`）→ 上游 effort 字符串；`null` 表示不支持 → 注册到模型顶层 |
+| `supportsDeveloperRole` | OpenAI 兼容上游是否接受 `role: "developer"`；设为 `true` 时保留，否则 pi-switch 保守转换为 `system` |
 | `requiresReasoningContentOnAssistantMessages` | OpenAI 兼容：助手消息回传空 `reasoning_content` → 注册到 `compat` |
 | `useBuiltInCompat` | pi-switch 专用（不发给 Pi）：`false` 关闭内置 compat 整表；未设/`true` 保持默认（命中 id 时应用） |
 
 UI 编辑常用字段（`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`）以及 **内置compat** 开关。`thinkingLevelMap` 等对象字段仅能通过配置文件或写入 API 设置。表单行状态为 **覆写 / 继承 / 内置 / 默认**（「内置」= 命中内置 compat profile 且未关闭）。
+
+`supportsDeveloperRole` 等高级字段（exact-model tuple / 扁平 meta）仅能通过配置文件或写入 API 设置。
 
 ### 内置 compat profile
 
@@ -379,7 +382,6 @@ models.dev 只覆盖能力标量（`contextWindow` / `maxTokens` / `reasoning`�
 ```
 
 也可在 provider 级 `modelMeta` 设 `useBuiltInCompat: false` 关掉该 Provider 下全部命中；模型级再设 `true` 可单独打开。`/ps-doctor` 与切换成功通知共用同一套 effective meta；doctor 来源形如 `用户: …；内置: deepseek*`（关闭后不再显示内置）。
-
 ### DeepSeek V4 Flash 示例
 
 compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重新注册目标 Provider/模型，因此同一模型 ID 在不同 Provider 下可使用不同的 `contextWindow` 与 compat。

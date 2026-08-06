@@ -49,6 +49,7 @@ export type EffectiveConfigSummary = {
     maxTokens: number;
     thinkingFormat?: string;
     thinkingLevelMap?: Record<string, string | null>;
+    supportsDeveloperRole?: boolean;
     requiresReasoningContentOnAssistantMessages?: boolean;
     /**
      * When reasoning was unknown and runtime used conservative false (issue #63).
@@ -108,6 +109,7 @@ export function createEffectiveConfigSummary(input: {
     model.compat && typeof model.compat === "object"
       ? (model.compat as {
           thinkingFormat?: string;
+          supportsDeveloperRole?: boolean;
           requiresReasoningContentOnAssistantMessages?: boolean;
         })
       : undefined;
@@ -160,6 +162,9 @@ export function createEffectiveConfigSummary(input: {
       maxTokens: model.maxTokens,
       ...(compat?.thinkingFormat ? { thinkingFormat: compat.thinkingFormat } : {}),
       ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(typeof compat?.supportsDeveloperRole === "boolean"
+        ? { supportsDeveloperRole: compat.supportsDeveloperRole }
+        : {}),
       ...(typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean"
         ? {
             requiresReasoningContentOnAssistantMessages:
@@ -183,6 +188,10 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
   const levelMap = summary.model.thinkingLevelMap
     ? ` thinkingLevelMap=${Object.keys(summary.model.thinkingLevelMap).length}`
     : "";
+  const developerRole =
+    typeof summary.model.supportsDeveloperRole === "boolean"
+      ? ` supportsDeveloperRole=${summary.model.supportsDeveloperRole}`
+      : "";
   const requiresRc =
     typeof summary.model.requiresReasoningContentOnAssistantMessages === "boolean"
       ? ` requiresReasoningContentOnAssistantMessages=${summary.model.requiresReasoningContentOnAssistantMessages}`
@@ -201,7 +210,7 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     `auth: apiKey=${summary.apiKeyMode} authHeader=${summary.authHeader}`,
     `fingerprint: ${summary.fingerprint}`,
     `headers: ${headers}`,
-    `modelMeta: reasoning=${summary.model.reasoning}${reasoningNote} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${requiresRc}`,
+    `modelMeta: reasoning=${summary.model.reasoning}${reasoningNote} input=${summary.model.input.join(",")} contextWindow=${summary.model.contextWindow} maxTokens=${summary.model.maxTokens}${thinking}${levelMap}${developerRole}${requiresRc}`,
   ];
   if (summary.providerWireCompat) {
     const wire = summary.providerWireCompat;

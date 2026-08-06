@@ -36,7 +36,7 @@ export interface PiRegisterApi {
  * Model config with per-api tiered meta (SPEC review #4).
  * Flat pi-switch modelMeta is reshaped to Pi's modern layout:
  *   - top-level thinkingLevelMap
- *   - nested compat.thinkingFormat / compat.requiresReasoningContentOnAssistantMessages
+ *   - nested OpenAI/provider compatibility fields
  * Legacy top-level thinkingFormat is never emitted.
  */
 export function toModelConfig(

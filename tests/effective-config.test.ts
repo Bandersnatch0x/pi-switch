@@ -51,6 +51,7 @@ function builtConfig(): BuiltProviderConfig {
         thinkingLevelMap: { high: "high" },
         compat: {
           thinkingFormat: "openai",
+          supportsDeveloperRole: true,
           requiresReasoningContentOnAssistantMessages: true,
         },
       },
@@ -75,6 +76,7 @@ describe("effective config summary", () => {
     expect(text).toContain("contextWindow=400000");
     expect(text).toContain("thinkingFormat=openai");
     expect(text).toContain("thinkingLevelMap=1");
+    expect(text).toContain("supportsDeveloperRole=true");
     expect(text).toContain("requiresReasoningContentOnAssistantMessages=true");
     expect(text).not.toContain("literal-secret-value");
     expect(text).not.toContain("password");
