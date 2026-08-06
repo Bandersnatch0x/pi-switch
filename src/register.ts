@@ -11,12 +11,12 @@ import {
   resolveRegistrationCapability,
 } from "./capabilities/registration.ts";
 import {
-  isOfficialOpenAiChatEndpoint,
   resolveModelTupleCompat,
   tupleCompatForRegistration,
   type ModelTupleCompat,
   type ResolvedModelTupleCompat,
 } from "./model-tuple-compat.ts";
+import { isOfficialOpenAiChatEndpoint } from "./endpoints.ts";
 import {
   providerWireCompatForRegistration,
   resolveProviderWireCompat,

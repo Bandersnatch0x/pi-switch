@@ -77,8 +77,8 @@ export type RegistrationCapabilityDecision = {
   reasoningConservative: boolean;
 };
 
-/** Human-readable fix for an unresolved maxTokens gate. */
-export function maxTokensUnresolvedFix(modelId: string): string {
+/** Human-readable message explaining how to resolve an unresolved maxTokens gate. */
+export function formatMaxTokensUnresolvedMessage(modelId: string): string {
   return (
     `在 providerOverrides 为 model "${modelId}" 写 exact-model maxTokens ` +
     `(modelOverrides.<id>.maxTokens)，或等待 models.dev / CC Switch meta 提供权威值`
