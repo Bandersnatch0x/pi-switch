@@ -612,7 +612,7 @@ describe("Provider wire compat request characterization", () => {
     const contextBefore = structuredClone(request.context);
 
     try {
-      expect(model.compat?.supportsStore).toBeUndefined();
+      expect((model.compat as { supportsStore?: boolean } | undefined)?.supportsStore).toBeUndefined();
 
       const result = await transport()(request);
 
@@ -625,6 +625,87 @@ describe("Provider wire compat request characterization", () => {
       expect(relay.rejections).toEqual([]);
     } finally {
       relay.close();
+    }
+  });
+});
+
+describe("Chat exact-model tuple compat request characterization (#64)", () => {
+  test("supportsDeveloperRole=false uses system; true keeps developer", async () => {
+    for (const supportsDeveloperRole of [false, true] as const) {
+      const relay = createStrictRelay(
+        "openai-completions",
+        OFFICIAL_PROFILES["openai-completions"],
+      );
+      const model = modelFor("openai-completions", relay.baseUrl);
+      model.compat = {
+        ...(model.compat as object),
+        supportsDeveloperRole,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_completion_tokens",
+      };
+      const request = makeRequest(model);
+      try {
+        const result = await transport()(request);
+        expect(result.message.stopReason).toBe("stop");
+        expect(relay.requests).toHaveLength(1);
+        const body = relay.requests[0]?.body as {
+          messages?: Array<{ role: string }>;
+        };
+        const systemish = body.messages?.filter(
+          (m) => m.role === "system" || m.role === "developer",
+        );
+        if (supportsDeveloperRole) {
+          expect(systemish?.some((m) => m.role === "developer")).toBe(true);
+        } else {
+          expect(systemish?.every((m) => m.role !== "developer")).toBe(true);
+          expect(systemish?.some((m) => m.role === "system")).toBe(true);
+        }
+      } finally {
+        relay.close();
+      }
+    }
+  });
+
+  test("supportsReasoningEffort=false omits reasoning_effort; maxTokensField selects token key", async () => {
+    const cases: Array<{
+      supportsReasoningEffort: boolean;
+      maxTokensField: "max_tokens" | "max_completion_tokens";
+    }> = [
+      { supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+      { supportsReasoningEffort: true, maxTokensField: "max_completion_tokens" },
+    ];
+    for (const { supportsReasoningEffort, maxTokensField } of cases) {
+      const relay = createStrictRelay(
+        "openai-completions",
+        OFFICIAL_PROFILES["openai-completions"],
+      );
+      const model = modelFor("openai-completions", relay.baseUrl);
+      model.compat = {
+        ...(model.compat as object),
+        supportsDeveloperRole: false,
+        supportsReasoningEffort,
+        maxTokensField,
+      };
+      const request = makeRequest(model);
+      try {
+        await transport()(request);
+        expect(relay.requests).toHaveLength(1);
+        const body = relay.requests[0]?.body as Record<string, unknown>;
+        if (supportsReasoningEffort) {
+          expect(body).toHaveProperty("reasoning_effort");
+        } else {
+          expect(body).not.toHaveProperty("reasoning_effort");
+        }
+        if (maxTokensField === "max_tokens") {
+          expect(body).toHaveProperty("max_tokens");
+          expect(body).not.toHaveProperty("max_completion_tokens");
+        } else {
+          expect(body).toHaveProperty("max_completion_tokens");
+          expect(body).not.toHaveProperty("max_tokens");
+        }
+      } finally {
+        relay.close();
+      }
     }
   });
 });

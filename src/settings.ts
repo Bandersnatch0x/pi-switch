@@ -1,6 +1,7 @@
 import type {
   FingerprintPreset,
   ModelMetaOverride,
+  ModelOverrideEntry,
   PinEntry,
   PiSwitchConfig,
   PiSwitchSelection,
@@ -27,6 +28,10 @@ import {
   parseProviderWireCompat,
   type ProviderWireCompat,
 } from "./provider-wire-compat.ts";
+import {
+  parseChatTupleCompat,
+  type ChatTupleCompat,
+} from "./model-tuple-compat.ts";
 import {
   readJsonObjectLenient,
   updateJsonObjectAtomic,
@@ -245,19 +250,50 @@ function rejectNestedWireCompat(value: unknown, path: string): void {
   }
 }
 
+function parseModelOverrideEntry(
+  raw: Record<string, unknown>,
+  path: string,
+): ModelOverrideEntry {
+  const meta = parseModelMeta(raw) ?? {};
+  const entry: ModelOverrideEntry = { ...meta };
+  if (hasOwn(raw, "compat")) {
+    entry.compat = parseChatTupleCompat(raw.compat, `${path}.compat`);
+  }
+  return entry;
+}
+
 function parseProviderOverrideEntry(
   raw: Record<string, unknown>,
   path: string,
 ): Record<string, unknown> {
+  // modelMeta must not host wire/tuple compat.
   rejectNestedWireCompat(raw.modelMeta, `${path}.modelMeta`);
-  if (isPlainObject(raw.modelOverrides)) {
-    for (const [modelId, modelOverride] of Object.entries(raw.modelOverrides)) {
-      rejectNestedWireCompat(modelOverride, `${path}.modelOverrides.${modelId}`);
-    }
-  }
 
   const next = { ...raw };
+  if (isPlainObject(raw.modelOverrides)) {
+    const models: Record<string, ModelOverrideEntry> = {};
+    for (const [modelId, modelRaw] of Object.entries(raw.modelOverrides)) {
+      if (!isPlainObject(modelRaw)) continue;
+      models[modelId] = parseModelOverrideEntry(
+        modelRaw,
+        `${path}.modelOverrides.${modelId}`,
+      );
+    }
+    next.modelOverrides = models;
+  }
+  // Provider-scope compat is Provider wire (#62), never Chat tuple (#64).
   if (hasOwn(raw, "compat")) {
+    const c = raw.compat;
+    if (
+      isPlainObject(c) &&
+      (hasOwn(c, "supportsDeveloperRole") ||
+        hasOwn(c, "supportsReasoningEffort") ||
+        hasOwn(c, "maxTokensField"))
+    ) {
+      throw new Error(
+        `invalid ${path}.compat scope: Chat tuple compat belongs under modelOverrides.<model>.compat`,
+      );
+    }
     next.compat = parseProviderWireCompat(raw.compat, `${path}.compat`);
   }
   return next;
@@ -616,6 +652,66 @@ export function writeProviderModelMeta(
   pid: number,
 ): { ok: boolean; error?: string } {
   return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
+}
+
+export function writeChatTupleCompat(
+  fs: FsLike,
+  configPath: string,
+  provider: Pick<CcProvider, "id" | "displayName" | "api"> & { appType?: string },
+  modelId: string,
+  compat: ChatTupleCompat | null,
+  pid: number,
+): { ok: boolean; error?: string } {
+  try {
+    const id = modelId.trim();
+    if (!id) return { ok: false, error: "empty model id" };
+    const parsed = compat
+      ? parseChatTupleCompat(compat, "model tuple compat")
+      : undefined;
+    if (parsed && provider.api && provider.api !== parsed.api) {
+      return {
+        ok: false,
+        error: `tuple compat api ${parsed.api} does not match provider api ${provider.api}`,
+      };
+    }
+    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
+      const document = updateOverrideEntry(raw, provider, (entry) => {
+        const prev = { ...entry };
+        const map = { ...(prev.modelOverrides ?? {}) };
+        const key = matchExactModelOverride(map, id)?.key ?? id;
+        const existing = { ...(map[key] ?? {}) } as ModelOverrideEntry;
+        if (parsed) {
+          existing.compat = parsed;
+          map[key] = existing;
+          prev.label = prev.label ?? provider.displayName;
+        } else {
+          delete existing.compat;
+          const remaining = cleanModelMeta(existing);
+          if (remaining && Object.keys(remaining).length) {
+            map[key] = { ...remaining } as ModelOverrideEntry;
+          } else if (Object.keys(existing).length === 0 || !cleanModelMeta(existing)) {
+            // Only compat was present — drop the entry entirely when empty.
+            const stripped = { ...existing };
+            delete stripped.compat;
+            if (Object.keys(stripped).length === 0) delete map[key];
+            else map[key] = stripped as ModelOverrideEntry;
+          } else {
+            map[key] = existing;
+          }
+        }
+        if (Object.keys(map).length) prev.modelOverrides = map;
+        else delete prev.modelOverrides;
+        return prev;
+      });
+      return { document, result: undefined };
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /** Legacy pin key (pre-identity-migration); still used for back-compat matching. */

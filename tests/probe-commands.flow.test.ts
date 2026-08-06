@@ -136,6 +136,7 @@ function makeRt(
       opts.reasoning
         ? { reasoning: true, maxTokens: 8_192 }
         : { maxTokens: 8_192 },
+    tupleCompatFor: () => undefined,
     headerRules: [],
     headerOverrideOpts: () => ({}),
     rejectSink: () => undefined,

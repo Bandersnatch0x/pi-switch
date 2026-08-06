@@ -562,6 +562,31 @@ export class Runtime {
     });
   }
 
+
+  /**
+   * Exact-model Chat tuple wire dialect (issue #64).
+   * Returns tuple + legacy flat fields for deprecation path.
+   */
+  tupleCompatFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName" | "api" | "baseUrl"> & {
+      appType?: string;
+    },
+    modelId: string,
+  ) {
+    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
+    const modelOverride = entry?.modelOverrides?.[modelId];
+    if (!modelOverride) return undefined;
+    const tuple = modelOverride.compat;
+    const legacyFlat = {
+      thinkingFormat: modelOverride.thinkingFormat,
+      requiresReasoningContentOnAssistantMessages:
+        modelOverride.requiresReasoningContentOnAssistantMessages,
+      supportsDeveloperRole: modelOverride.supportsDeveloperRole,
+    };
+    return { tuple, legacyFlat };
+  }
+
+
   /** Full layer breakdown (base / provider / model) for dialog + doctor. */
   modelMetaLayers(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,

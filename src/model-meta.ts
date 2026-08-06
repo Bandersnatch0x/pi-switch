@@ -131,6 +131,11 @@ export function cleanModelMeta(meta: ModelMetaOverride | null | undefined): Mode
     cleaned.requiresReasoningContentOnAssistantMessages =
       meta.requiresReasoningContentOnAssistantMessages;
   }
+  // Legacy flat developer-role (issue #64); stripped from capability layers
+  // elsewhere — kept here so deprecation resolution can still see it.
+  if (typeof meta.supportsDeveloperRole === "boolean") {
+    cleaned.supportsDeveloperRole = meta.supportsDeveloperRole;
+  }
   const levelMap = cleanThinkingLevelMap(meta.thinkingLevelMap);
   if (levelMap) cleaned.thinkingLevelMap = levelMap;
   return Object.keys(cleaned).length ? cleaned : undefined;

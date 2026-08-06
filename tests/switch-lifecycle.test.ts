@@ -173,6 +173,7 @@ function setup(options?: {
     modelsDevFor: () => undefined,
     providerWireCompatFor:
       options?.providerWireCompatFor ?? (() => undefined),
+    tupleCompatFor: () => undefined,
     scheduleModelsDevRefresh: (modelId: string) => {
       scheduleCalls.push(modelId);
     },

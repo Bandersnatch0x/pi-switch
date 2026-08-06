@@ -153,6 +153,7 @@ export function createSwitchLifecycle(
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
       modelsDevFor: (id) => rt.modelsDevFor?.(id),
       providerWireCompat: rt.providerWireCompatFor?.(provider),
+      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
     });
     // Fire-and-forget models.dev refresh after successful registration (issue #39).
     if (ok) rt.scheduleModelsDevRefresh?.(modelId);
@@ -191,6 +192,7 @@ export function createSwitchLifecycle(
       modelMetaFor: (id) => rt.modelMetaFor(provider, id),
       modelsDevFor: (id) => rt.modelsDevFor?.(id),
       providerWireCompat: rt.providerWireCompatFor?.(provider),
+      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
     });
     if (!ok) return false;
     for (const id of ids) rt.scheduleModelsDevRefresh?.(id);
