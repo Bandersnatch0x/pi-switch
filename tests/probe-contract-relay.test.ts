@@ -709,3 +709,115 @@ describe("Chat exact-model tuple compat request characterization (#64)", () => {
     }
   });
 });
+
+function registeredAnthropicModel(
+  baseUrl: string,
+  override?: {
+    supportsEagerToolInputStreaming?: boolean;
+    supportsCacheControlOnTools?: boolean;
+    supportsLongCacheRetention?: boolean;
+  },
+): Model<Api> {
+  const provider: CcProvider = {
+    id: "anthropic-relay",
+    piName: "ps-claude-anthropic-relay",
+    displayName: "Anthropic relay",
+    appType: "claude",
+    api: "anthropic-messages",
+    baseUrl,
+    apiKey: "test-key",
+    authHeader: false,
+    configModels: ["relay-model"],
+    meta: {},
+    isCurrentInCc: false,
+  };
+  const providerWireCompat = resolveProviderWireCompat({
+    provider,
+    ...(override
+      ? {
+          override: {
+            api: "anthropic-messages" as const,
+            ...override,
+          },
+        }
+      : {}),
+  });
+  const config = buildProviderConfig(provider, ["relay-model"], {
+    rules: [],
+    // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+    modelMeta: { maxTokens: 64_000 },
+    providerWireCompat,
+  });
+  const model = config?.models[0];
+  if (!config || !model) throw new Error("failed to build registered Anthropic model");
+  return {
+    ...model,
+    api: config.api,
+    provider: provider.piName,
+    baseUrl: config.baseUrl,
+  };
+}
+
+describe("Anthropic Provider wire compat request characterization (#65)", () => {
+  test("unknown relay registers conservative false for all three Anthropic wire fields", () => {
+    const model = registeredAnthropicModel("https://relay.example");
+    expect(model.compat).toMatchObject({
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+    });
+    expect((model.compat as Record<string, unknown> | undefined)?.supportsStore).toBeUndefined();
+  });
+
+  test("explicit Anthropic wire overrides reach model.compat without Chat store leakage", () => {
+    const model = registeredAnthropicModel("https://relay.example", {
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: true,
+      supportsLongCacheRetention: false,
+    });
+    expect(model.compat).toMatchObject({
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: true,
+      supportsLongCacheRetention: false,
+    });
+    expect((model.compat as Record<string, unknown> | undefined)?.supportsStore).toBeUndefined();
+  });
+
+  test("official Anthropic leaves Anthropic wire fields unset (adapter native)", () => {
+    const model = registeredAnthropicModel("https://api.anthropic.com");
+    const compat = model.compat as Record<string, unknown> | undefined;
+    expect(compat?.supportsEagerToolInputStreaming).toBeUndefined();
+    expect(compat?.supportsCacheControlOnTools).toBeUndefined();
+    expect(compat?.supportsLongCacheRetention).toBeUndefined();
+  });
+
+  test("Anthropic probe still captures messages body; Chat store is not invented", async () => {
+    const relay = createStrictRelay(
+      "anthropic-messages",
+      OFFICIAL_PROFILES["anthropic-messages"],
+    );
+    const model = registeredAnthropicModel(relay.baseUrl, {
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+    });
+    const request = makeRequest(model);
+    const contextBefore = structuredClone(request.context);
+
+    try {
+      const result = await transport()(request);
+      expect(result.message.stopReason).toBe("stop");
+      expect(request.context).toEqual(contextBefore);
+      expect(relay.requests).toHaveLength(1);
+      const body = relay.requests[0]?.body as Record<string, unknown>;
+      expect(body).toHaveProperty("model");
+      expect(body).toHaveProperty("messages");
+      expect(body).not.toHaveProperty("store");
+      // Long-retention TTL must not appear when supportsLongCacheRetention=false.
+      expect(JSON.stringify(body)).not.toMatch(/24h|prompt_cache_retention/i);
+      expect(relay.rejections).toEqual([]);
+    } finally {
+      relay.close();
+    }
+  });
+});

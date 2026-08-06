@@ -14,9 +14,15 @@ const SENSITIVE_HEADER_NAMES = new Set([
 export type EffectiveConfigSource = "active" | "saved";
 
 export type EffectiveProviderWireCompatSummary = {
-  supportsStore: boolean;
+  api: ResolvedProviderWireCompat["api"];
   scope: "provider";
   source: ResolvedProviderWireCompat["source"];
+  /** Chat (#62). */
+  supportsStore?: boolean;
+  /** Anthropic (#65). */
+  supportsEagerToolInputStreaming?: boolean;
+  supportsCacheControlOnTools?: boolean;
+  supportsLongCacheRetention?: boolean;
 };
 
 export type EffectiveConfigSummary = {
@@ -102,13 +108,28 @@ export function createEffectiveConfigSummary(input: {
         })
       : undefined;
 
-  const providerWireCompat = input.providerWireCompat
-    ? {
-        supportsStore: input.providerWireCompat.value,
-        scope: input.providerWireCompat.scope,
-        source: input.providerWireCompat.source,
-      }
-    : undefined;
+  let providerWireCompat: EffectiveProviderWireCompatSummary | undefined;
+  if (input.providerWireCompat) {
+    const wire = input.providerWireCompat;
+    if (wire.api === "openai-completions") {
+      providerWireCompat = {
+        api: wire.api,
+        supportsStore: wire.value,
+        scope: wire.scope,
+        source: wire.source,
+      };
+    } else {
+      providerWireCompat = {
+        api: wire.api,
+        scope: wire.scope,
+        source: wire.source,
+        supportsEagerToolInputStreaming:
+          wire.fields.supportsEagerToolInputStreaming.value,
+        supportsCacheControlOnTools: wire.fields.supportsCacheControlOnTools.value,
+        supportsLongCacheRetention: wire.fields.supportsLongCacheRetention.value,
+      };
+    }
+  }
 
   return {
     source: input.source,
@@ -175,9 +196,15 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
   ];
   if (summary.providerWireCompat) {
     const wire = summary.providerWireCompat;
-    lines.push(
-      `providerWireCompat: supportsStore=${wire.supportsStore} scope=${wire.scope} source=${wire.source}`,
-    );
+    if (wire.api === "openai-completions") {
+      lines.push(
+        `providerWireCompat: supportsStore=${wire.supportsStore} scope=${wire.scope} source=${wire.source}`,
+      );
+    } else {
+      lines.push(
+        `providerWireCompat: eager=${wire.supportsEagerToolInputStreaming} cacheOnTools=${wire.supportsCacheControlOnTools} longRetention=${wire.supportsLongCacheRetention} scope=${wire.scope} source=${wire.source}`,
+      );
+    }
   }
   return lines.join("\n");
 }

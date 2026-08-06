@@ -110,6 +110,7 @@ describe("effective config summary", () => {
     const text = formatEffectiveConfigSummary(summary);
 
     expect(summary.providerWireCompat).toEqual({
+      api: "openai-completions",
       supportsStore: false,
       scope: "provider",
       source: "conservative-default",
@@ -117,6 +118,53 @@ describe("effective config summary", () => {
     expect(text).toContain(
       "providerWireCompat: supportsStore=false scope=provider source=conservative-default",
     );
+  });
+
+  test("shows Anthropic Provider wire fields, scope, and authority source (#65)", () => {
+    const anthropicProvider = {
+      ...provider(),
+      api: "anthropic-messages" as const,
+      appType: "claude",
+      baseUrl: "https://relay.example",
+    };
+    const config = {
+      ...builtConfig(),
+      api: "anthropic-messages" as const,
+      baseUrl: anthropicProvider.baseUrl,
+      models: [
+        {
+          ...builtConfig().models[0]!,
+          compat: {
+            supportsEagerToolInputStreaming: false,
+            supportsCacheControlOnTools: false,
+            supportsLongCacheRetention: false,
+          },
+        },
+      ],
+    };
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: anthropicProvider,
+    });
+    const summary = createEffectiveConfigSummary({
+      source: "active",
+      provider: anthropicProvider,
+      modelId: "claude-model",
+      config,
+      providerWireCompat,
+    });
+    const text = formatEffectiveConfigSummary(summary);
+
+    expect(summary.providerWireCompat).toMatchObject({
+      api: "anthropic-messages",
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+      scope: "provider",
+      source: "conservative-default",
+    });
+    expect(text).toContain("eager=false");
+    expect(text).toContain("cacheOnTools=false");
+    expect(text).toContain("longRetention=false");
   });
 
   test("command prefers the active runtime model and registers ps-info", () => {

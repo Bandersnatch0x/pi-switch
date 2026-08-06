@@ -441,9 +441,12 @@ describe("provider wire compat persistence", () => {
         1,
       ),
     ).toEqual({ ok: true });
+    const loadedFalse = resolveProviderOverride(
+      readPiSwitchConfig(fs, "/c.json").providerOverrides,
+      chatProvider,
+    )?.compat;
     expect(
-      resolveProviderOverride(readPiSwitchConfig(fs, "/c.json").providerOverrides, chatProvider)
-        ?.compat?.supportsStore,
+      loadedFalse && "supportsStore" in loadedFalse ? loadedFalse.supportsStore : undefined,
     ).toBe(false);
 
     expect(
@@ -455,9 +458,12 @@ describe("provider wire compat persistence", () => {
         1,
       ),
     ).toEqual({ ok: true });
+    const loadedTrue = resolveProviderOverride(
+      readPiSwitchConfig(fs, "/c.json").providerOverrides,
+      chatProvider,
+    )?.compat;
     expect(
-      resolveProviderOverride(readPiSwitchConfig(fs, "/c.json").providerOverrides, chatProvider)
-        ?.compat?.supportsStore,
+      loadedTrue && "supportsStore" in loadedTrue ? loadedTrue.supportsStore : undefined,
     ).toBe(true);
 
     expect(writeProviderWireCompat(fs, "/c.json", chatProvider, null, 1)).toEqual({
