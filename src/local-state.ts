@@ -69,11 +69,11 @@ export function createLocalState(options: {
     saveSelection: (selection) =>
       writeSelection(fs, settingsPath, selection, pid),
     saveProviderModelMeta: (provider, modelMeta) =>
-      writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid),
+      writeModelMetaOverride({ fs, configPath, pid }, provider, { kind: "provider" }, modelMeta),
     saveModelMetaOverride: (provider, scope, modelMeta) =>
-      writeModelMetaOverride(fs, configPath, provider, scope, modelMeta, pid),
+      writeModelMetaOverride({ fs, configPath, pid }, provider, scope, modelMeta),
     clearModelMetaOverrides: (provider) =>
-      clearAllModelMetaOverrides(fs, configPath, provider, pid),
+      clearAllModelMetaOverrides({ fs, configPath, pid }, provider),
     togglePin: (entry) => togglePinAndWrite(fs, configPath, entry, pid),
     recordRecent: (entry) => recordRecentAndWrite(fs, configPath, entry, pid),
   };
