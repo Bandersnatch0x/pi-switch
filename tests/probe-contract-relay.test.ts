@@ -612,7 +612,7 @@ describe("Provider wire compat request characterization", () => {
     const contextBefore = structuredClone(request.context);
 
     try {
-      expect(model.compat?.supportsStore).toBeUndefined();
+      expect((model.compat as { supportsStore?: boolean } | undefined)?.supportsStore).toBeUndefined();
 
       const result = await transport()(request);
 

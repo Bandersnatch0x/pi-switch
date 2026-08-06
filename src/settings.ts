@@ -654,30 +654,6 @@ export function writeProviderModelMeta(
   return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
 }
 
-/** Legacy pin key (pre-identity-migration); still used for back-compat matching. */
-export function pinKey(dbId: string, model: string): string {
-  return `${dbId}::${model.trim()}`;
-}
-
-/** Identity-aware pin key (issue #16): appType::dbId::model. */
-export function entryKey(p: { dbId: string; model: string; appType?: string }): string {
-  return p.appType ? `${p.appType}::${p.dbId}::${p.model.trim()}` : pinKey(p.dbId, p.model);
-}
-
-/**
- * Same provider+model identity. An appType-carrying probe also claims
- * appType-less legacy entries (pre-migration / appType-stripping bug); a
- * legacy probe never claims an appType-carrying entry (can't disambiguate).
- */
-function sameEntry(
-  stored: { dbId: string; model: string; appType?: string },
-  probe: { dbId: string; model: string; appType?: string },
-): boolean {
-  if (stored.dbId !== probe.dbId) return false;
-  if (stored.model.trim() !== probe.model.trim()) return false;
-  return stored.appType === probe.appType || (!stored.appType && Boolean(probe.appType));
-}
-
 export function writeChatTupleCompat(
   fs: FsLike,
   configPath: string,
