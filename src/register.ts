@@ -159,11 +159,13 @@ export function buildProviderConfig(
       // Issue #63: skip models with no trusted maxTokens authority.
       if (decision.maxTokensUnresolved || !decision.meta) return [];
       const tupleInput = opts.tupleCompatFor?.(id);
+      // Dialect fields live on decision.meta after user > built-in merge (#71).
+      // Prefer that over raw userMeta so deepseek*/qwen* profiles reach tuple.
       const tupleResolved = resolveModelTupleCompat({
         modelId: id,
         providerApi: provider.api,
         tuple: tupleInput?.tuple,
-        legacyFlat: tupleInput?.legacyFlat ?? userMeta,
+        legacyFlat: tupleInput?.legacyFlat ?? decision.meta,
         officialOpenAi:
           provider.api === "openai-completions" &&
           isOfficialOpenAiChatEndpoint(provider.baseUrl),

@@ -159,6 +159,8 @@ describe("built-in compat profile (PR1/PR2)", () => {
 
 describe("resolveRegistrationMeta + built-in", () => {
   test("deepseek gets built-in compat without user override", () => {
+    // Issue #63: without a trusted maxTokens authority, registration meta omits
+    // maxTokens (unresolved). Built-in only fills compat fields.
     const meta = resolveRegistrationMeta({
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
@@ -167,10 +169,19 @@ describe("resolveRegistrationMeta + built-in", () => {
     expect(meta.thinkingFormat).toBe("deepseek");
     expect(meta.requiresReasoningContentOnAssistantMessages).toBe(true);
     expect(meta.thinkingLevelMap?.xhigh).toBe("max");
-    // capability scalars still from protocol tier, not invented
     expect(meta.contextWindow).toBe(128_000);
-    expect(meta.maxTokens).toBe(32_000);
+    expect(meta.maxTokens).toBeUndefined();
     expect(meta.reasoning).toBe(false);
+
+    // With exact-model maxTokens, full registration meta is eligible.
+    const full = resolveRegistrationMeta({
+      modelId: "deepseek-v4-flash",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      userMeta: { maxTokens: 32_000 },
+    });
+    expect(full.maxTokens).toBe(32_000);
+    expect(full.thinkingFormat).toBe("deepseek");
   });
 
   test("user thinkingFormat overrides built-in", () => {
@@ -207,12 +218,14 @@ describe("resolveRegistrationMeta + built-in", () => {
 
 describe("buildProviderConfig + built-in registration", () => {
   test("registers deepseek with nested compat without user modelMeta", () => {
+    // #63: supply trusted maxTokens so the model can register; built-in fills compat.
     const cfg = buildProviderConfig(
       mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
       ["deepseek-v4-flash"],
-      { rules: [] },
+      { rules: [], modelMeta: { maxTokens: 32_000 } },
     );
     const m = (cfg?.models as any[])[0];
+    expect(m).toBeDefined();
     expect(m.thinkingLevelMap).toEqual({
       minimal: "high",
       low: "high",
@@ -220,7 +233,8 @@ describe("buildProviderConfig + built-in registration", () => {
       high: "high",
       xhigh: "max",
     });
-    expect(m.compat).toEqual({
+    // Provider wire (#66) may add Chat defaults on unknown relays.
+    expect(m.compat).toMatchObject({
       thinkingFormat: "deepseek",
       requiresReasoningContentOnAssistantMessages: true,
     });
@@ -231,9 +245,13 @@ describe("buildProviderConfig + built-in registration", () => {
     const cfg = buildProviderConfig(
       mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
       ["deepseek-v4-flash"],
-      { rules: [], modelMeta: { thinkingFormat: "openai" } },
+      {
+        rules: [],
+        modelMeta: { maxTokens: 32_000, thinkingFormat: "openai" },
+      },
     );
     const m = (cfg?.models as any[])[0];
+    expect(m).toBeDefined();
     expect(m.compat.thinkingFormat).toBe("openai");
     expect(m.compat.requiresReasoningContentOnAssistantMessages).toBe(true);
   });
