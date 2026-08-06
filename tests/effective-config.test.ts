@@ -150,6 +150,7 @@ describe("effective config summary", () => {
         vision: { value: false, source: "conservative-default" },
         conflicts: [],
       }),
+      tupleCompatFor: () => undefined,
     };
     const ctx = {
       model: { provider: currentProvider.piName, id: "gpt-5" },
