@@ -348,12 +348,21 @@ function registeredChatModel(
   };
 }
 
-function expectedRegisteredChatBody(supportsStore: boolean): Record<string, unknown> {
+function expectedRegisteredChatBody(
+  supportsStore: boolean,
+  options?: { officialAdapter?: boolean },
+): Record<string, unknown> {
   const body = structuredClone(
     EXPECTED_BODIES["openai-completions"],
   ) as Record<string, unknown>;
   delete body.store;
   delete body.reasoning_effort;
+  if (!options?.officialAdapter) {
+    // #66: unknown Chat relay / explicit false defaults omit usage streaming + strict.
+    delete body.stream_options;
+    const tools = body.tools as Array<{ function?: Record<string, unknown> }> | undefined;
+    if (tools?.[0]?.function) delete tools[0].function.strict;
+  }
   if (supportsStore) body.store = false;
   return body;
 }
@@ -619,8 +628,10 @@ describe("Provider wire compat request characterization", () => {
       expect(result.message.stopReason).toBe("stop");
       expect(request.context).toEqual(contextBefore);
       expect(relay.requests).toHaveLength(1);
-      // Adapter-native store (not a registration override): body includes store.
-      expect(relay.requests[0]?.body).toEqual(expectedRegisteredChatBody(true));
+      // Adapter-native store + usage/strict (not a registration override).
+      expect(relay.requests[0]?.body).toEqual(
+        expectedRegisteredChatBody(true, { officialAdapter: true }),
+      );
       expect(relay.requests[0]?.body).toHaveProperty("store", false);
       expect(relay.rejections).toEqual([]);
     } finally {
@@ -816,6 +827,181 @@ describe("Anthropic Provider wire compat request characterization (#65)", () => 
       // Long-retention TTL must not appear when supportsLongCacheRetention=false.
       expect(JSON.stringify(body)).not.toMatch(/24h|prompt_cache_retention/i);
       expect(relay.rejections).toEqual([]);
+    } finally {
+      relay.close();
+    }
+  });
+});
+
+describe("Chat Provider wire remaining fields request characterization (#66)", () => {
+  test("supportsUsageInStreaming=false omits stream_options; true includes usage", async () => {
+    for (const supportsUsageInStreaming of [false, true] as const) {
+      const relay = createStrictRelay(
+        "openai-completions",
+        OFFICIAL_PROFILES["openai-completions"],
+      );
+      const provider: CcProvider = {
+        id: "chat-relay",
+        piName: "ps-codex-chat-relay",
+        displayName: "Chat relay",
+        appType: "codex",
+        api: "openai-completions",
+        baseUrl: relay.baseUrl,
+        apiKey: "test-key",
+        authHeader: true,
+        configModels: ["relay-model"],
+        meta: {},
+        isCurrentInCc: false,
+      };
+      const providerWireCompat = resolveProviderWireCompat({
+        provider,
+        override: {
+          api: "openai-completions",
+          supportsStore: false,
+          supportsUsageInStreaming,
+          supportsStrictMode: false,
+        },
+      });
+      const config = buildProviderConfig(provider, ["relay-model"], {
+        rules: [],
+        // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+        modelMeta: { maxTokens: 64_000 },
+        providerWireCompat,
+      });
+      const built = config?.models[0];
+      if (!config || !built) throw new Error("failed to build model");
+      const model = {
+        ...built,
+        api: config.api,
+        provider: provider.piName,
+        baseUrl: config.baseUrl,
+      } as Model<Api>;
+      const request = makeRequest(model);
+      try {
+        await transport()(request);
+        expect(relay.requests).toHaveLength(1);
+        const body = relay.requests[0]?.body as Record<string, unknown>;
+        if (supportsUsageInStreaming) {
+          expect(body.stream_options).toEqual({ include_usage: true });
+        } else {
+          expect(body).not.toHaveProperty("stream_options");
+        }
+      } finally {
+        relay.close();
+      }
+    }
+  });
+
+  test("supportsStrictMode=false omits tools[].function.strict; true emits it", async () => {
+    for (const supportsStrictMode of [false, true] as const) {
+      const relay = createStrictRelay(
+        "openai-completions",
+        OFFICIAL_PROFILES["openai-completions"],
+      );
+      const provider: CcProvider = {
+        id: "chat-relay",
+        piName: "ps-codex-chat-relay",
+        displayName: "Chat relay",
+        appType: "codex",
+        api: "openai-completions",
+        baseUrl: relay.baseUrl,
+        apiKey: "test-key",
+        authHeader: true,
+        configModels: ["relay-model"],
+        meta: {},
+        isCurrentInCc: false,
+      };
+      const providerWireCompat = resolveProviderWireCompat({
+        provider,
+        override: {
+          api: "openai-completions",
+          supportsStore: false,
+          supportsUsageInStreaming: false,
+          supportsStrictMode,
+        },
+      });
+      const config = buildProviderConfig(provider, ["relay-model"], {
+        rules: [],
+        // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+        modelMeta: { maxTokens: 64_000 },
+        providerWireCompat,
+      });
+      const built = config?.models[0];
+      if (!config || !built) throw new Error("failed to build model");
+      const model = {
+        ...built,
+        api: config.api,
+        provider: provider.piName,
+        baseUrl: config.baseUrl,
+      } as Model<Api>;
+      const request = makeRequest(model);
+      try {
+        await transport()(request);
+        const body = relay.requests[0]?.body as {
+          tools?: Array<{ function?: { strict?: boolean } }>;
+        };
+        if (supportsStrictMode) {
+          expect(body.tools?.[0]?.function).toHaveProperty("strict");
+        } else {
+          expect(body.tools?.[0]?.function).not.toHaveProperty("strict");
+        }
+      } finally {
+        relay.close();
+      }
+    }
+  });
+
+  test("requiresToolResultName / requiresAssistantAfterToolResult register without mutating request context", async () => {
+    const relay = createStrictRelay(
+      "openai-completions",
+      OFFICIAL_PROFILES["openai-completions"],
+    );
+    const provider: CcProvider = {
+      id: "chat-relay",
+      piName: "ps-codex-chat-relay",
+      displayName: "Chat relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: relay.baseUrl,
+      apiKey: "test-key",
+      authHeader: true,
+      configModels: ["relay-model"],
+      meta: {},
+      isCurrentInCc: false,
+    };
+    const providerWireCompat = resolveProviderWireCompat({
+      provider,
+      override: {
+        api: "openai-completions",
+        requiresToolResultName: true,
+        requiresAssistantAfterToolResult: true,
+      },
+    });
+    const config = buildProviderConfig(provider, ["relay-model"], {
+      rules: [],
+      // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+      modelMeta: { maxTokens: 64_000 },
+      providerWireCompat,
+    });
+    const built = config?.models[0];
+    if (!config || !built) throw new Error("failed to build model");
+    expect(built.compat).toMatchObject({
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: true,
+    });
+    const model = {
+      ...built,
+      api: config.api,
+      provider: provider.piName,
+      baseUrl: config.baseUrl,
+    } as Model<Api>;
+    const request = makeRequest(model);
+    const contextBefore = structuredClone(request.context);
+    try {
+      await transport()(request);
+      // Conversion must not mutate the probe request context object.
+      expect(request.context).toEqual(contextBefore);
+      expect(relay.requests).toHaveLength(1);
     } finally {
       relay.close();
     }

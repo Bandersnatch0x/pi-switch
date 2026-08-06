@@ -537,15 +537,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       (c) =>
         `${c.field}=${c.effective}(${c.effectiveSource}, scope=${wire.scope}) vs ${c.overridden}(${c.overriddenSource})`,
     );
-    let facts: string;
-    if (wire.api === "openai-completions") {
-      facts = `supportsStore=${wire.value}(${wire.source}, scope=${wire.scope})`;
-    } else {
-      const fieldParts = Object.entries(wire.fields).map(
-        ([name, entry]) => `${name}=${entry.value}(${entry.source})`,
-      );
-      facts = `api=anthropic-messages scope=${wire.scope} · ${fieldParts.join(" · ")}`;
-    }
+    const fieldParts = Object.entries(wire.fields).map(
+      ([name, entry]) => `${name}=${entry.value}(${entry.source})`,
+    );
+    const facts = `api=${wire.api} scope=${wire.scope} · ${fieldParts.join(" · ")}`;
     const detail = conflictRows.length
       ? `${facts}；${conflictRows.join("；")}`
       : facts;

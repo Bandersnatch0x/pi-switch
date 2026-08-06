@@ -329,10 +329,14 @@ describe("buildProviderConfig", () => {
     expect(m.contextWindow).toBe(1_000_000);
     expect(m.maxTokens).toBe(384_000);
     expect(m.thinkingLevelMap).toEqual(deepseekMeta.thinkingLevelMap);
-    expect(m.compat).toEqual({
+    expect(m.compat).toMatchObject({
       thinkingFormat: "deepseek",
       requiresReasoningContentOnAssistantMessages: true,
       supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
     });
     expect(m.thinkingFormat).toBeUndefined();
   });
@@ -363,16 +367,16 @@ describe("buildProviderConfig", () => {
     const b = (cfgB?.models as any[])[0];
     expect(a.id).toBe(b.id);
     expect(a.contextWindow).toBe(1_000_000);
-    expect(a.compat).toEqual({
+    expect(a.compat).toMatchObject({
       thinkingFormat: "deepseek",
       requiresReasoningContentOnAssistantMessages: true,
       supportsStore: false,
     });
     expect(b.contextWindow).toBe(128_000);
-    expect(b.compat).toEqual({ thinkingFormat: "openai", supportsStore: false });
+    expect(b.compat).toMatchObject({ thinkingFormat: "openai", supportsStore: false });
   });
 
-  test("unknown Chat relay defaults supportsStore to false", () => {
+  test("unknown Chat relay defaults all Chat wire fields conservatively (#66)", () => {
     const cfg = buildProviderConfig(
       mk({
         id: "chat-relay",
@@ -384,7 +388,46 @@ describe("buildProviderConfig", () => {
       { rules: [], modelMeta: TRUSTED_MAX },
     );
 
-    expect(cfg?.models[0]?.compat).toMatchObject({ supportsStore: false });
+    expect(cfg?.models[0]?.compat).toMatchObject({
+      supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
+    });
+  });
+
+  test("Chat Provider wire remaining fields reach every registered model (#66)", () => {
+    const relay = mk({
+      id: "chat-relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: relay,
+      override: {
+        api: "openai-completions",
+        supportsStore: false,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+        requiresToolResultName: true,
+        requiresAssistantAfterToolResult: true,
+      },
+    });
+    const cfg = buildProviderConfig(relay, ["a", "b"], {
+      rules: [],
+      providerWireCompat,
+    });
+    for (const model of cfg?.models ?? []) {
+      expect(model.compat).toMatchObject({
+        supportsStore: false,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+        requiresToolResultName: true,
+        requiresAssistantAfterToolResult: true,
+      });
+    }
   });
 
   test("explicit Provider supportsStore true and false reach every registered model", () => {

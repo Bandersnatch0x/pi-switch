@@ -1,5 +1,6 @@
 /**
- * Provider-scoped request-wire compatibility (issue #62 Chat + #65 Anthropic).
+ * Provider-scoped request-wire compatibility
+ * (issue #62 Chat store + #65 Anthropic + #66 Chat remaining fields).
  *
  * Independent of model capability and exact-model tuple compat. Never derived
  * from models.dev, model id tags, or CC Switch meta.
@@ -10,13 +11,16 @@ import type { CcProvider } from "./types.ts";
 export const CHAT_COMPLETIONS_API = "openai-completions" as const;
 export const ANTHROPIC_MESSAGES_API = "anthropic-messages" as const;
 
-const CHAT_WIRE_KEYS = new Set(["api", "supportsStore"]);
-const ANTHROPIC_WIRE_KEYS = new Set([
-  "api",
-  "supportsEagerToolInputStreaming",
-  "supportsCacheControlOnTools",
-  "supportsLongCacheRetention",
-]);
+/** Chat Provider wire fields (issue #62 + #66). */
+export const CHAT_WIRE_FIELDS = [
+  "supportsStore",
+  "supportsUsageInStreaming",
+  "supportsStrictMode",
+  "requiresToolResultName",
+  "requiresAssistantAfterToolResult",
+] as const;
+
+export type ChatWireField = (typeof CHAT_WIRE_FIELDS)[number];
 
 export const ANTHROPIC_WIRE_FIELDS = [
   "supportsEagerToolInputStreaming",
@@ -26,9 +30,16 @@ export const ANTHROPIC_WIRE_FIELDS = [
 
 export type AnthropicWireField = (typeof ANTHROPIC_WIRE_FIELDS)[number];
 
+const CHAT_WIRE_KEYS = new Set<string>(["api", ...CHAT_WIRE_FIELDS]);
+const ANTHROPIC_WIRE_KEYS = new Set<string>(["api", ...ANTHROPIC_WIRE_FIELDS]);
+
 export interface ChatProviderWireCompat {
   api: typeof CHAT_COMPLETIONS_API;
   supportsStore?: boolean;
+  supportsUsageInStreaming?: boolean;
+  supportsStrictMode?: boolean;
+  requiresToolResultName?: boolean;
+  requiresAssistantAfterToolResult?: boolean;
 }
 
 export interface AnthropicProviderWireCompat {
@@ -45,9 +56,7 @@ export type ProviderWireCompatSource =
   | "official-adapter"
   | "conservative-default";
 
-export type ProviderWireCompatField =
-  | "supportsStore"
-  | AnthropicWireField;
+export type ProviderWireCompatField = ChatWireField | AnthropicWireField;
 
 export interface ProviderWireCompatConflict {
   field: ProviderWireCompatField;
@@ -62,7 +71,10 @@ export interface ResolvedWireField {
   source: ProviderWireCompatSource;
 }
 
-/** Chat (#62): single supportsStore fact, kept as `value` for back-compat. */
+/**
+ * Chat (#62 + #66): multi-field wire facts.
+ * `value` remains supportsStore for #62 back-compat callers.
+ */
 export interface ResolvedChatProviderWireCompat {
   api: typeof CHAT_COMPLETIONS_API;
   /** supportsStore effective value (back-compat with #62 callers). */
@@ -70,17 +82,19 @@ export interface ResolvedChatProviderWireCompat {
   source: ProviderWireCompatSource;
   scope: "provider";
   conflicts: ProviderWireCompatConflict[];
-  fields: { supportsStore: ResolvedWireField };
+  fields: {
+    supportsStore: ResolvedWireField;
+    supportsUsageInStreaming: ResolvedWireField;
+    supportsStrictMode: ResolvedWireField;
+    requiresToolResultName: ResolvedWireField;
+    requiresAssistantAfterToolResult: ResolvedWireField;
+  };
 }
 
 /** Anthropic (#65): three independent wire facts. */
 export interface ResolvedAnthropicProviderWireCompat {
   api: typeof ANTHROPIC_MESSAGES_API;
   scope: "provider";
-  /**
-   * Dominant source for doctor one-liners: user-provider if any field is
-   * user-set, else official-adapter / conservative-default.
-   */
   source: ProviderWireCompatSource;
   conflicts: ProviderWireCompatConflict[];
   fields: {
@@ -94,13 +108,23 @@ export type ResolvedProviderWireCompat =
   | ResolvedChatProviderWireCompat
   | ResolvedAnthropicProviderWireCompat;
 
+export type RegistrationChatWireCompat = {
+  supportsStore?: boolean;
+  supportsUsageInStreaming?: boolean;
+  supportsStrictMode?: boolean;
+  requiresToolResultName?: boolean;
+  requiresAssistantAfterToolResult?: boolean;
+};
+
+export type RegistrationAnthropicWireCompat = {
+  supportsEagerToolInputStreaming?: boolean;
+  supportsCacheControlOnTools?: boolean;
+  supportsLongCacheRetention?: boolean;
+};
+
 export type RegistrationProviderWireCompat =
-  | { supportsStore: boolean }
-  | {
-      supportsEagerToolInputStreaming?: boolean;
-      supportsCacheControlOnTools?: boolean;
-      supportsLongCacheRetention?: boolean;
-    };
+  | RegistrationChatWireCompat
+  | RegistrationAnthropicWireCompat;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -139,11 +163,12 @@ export function parseProviderWireCompat(
         `invalid ${path}: unknown key${unknownKeys.length === 1 ? "" : "s"} ${unknownKeys.join(", ")}`,
       );
     }
-    const supportsStore = requireBoolean(raw, "supportsStore", path);
-    return {
-      api: CHAT_COMPLETIONS_API,
-      ...(typeof supportsStore === "boolean" ? { supportsStore } : {}),
-    };
+    const out: ChatProviderWireCompat = { api: CHAT_COMPLETIONS_API };
+    for (const field of CHAT_WIRE_FIELDS) {
+      const value = requireBoolean(raw, field, path);
+      if (typeof value === "boolean") out[field] = value;
+    }
+    return out;
   }
 
   if (raw.api === ANTHROPIC_MESSAGES_API) {
@@ -185,6 +210,86 @@ function isOfficialAnthropicEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Official OpenAI Chat Completions adapter facts (pi-ai defaults).
+ * Unknown relays use conservative unsupported for every field when absent.
+ */
+const OFFICIAL_CHAT_FACTS: Record<ChatWireField, boolean> = {
+  supportsStore: true,
+  supportsUsageInStreaming: true,
+  supportsStrictMode: true,
+  // Official OpenAI does not require these quirks.
+  requiresToolResultName: false,
+  requiresAssistantAfterToolResult: false,
+};
+
+const CONSERVATIVE_CHAT_FACTS: Record<ChatWireField, boolean> = {
+  supportsStore: false,
+  supportsUsageInStreaming: false,
+  supportsStrictMode: false,
+  requiresToolResultName: false,
+  requiresAssistantAfterToolResult: false,
+};
+
+function resolveMultiFieldWire<F extends string>(input: {
+  fields: readonly F[];
+  official: boolean;
+  officialFacts: Record<F, boolean>;
+  conservativeFacts: Record<F, boolean>;
+  userOverride: Partial<Record<F, boolean>> | undefined;
+}): {
+  fields: Record<F, ResolvedWireField>;
+  conflicts: ProviderWireCompatConflict[];
+  source: ProviderWireCompatSource;
+  anyUser: boolean;
+} {
+  const fields = {} as Record<F, ResolvedWireField>;
+  const conflicts: ProviderWireCompatConflict[] = [];
+  let anyUser = false;
+
+  for (const field of input.fields) {
+    const userValue =
+      input.userOverride && typeof input.userOverride[field] === "boolean"
+        ? (input.userOverride[field] as boolean)
+        : undefined;
+
+    if (typeof userValue === "boolean") {
+      anyUser = true;
+      fields[field] = { value: userValue, source: "user-provider" };
+      if (input.official && userValue !== input.officialFacts[field]) {
+        conflicts.push({
+          field: field as ProviderWireCompatField,
+          effective: userValue,
+          effectiveSource: "user-provider",
+          overridden: input.officialFacts[field],
+          overriddenSource: "official-adapter",
+        });
+      }
+      continue;
+    }
+
+    if (input.official) {
+      fields[field] = {
+        value: input.officialFacts[field],
+        source: "official-adapter",
+      };
+    } else {
+      fields[field] = {
+        value: input.conservativeFacts[field],
+        source: "conservative-default",
+      };
+    }
+  }
+
+  const source: ProviderWireCompatSource = anyUser
+    ? "user-provider"
+    : input.official
+      ? "official-adapter"
+      : "conservative-default";
+
+  return { fields, conflicts, source, anyUser };
+}
+
 function resolveChatWire(input: {
   provider: Pick<CcProvider, "api" | "baseUrl">;
   override?: ProviderWireCompat;
@@ -195,51 +300,31 @@ function resolveChatWire(input: {
   const effectiveOverride =
     override && override.api === CHAT_COMPLETIONS_API ? override : undefined;
 
-  const officialValue = isOfficialOpenAiEndpoint(provider.baseUrl)
-    ? true
-    : undefined;
-
-  if (typeof effectiveOverride?.supportsStore === "boolean") {
-    const value = effectiveOverride.supportsStore;
-    const conflicts: ProviderWireCompatConflict[] =
-      typeof officialValue === "boolean" && value !== officialValue
-        ? [
-            {
-              field: "supportsStore",
-              effective: value,
-              effectiveSource: "user-provider",
-              overridden: officialValue,
-              overriddenSource: "official-adapter",
-            },
-          ]
-        : [];
-    return {
-      api: CHAT_COMPLETIONS_API,
-      value,
-      source: "user-provider",
-      scope: "provider",
-      conflicts,
-      fields: { supportsStore: { value, source: "user-provider" } },
-    };
+  const official = isOfficialOpenAiEndpoint(provider.baseUrl);
+  const userOverride: Partial<Record<ChatWireField, boolean>> = {};
+  if (effectiveOverride) {
+    for (const field of CHAT_WIRE_FIELDS) {
+      if (typeof effectiveOverride[field] === "boolean") {
+        userOverride[field] = effectiveOverride[field];
+      }
+    }
   }
 
-  if (officialValue === true) {
-    return {
-      api: CHAT_COMPLETIONS_API,
-      value: true,
-      source: "official-adapter",
-      scope: "provider",
-      conflicts: [],
-      fields: { supportsStore: { value: true, source: "official-adapter" } },
-    };
-  }
+  const resolved = resolveMultiFieldWire({
+    fields: CHAT_WIRE_FIELDS,
+    official,
+    officialFacts: OFFICIAL_CHAT_FACTS,
+    conservativeFacts: CONSERVATIVE_CHAT_FACTS,
+    userOverride,
+  });
+
   return {
     api: CHAT_COMPLETIONS_API,
-    value: false,
-    source: "conservative-default",
+    value: resolved.fields.supportsStore.value,
+    source: resolved.source,
     scope: "provider",
-    conflicts: [],
-    fields: { supportsStore: { value: false, source: "conservative-default" } },
+    conflicts: resolved.conflicts,
+    fields: resolved.fields,
   };
 }
 
@@ -254,61 +339,40 @@ function resolveAnthropicWire(input: {
     override && override.api === ANTHROPIC_MESSAGES_API ? override : undefined;
 
   const official = isOfficialAnthropicEndpoint(provider.baseUrl);
-  // Official Anthropic adapter facts (pi-ai defaults): all three supported.
   const officialFacts: Record<AnthropicWireField, boolean> = {
     supportsEagerToolInputStreaming: true,
     supportsCacheControlOnTools: true,
     supportsLongCacheRetention: true,
   };
+  const conservativeFacts: Record<AnthropicWireField, boolean> = {
+    supportsEagerToolInputStreaming: false,
+    supportsCacheControlOnTools: false,
+    supportsLongCacheRetention: false,
+  };
 
-  const fields = {} as ResolvedAnthropicProviderWireCompat["fields"];
-  const conflicts: ProviderWireCompatConflict[] = [];
-  let anyUser = false;
-
-  for (const field of ANTHROPIC_WIRE_FIELDS) {
-    const userValue =
-      effectiveOverride && typeof effectiveOverride[field] === "boolean"
-        ? effectiveOverride[field]
-        : undefined;
-
-    if (typeof userValue === "boolean") {
-      anyUser = true;
-      fields[field] = { value: userValue, source: "user-provider" };
-      if (official && userValue !== officialFacts[field]) {
-        conflicts.push({
-          field,
-          effective: userValue,
-          effectiveSource: "user-provider",
-          overridden: officialFacts[field],
-          overriddenSource: "official-adapter",
-        });
+  const userOverride: Partial<Record<AnthropicWireField, boolean>> = {};
+  if (effectiveOverride) {
+    for (const field of ANTHROPIC_WIRE_FIELDS) {
+      if (typeof effectiveOverride[field] === "boolean") {
+        userOverride[field] = effectiveOverride[field];
       }
-      continue;
-    }
-
-    if (official) {
-      fields[field] = {
-        value: officialFacts[field],
-        source: "official-adapter",
-      };
-    } else {
-      // Unknown Anthropic relay: conservative unsupported when field absent.
-      fields[field] = { value: false, source: "conservative-default" };
     }
   }
 
-  const source: ProviderWireCompatSource = anyUser
-    ? "user-provider"
-    : official
-      ? "official-adapter"
-      : "conservative-default";
+  const resolved = resolveMultiFieldWire({
+    fields: ANTHROPIC_WIRE_FIELDS,
+    official,
+    officialFacts,
+    conservativeFacts,
+    userOverride,
+  });
 
   return {
     api: ANTHROPIC_MESSAGES_API,
     scope: "provider",
-    source,
-    conflicts,
-    fields,
+    source: resolved.source,
+    conflicts: resolved.conflicts,
+    fields: resolved.fields,
   };
 }
 
@@ -336,23 +400,30 @@ export function resolveProviderWireCompat(input: {
 /**
  * Official adapter facts remain native (no registration override).
  * Other resolved values are explicit booleans for pi-ai model.compat.
+ *
+ * When any field is user-set or conservative, emit only non-official fields so
+ * mixed official+user states stay precise (e.g. official OpenAI with one
+ * explicit false still emits that one field).
  */
 export function providerWireCompatForRegistration(
   resolved: ResolvedProviderWireCompat | undefined,
 ): RegistrationProviderWireCompat | undefined {
   if (!resolved) return undefined;
-  if (resolved.source === "official-adapter") return undefined;
 
   if (resolved.api === CHAT_COMPLETIONS_API) {
-    return { supportsStore: resolved.value };
+    // Pure official: leave adapter native.
+    if (resolved.source === "official-adapter") return undefined;
+    const out: RegistrationChatWireCompat = {};
+    for (const field of CHAT_WIRE_FIELDS) {
+      const entry = resolved.fields[field];
+      if (entry.source === "official-adapter") continue;
+      out[field] = entry.value;
+    }
+    return Object.keys(out).length ? out : undefined;
   }
 
-  // Anthropic: only emit fields that are user-set or conservative (all non-official).
-  const out: {
-    supportsEagerToolInputStreaming?: boolean;
-    supportsCacheControlOnTools?: boolean;
-    supportsLongCacheRetention?: boolean;
-  } = {};
+  if (resolved.source === "official-adapter") return undefined;
+  const out: RegistrationAnthropicWireCompat = {};
   for (const field of ANTHROPIC_WIRE_FIELDS) {
     const entry = resolved.fields[field];
     if (entry.source === "official-adapter") continue;
