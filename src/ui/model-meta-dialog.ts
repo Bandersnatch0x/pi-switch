@@ -6,7 +6,7 @@
  *   - scope: provider (all models) or one model id
  *   - every field is an enum/quick-pick, never free text (thinkingFormat,
  *     reasoning tri-state, contextWindow/maxTokens presets + custom)
- *   - each row shows 覆写 / 继承 / 默认 so inheritance is visible
+ *   - each row shows 覆写 / 继承 / 内置 / 默认 so inheritance is visible
  *   - unsaved edits are marked and confirmed before discard
  */
 
@@ -23,6 +23,12 @@ import {
   type ModelMetaField,
   type ModelMetaPreset,
 } from "../model-meta.ts";
+import { builtInCompatForModelId } from "../compat/built-in-compat-profile.ts";
+import {
+  shouldShowBuiltInCompatRow,
+  useBuiltInCompatStateText,
+  userMetaForBuiltInGate,
+} from "./model-meta-form.ts";
 
 export type ModelMetaDialogUi = {
   select: (title: string, options: string[]) => Promise<string | undefined | null>;
@@ -145,6 +151,13 @@ export async function runModelMetaDialog(
           s.modelId,
         );
 
+  /** Built-in compat for model scope; honors draft/inherited opt-out. */
+  const builtInFor = (
+    s: ModelMetaScope,
+    userMeta?: ModelMetaOverride,
+  ): ModelMetaOverride | undefined =>
+    s.kind === "model" ? builtInCompatForModelId(s.modelId, userMeta) : undefined;
+
   let stored = storedFor(scope);
   let draft: ModelMetaOverride = { ...(stored ?? {}) };
 
@@ -156,15 +169,18 @@ export async function runModelMetaDialog(
   const confirmDiscard = async (): Promise<boolean> =>
     !dirty() || (await ui.confirm("有未保存的修改，放弃并退出？"));
 
-  /** Row label for one field: 覆写 / 继承 / 默认. */
+  /** Row label for one field: 覆写 / 继承 / 内置 / 默认. */
   const fieldRow = (
     field: ModelMetaField,
     inherited: ModelMetaOverride | undefined,
+    builtIn?: ModelMetaOverride,
   ): string => {
     const own = draft[field];
     if (own !== undefined) return `${field} · 覆写 ${fmtFieldValue(field, own)}`;
     const inh = inherited?.[field];
     if (inh !== undefined) return `${field} · 继承 ${fmtFieldValue(field, inh)}`;
+    const bi = builtIn?.[field];
+    if (bi !== undefined) return `${field} · 内置 ${fmtFieldValue(field, bi)}`;
     const tier = input.tier?.[field];
     if (tier !== undefined) return `${field} · 默认 ${fmtFieldValue(field, tier)}`;
     return `${field} · 默认`;
@@ -275,12 +291,16 @@ export async function runModelMetaDialog(
     if (typeof value === "number") draft[field] = value;
   }
 
-  async function pickThinkingFormat(inherited: ModelMetaOverride | undefined): Promise<void> {
-    const inheritedValue = inherited?.thinkingFormat;
-    const inheritLabel =
-      inheritedValue === undefined
-        ? "不覆写（继承默认）"
-        : `不覆写（继承 ${inheritedValue}）`;
+  async function pickThinkingFormat(
+    inherited: ModelMetaOverride | undefined,
+    builtIn?: ModelMetaOverride,
+  ): Promise<void> {
+    const userValue = inherited?.thinkingFormat;
+    const builtInValue = builtIn?.thinkingFormat;
+    let inheritLabel: string;
+    if (userValue !== undefined) inheritLabel = `不覆写（继承 ${userValue}）`;
+    else if (builtInValue !== undefined) inheritLabel = `不覆写（内置 ${builtInValue}）`;
+    else inheritLabel = "不覆写（继承默认）";
     const labels = [inheritLabel, ...THINKING_FORMATS, BACK];
     const pick = await ui.select("thinkingFormat", labels);
     if (!pick || pick === BACK) return;
@@ -291,22 +311,44 @@ export async function runModelMetaDialog(
     draft.thinkingFormat = pick;
   }
 
+  async function pickUseBuiltInCompat(
+    inherited: ModelMetaOverride | undefined,
+  ): Promise<void> {
+    const state = useBuiltInCompatStateText(draft, inherited);
+    const inheritHint =
+      typeof inherited?.useBuiltInCompat === "boolean"
+        ? `不覆写（继承 ${inherited.useBuiltInCompat ? "开启" : "关闭"}）`
+        : "不覆写（默认 开启）";
+    const labels = [inheritHint, "关闭（禁用内置 profile）", "开启（显式启用）", BACK];
+    const pick = await ui.select(`内置compat · 当前 ${state}`, labels);
+    if (!pick || pick === BACK) return;
+    if (pick === inheritHint) delete draft.useBuiltInCompat;
+    else if (pick.startsWith("关闭")) draft.useBuiltInCompat = false;
+    else if (pick.startsWith("开启")) draft.useBuiltInCompat = true;
+  }
+
   while (true) {
     const inherited = inheritedFor(scope);
+    const gate = userMetaForBuiltInGate(draft, inherited);
+    const builtIn = builtInFor(scope, gate);
     const title = `参数覆写 · ${provider.displayName} · ${scopeLabel(scope)}${dirty() ? " ✱" : ""}`;
 
     const SCOPE_ROW = `作用域 · ${scopeLabel(scope)}`;
     const PRESET_ROW = "预设 · 中转兼容 / 完整推理";
-    const REASONING_ROW = fieldRow("reasoning", inherited);
-    const CONTEXT_ROW = fieldRow("contextWindow", inherited);
-    const MAXTOKENS_ROW = fieldRow("maxTokens", inherited);
-    const THINKING_ROW = fieldRow("thinkingFormat", inherited);
+    const REASONING_ROW = fieldRow("reasoning", inherited, builtIn);
+    const CONTEXT_ROW = fieldRow("contextWindow", inherited, builtIn);
+    const MAXTOKENS_ROW = fieldRow("maxTokens", inherited, builtIn);
+    const THINKING_ROW = fieldRow("thinkingFormat", inherited, builtIn);
+    const BUILTIN_ROW = shouldShowBuiltInCompatRow(scope, draft, inherited)
+      ? `内置compat · ${useBuiltInCompatStateText(draft, inherited)}`
+      : undefined;
     const CLEAR_SCOPE_ROW = `清除本层覆写（${scopeLabel(scope)}）`;
     const CLEAR_ALL_ROW = "清除该 Provider 全部覆写";
     const SAVE_ROW = dirty() ? "保存 ✱" : "保存（无改动）";
     const CANCEL_ROW = "取消";
 
     const options = [SCOPE_ROW, PRESET_ROW, REASONING_ROW, CONTEXT_ROW, MAXTOKENS_ROW, THINKING_ROW];
+    if (BUILTIN_ROW) options.push(BUILTIN_ROW);
     if (cleanModelMeta(draft) || stored) options.push(CLEAR_SCOPE_ROW);
     if (hasAnyOverride()) options.push(CLEAR_ALL_ROW);
     options.push(SAVE_ROW, CANCEL_ROW);
@@ -340,7 +382,11 @@ export async function runModelMetaDialog(
       continue;
     }
     if (pick === THINKING_ROW) {
-      await pickThinkingFormat(inherited);
+      await pickThinkingFormat(inherited, builtIn);
+      continue;
+    }
+    if (BUILTIN_ROW && pick === BUILTIN_ROW) {
+      await pickUseBuiltInCompat(inherited);
       continue;
     }
     if (pick === CLEAR_SCOPE_ROW) {

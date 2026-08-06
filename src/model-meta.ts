@@ -136,6 +136,10 @@ export function cleanModelMeta(meta: ModelMetaOverride | null | undefined): Mode
   if (typeof meta.supportsDeveloperRole === "boolean") {
     cleaned.supportsDeveloperRole = meta.supportsDeveloperRole;
   }
+  // pi-switch only: opt out of built-in deepseek*/qwen* compat profiles (#71).
+  if (typeof meta.useBuiltInCompat === "boolean") {
+    cleaned.useBuiltInCompat = meta.useBuiltInCompat;
+  }
   const levelMap = cleanThinkingLevelMap(meta.thinkingLevelMap);
   if (levelMap) cleaned.thinkingLevelMap = levelMap;
   return Object.keys(cleaned).length ? cleaned : undefined;
@@ -282,8 +286,11 @@ export function resolveModelMetaLayers(
 }
 
 /**
- * Resolve effective modelMeta for a provider(+model):
+ * Resolve **user-configured** effective modelMeta for a provider(+model):
  *   modelOverrides[model] ⊕ providerOverrides.modelMeta ⊕ defaultModelMeta
+ * Does not include built-in compat profiles — use
+ * `withBuiltInCompatUnderUser` / runtime `modelMetaFor` for registration-facing
+ * display (user + built-in).
  */
 export function resolveEffectiveModelMeta(
   config: Pick<PiSwitchConfig, "providerOverrides" | "defaultModelMeta">,
@@ -308,6 +315,9 @@ export function summarizeModelMeta(meta: ModelMetaOverride | undefined): string 
     parts.push(
       `requiresReasoningContentOnAssistantMessages=${meta.requiresReasoningContentOnAssistantMessages}`,
     );
+  }
+  if (typeof meta.useBuiltInCompat === "boolean") {
+    parts.push(`useBuiltInCompat=${meta.useBuiltInCompat}`);
   }
   return parts.length ? parts.join(", ") : "默认协议档";
 }

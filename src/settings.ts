@@ -455,6 +455,15 @@ function validateModelMetaWrite(
       error: "invalid requiresReasoningContentOnAssistantMessages: expected boolean",
     };
   }
+  if (
+    modelMeta.useBuiltInCompat !== undefined &&
+    typeof modelMeta.useBuiltInCompat !== "boolean"
+  ) {
+    return {
+      ok: false,
+      error: "invalid useBuiltInCompat: expected boolean",
+    };
+  }
   return { ok: true };
 }
 

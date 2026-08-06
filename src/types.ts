@@ -130,6 +130,12 @@ export interface ModelMetaOverride {
    * Prefer exact-model `compat.supportsDeveloperRole`; kept for deprecation path.
    */
   supportsDeveloperRole?: boolean;
+  /**
+   * pi-switch only (not sent to Pi): whether to apply built-in compat profiles
+   * (`deepseek*` / `qwen*`, …). `false` disables the whole profile for this
+   * scope; unset/`true` keeps the default (apply when id matches).
+   */
+  useBuiltInCompat?: boolean;
 }
 
 /**

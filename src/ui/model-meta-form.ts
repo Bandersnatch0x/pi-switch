@@ -7,7 +7,7 @@
  *   - reasoning uses inline value cycling (不覆写 / true / false)
  *   - contextWindow / maxTokens / 预设 / 作用域 open a `SelectList` submenu
  *   - thinkingFormat opens a `SelectList` submenu
- *   - each row's `currentValue` shows 覆写 / 继承 / 默认 so inheritance is visible
+ *   - each row's `currentValue` shows 覆写 / 继承 / 内置 / 默认 so inheritance is visible
  *   - unsaved edits are marked with ✱ and confirmed before discard
  *
  * Non-interactive fallback lives in `model-meta-dialog.ts` and runs when
@@ -31,6 +31,10 @@ import {
   type ModelMetaField,
   type ModelMetaPreset,
 } from "../model-meta.ts";
+import {
+  builtInCompatForModelId,
+  hasBuiltInCompatProfile,
+} from "../compat/built-in-compat-profile.ts";
 import { THINKING_FORMATS } from "../types.ts";
 import type { ModelMetaOverride } from "../types.ts";
 import type { PiSwitchCtx } from "../pi-context.ts";
@@ -51,6 +55,7 @@ export const FORM_ITEM_ID = {
   contextWindow: "contextWindow",
   maxTokens: "maxTokens",
   thinkingFormat: "thinkingFormat",
+  useBuiltInCompat: "useBuiltInCompat",
   clearScope: "clearScope",
   clearAll: "clearAll",
   save: "save",
@@ -128,16 +133,77 @@ export function inheritedFor(
       );
 }
 
+/**
+ * Built-in compat profile for model scope.
+ * `userMeta` should be inherited⊕draft so `useBuiltInCompat: false` hides 内置.
+ */
+export function builtInFor(
+  s: ModelMetaScope,
+  userMeta?: ModelMetaOverride,
+): ModelMetaOverride | undefined {
+  return s.kind === "model"
+    ? builtInCompatForModelId(s.modelId, userMeta)
+    : undefined;
+}
+
+/** Effective user meta for built-in opt-out (draft wins over inherited). */
+export function userMetaForBuiltInGate(
+  draft: ModelMetaOverride,
+  inherited: ModelMetaOverride | undefined,
+): ModelMetaOverride | undefined {
+  return mergeModelMeta(inherited, cleanModelMeta(draft));
+}
+
+/**
+ * Show the 内置 compat row when the model id matches a profile, or any layer
+ * already sets useBuiltInCompat (so user can clear/re-enable).
+ */
+export function shouldShowBuiltInCompatRow(
+  scope: ModelMetaScope,
+  draft: ModelMetaOverride,
+  inherited: ModelMetaOverride | undefined,
+): boolean {
+  if (typeof draft.useBuiltInCompat === "boolean") return true;
+  if (typeof inherited?.useBuiltInCompat === "boolean") return true;
+  if (scope.kind === "model") return hasBuiltInCompatProfile(scope.modelId);
+  // Provider scope: allow fleet-wide opt-out even before picking a model.
+  return true;
+}
+
+/** Row text for useBuiltInCompat: 覆写/继承 开启|关闭, or 默认 开启. */
+export function useBuiltInCompatStateText(
+  draft: ModelMetaOverride,
+  inherited: ModelMetaOverride | undefined,
+): string {
+  if (typeof draft.useBuiltInCompat === "boolean") {
+    return `覆写 ${draft.useBuiltInCompat ? "开启" : "关闭"}`;
+  }
+  if (typeof inherited?.useBuiltInCompat === "boolean") {
+    return `继承 ${inherited.useBuiltInCompat ? "开启" : "关闭"}`;
+  }
+  return "默认 开启";
+}
+
+/** Cycle: 不覆写 → 关闭 → 开启 → 不覆写. */
+export function cycleUseBuiltInCompat(draft: ModelMetaOverride): void {
+  if (draft.useBuiltInCompat === undefined) draft.useBuiltInCompat = false;
+  else if (draft.useBuiltInCompat === false) draft.useBuiltInCompat = true;
+  else delete draft.useBuiltInCompat;
+}
+
 function ownInheritDefault(
   field: ModelMetaField,
   draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,
-): { state: "override" | "inherit" | "default"; display: string } {
+  builtIn?: ModelMetaOverride,
+): { state: "override" | "inherit" | "builtin" | "default"; display: string } {
   const own = draft[field];
   if (own !== undefined) return { state: "override", display: fmtFieldValue(field, own) };
   const inh = inherited?.[field];
   if (inh !== undefined) return { state: "inherit", display: fmtFieldValue(field, inh) };
+  const bi = builtIn?.[field];
+  if (bi !== undefined) return { state: "builtin", display: fmtFieldValue(field, bi) };
   const t = tier?.[field];
   if (t !== undefined) return { state: "default", display: fmtFieldValue(field, t) };
   return { state: "default", display: "" };
@@ -148,9 +214,17 @@ function fieldStateText(
   draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,
+  builtIn?: ModelMetaOverride,
 ): string {
-  const { state, display } = ownInheritDefault(field, draft, inherited, tier);
-  const tag = state === "override" ? "覆写" : state === "inherit" ? "继承" : "默认";
+  const { state, display } = ownInheritDefault(field, draft, inherited, tier, builtIn);
+  const tag =
+    state === "override"
+      ? "覆写"
+      : state === "inherit"
+        ? "继承"
+        : state === "builtin"
+          ? "内置"
+          : "默认";
   return display ? `${tag} ${display}` : tag;
 }
 
@@ -200,15 +274,18 @@ export function thinkingSubmenuOptions(
   _draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   _tier: ModelMetaOverride | undefined,
+  builtIn?: ModelMetaOverride,
 ): SelectItemLike[] {
-  const inheritedValue = inherited?.thinkingFormat;
+  const userValue = inherited?.thinkingFormat;
+  const builtInValue = builtIn?.thinkingFormat;
   const items: SelectItemLike[] = THINKING_FORMATS.map((f) => ({ value: f, label: f }));
+  let inheritLabel: string;
+  if (userValue !== undefined) inheritLabel = `不覆写（继承 ${userValue}）`;
+  else if (builtInValue !== undefined) inheritLabel = `不覆写（内置 ${builtInValue}）`;
+  else inheritLabel = "不覆写（继承默认）";
   items.push({
     value: INHERIT_VALUE,
-    label:
-      inheritedValue === undefined
-        ? "不覆写（继承默认）"
-        : `不覆写（继承 ${inheritedValue}）`,
+    label: inheritLabel,
     description: "清除 thinkingFormat 覆写",
   });
   return items;
@@ -281,8 +358,9 @@ export function currentValueForReasoning(
   draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,
+  builtIn?: ModelMetaOverride,
 ): string {
-  return fieldStateText("reasoning", draft, inherited, tier);
+  return fieldStateText("reasoning", draft, inherited, tier, builtIn);
 }
 
 /* --------------------------------------------------- main items builder */
@@ -298,6 +376,8 @@ export function buildFormItems(
   draft: ModelMetaOverride,
 ): SettingItemLike[] {
   const inherited = inheritedFor(input, scope);
+  const gate = userMetaForBuiltInGate(draft, inherited);
+  const builtIn = builtInFor(scope, gate);
   const tier = input.tier;
   const stored = storedFor(input, scope);
   const hasAnyOverride =
@@ -323,7 +403,7 @@ export function buildFormItems(
   items.push({
     id: FORM_ITEM_ID.reasoning,
     label: "reasoning",
-    currentValue: currentValueForReasoning(draft, inherited, tier),
+    currentValue: currentValueForReasoning(draft, inherited, tier, builtIn),
     description: "允许 reasoning/thinking；false 在中转拒收时仍用普通模式",
     values: reasoningValues(draft),
   });
@@ -331,23 +411,34 @@ export function buildFormItems(
   items.push({
     id: FORM_ITEM_ID.contextWindow,
     label: "contextWindow",
-    currentValue: fieldStateText("contextWindow", draft, inherited, tier),
+    currentValue: fieldStateText("contextWindow", draft, inherited, tier, builtIn),
     description: "上下文窗口大小",
   });
 
   items.push({
     id: FORM_ITEM_ID.maxTokens,
     label: "maxTokens",
-    currentValue: fieldStateText("maxTokens", draft, inherited, tier),
+    currentValue: fieldStateText("maxTokens", draft, inherited, tier, builtIn),
     description: "单次输出最大 tokens",
   });
 
   items.push({
     id: FORM_ITEM_ID.thinkingFormat,
     label: "thinkingFormat",
-    currentValue: fieldStateText("thinkingFormat", draft, inherited, tier),
-    description: "thinking 块解析格式",
+    currentValue: fieldStateText("thinkingFormat", draft, inherited, tier, builtIn),
+    description: "thinking 块解析格式（内置 profile 可提供 deepseek/qwen 等）",
   });
+
+  if (shouldShowBuiltInCompatRow(scope, draft, inherited)) {
+    items.push({
+      id: FORM_ITEM_ID.useBuiltInCompat,
+      label: "内置compat",
+      currentValue: useBuiltInCompatStateText(draft, inherited),
+      description:
+        "关闭后不再应用 deepseek*/qwen* 等内置 thinking 配置（整表 opt-out）",
+      values: ["不覆写", "关闭", "开启"],
+    });
+  }
 
   if (cleanModelMeta(draft) || stored) {
     items.push({
@@ -576,7 +667,13 @@ export async function runModelMetaForm(
 
     function openThinkingSubmenu(): void {
       const inherited = inheritedFor(input, scope);
-      const opts = thinkingSubmenuOptions(draft, inherited, input.tier).map((o) => ({
+      const gate = userMetaForBuiltInGate(draft, inherited);
+      const opts = thinkingSubmenuOptions(
+        draft,
+        inherited,
+        input.tier,
+        builtInFor(scope, gate),
+      ).map((o) => ({
         value: o.value,
         label: o.label,
         description: o.description,
@@ -757,9 +854,21 @@ export async function runModelMetaForm(
         case FORM_ITEM_ID.thinkingFormat:
           openThinkingSubmenu();
           return;
+        case FORM_ITEM_ID.useBuiltInCompat: {
+          cycleUseBuiltInCompat(draft);
+          rerender();
+          return;
+        }
         case FORM_ITEM_ID.reasoning: {
           // inline cycle 覆写true→覆写false→不覆写→覆写true
-          const cur = currentValueForReasoning(draft, inheritedFor(input, scope), input.tier);
+          const inherited = inheritedFor(input, scope);
+          const gate = userMetaForBuiltInGate(draft, inherited);
+          const cur = currentValueForReasoning(
+            draft,
+            inherited,
+            input.tier,
+            builtInFor(scope, gate),
+          );
           if (cur === "覆写 true") draft.reasoning = false;
           else if (cur === "覆写 false") delete draft.reasoning;
           else draft.reasoning = true;

@@ -20,6 +20,11 @@ import {
   resolveModelMetaLayers,
   summarizeModelMeta,
 } from "./model-meta.ts";
+import {
+  isBuiltInCompatDisabled,
+  matchBuiltInCompatProfile,
+  withBuiltInCompatUnderUser,
+} from "./compat/built-in-compat-profile.ts";
 import { resolveProviderOverride } from "./provider-override.ts";
 import type { ResolvedProviderWireCompat } from "./provider-wire-compat.ts";
 
@@ -350,20 +355,32 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     );
     if (match) {
       const layers = resolveModelMetaLayers(input.config, match, sel.model);
-      const sources: string[] = [];
-      if (layers.base) sources.push("defaultModelMeta");
-      if (layers.provider) sources.push("provider");
-      if (layers.model) sources.push(`model[${layers.modelKey}]`);
+      // Same merge as runtime.modelMetaFor / registration compat (user wins).
+      const effective = withBuiltInCompatUnderUser(sel.model, layers.effective);
+      const builtIn =
+        isBuiltInCompatDisabled(layers.effective)
+          ? undefined
+          : matchBuiltInCompatProfile(sel.model);
+      const userSources: string[] = [];
+      if (layers.base) userSources.push("defaultModelMeta");
+      if (layers.provider) userSources.push("provider");
+      if (layers.model) userSources.push(`model[${layers.modelKey}]`);
+      const sourceBits: string[] = [];
+      if (userSources.length) sourceBits.push(`用户: ${userSources.join(" → ")}`);
+      if (builtIn) sourceBits.push(`内置: ${builtIn.key}`);
+      else if (isBuiltInCompatDisabled(layers.effective) && matchBuiltInCompatProfile(sel.model)) {
+        sourceBits.push("内置: 已关闭");
+      }
       const detail =
-        summarizeModelMeta(layers.effective) +
-        (sources.length ? `（来源: ${sources.join(" → ")}）` : "");
+        summarizeModelMeta(effective) +
+        (sourceBits.length ? `（${sourceBits.join("；")}）` : "");
       checks.push({
         id: "model-meta",
         title: "当前 modelMeta 策略",
         status: "pass",
         detail,
         fix:
-          layers.effective?.reasoning === false
+          effective?.reasoning === false
             ? undefined
             : "若中转报 400 reasoning/thinking，用 /ps-override 选「中转兼容」或设 defaultModelMeta.reasoning=false",
       });

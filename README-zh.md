@@ -241,7 +241,7 @@ Pi 包通常会安装到 `~/.pi/agent/npm/`；如果使用项目局部安装，�
 Enter/Space 切换· Esc 返回 · s 保存
 ```
 
-每行显示 **覆写 / 继承 / 默认** 三态：覆写=本作用域设过，继承=下层设过，默认=协议档。数字常用预设 `200k` / `256k` / `500k` / `1M`，另接受自定义输入（支持 k/M 后缀）。保存后写入 `providerOverrides`，键是 cc-switch 的 **dbId**；按模型写入 `modelOverrides[modelId]`。若该 Provider 当前已激活，会立即重新注册生效。
+每行显示 **覆写 / 继承 / 内置 / 默认**：覆写=本作用域设过，继承=用户配置下层，内置=内置 compat profile，默认=协议档。数字常用预设 `200k` / `256k` / `500k` / `1M`，另接受自定义输入（支持 k/M 后缀）。保存后写入 `providerOverrides`，键是 cc-switch 的 **dbId**；按模型写入 `modelOverrides[modelId]`。若该 Provider 当前已激活，会立即重新注册生效。
 
 ## 运行要求
 
@@ -353,12 +353,38 @@ defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides
 | `maxTokens` | 最大输出 token |
 | `thinkingLevelMap` | 可选：Pi 思考档位（`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`）→ 上游 effort 字符串；`null` 表示不支持 → 注册到模型顶层 |
 | `requiresReasoningContentOnAssistantMessages` | OpenAI 兼容：助手消息回传空 `reasoning_content` → 注册到 `compat` |
+| `useBuiltInCompat` | pi-switch 专用（不发给 Pi）：`false` 关闭内置 compat 整表；未设/`true` 保持默认（命中 id 时应用） |
 
-UI 只编辑四个标量字段（`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`）。`thinkingLevelMap` 等对象字段仅能通过配置文件或写入 API 设置。
+UI 编辑常用字段（`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`）以及 **内置compat** 开关。`thinkingLevelMap` 等对象字段仅能通过配置文件或写入 API 设置。表单行状态为 **覆写 / 继承 / 内置 / 默认**（「内置」= 命中内置 compat profile 且未关闭）。
+
+### 内置 compat profile
+
+models.dev 只覆盖能力标量（`contextWindow` / `maxTokens` / `reasoning`）。部分模型还需要 `thinkingFormat` 等 compat 字段才能正确注册，pi-switch 为**少量**已知族提供代码内置 profile：
+
+| 模型 id 匹配 | 内置字段 |
+| --- | --- |
+| `deepseek*` | `thinkingFormat=deepseek`、`requiresReasoningContentOnAssistantMessages=true`、DeepSeek 风格 `thinkingLevelMap` |
+| `qwen*` | `thinkingFormat=qwen` |
+
+优先级：**用户 override > 内置 profile**。不设置 `contextWindow` / `maxTokens` / `reasoning`（仍走 models.dev → 协议默认）。
+
+**整表关闭内置**：在 `/ps-override` 将「内置compat」设为 **关闭**，或写入：
+
+```json
+{
+  "modelOverrides": {
+    "deepseek-v4-flash": { "useBuiltInCompat": false }
+  }
+}
+```
+
+也可在 provider 级 `modelMeta` 设 `useBuiltInCompat: false` 关掉该 Provider 下全部命中；模型级再设 `true` 可单独打开。`/ps-doctor` 与切换成功通知共用同一套 effective meta；doctor 来源形如 `用户: …；内置: deepseek*`（关闭后不再显示内置）。
 
 ### DeepSeek V4 Flash 示例
 
-compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重新注册目标 Provider/模型，因此同一模型 ID 在不同 Provider 下可使用不同的 `contextWindow` 与 compat。推荐模型覆写：
+compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重新注册目标 Provider/模型，因此同一模型 ID 在不同 Provider 下可使用不同的 `contextWindow` 与 compat。
+
+`deepseek*` 的 thinking compat **已由内置 profile 提供**。若还需要抬高窗口 / 打开 reasoning（models.dev 未命中时），可只覆写能力字段：
 
 ```json
 {
@@ -368,16 +394,7 @@ compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重�
         "deepseek-v4-flash": {
           "reasoning": true,
           "contextWindow": 1000000,
-          "maxTokens": 384000,
-          "thinkingFormat": "deepseek",
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingLevelMap": {
-            "minimal": "high",
-            "low": "high",
-            "medium": "high",
-            "high": "high",
-            "xhigh": "max"
-          }
+          "maxTokens": 384000
         }
       }
     }
@@ -385,13 +402,13 @@ compact 由 Pi 执行，pi-switch 不自行压缩会话。每次切换都会重�
 }
 ```
 
-注册时输出顶层 `thinkingLevelMap` + 嵌套 `compat`（不再输出顶层 `thinkingFormat`）。模型 ID 上的 `[1M]` 标签只设置 `contextWindow=1000000`，**不**等同于完整 DeepSeek compat —— 请显式配置上述字段。
+注册时输出顶层 `thinkingLevelMap` + 嵌套 `compat`（不再输出顶层 `thinkingFormat`）。模型 ID 上的 `[1M]` 标签只设置 `contextWindow=1000000`，**不**代替完整 DeepSeek thinking map（那部分由内置 profile 或用户 override 提供）。
 
 保存后，若该 Provider 当前已激活，pi-switch 会立即重新注册，使覆写马上生效。
 
 最近一次选择会写入 Pi 设置文件中的 `piSwitchSelection`，用于下次打开时高亮当前选择。
 
-> 说明：当前远程模型列表只保留模型 **ID**，不会从 `/models` 导入各模型参数；参数来自协议默认值 + 可选的 `providerOverrides.modelMeta` / `modelOverrides`。
+> 说明：当前远程模型列表只保留模型 **ID**，不会从 `/models` 导入各模型参数；参数来自协议默认值 + 内置 compat profile + 可选的 `providerOverrides.modelMeta` / `modelOverrides`。
 
 ## Header 规则
 

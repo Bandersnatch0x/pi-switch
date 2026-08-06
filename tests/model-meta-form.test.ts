@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import {
   buildFormItems,
+  builtInFor,
   countSubmenuOptions,
   resolveCountPick,
   thinkingSubmenuOptions,
@@ -16,6 +17,10 @@ import {
   formTitle,
   currentValueForReasoning,
   reasoningValues,
+  cycleUseBuiltInCompat,
+  shouldShowBuiltInCompatRow,
+  useBuiltInCompatStateText,
+  userMetaForBuiltInGate,
   CUSTOM_VALUE,
   INHERIT_VALUE,
   CONTEXT_PRESETS,
@@ -66,6 +71,59 @@ describe("scope helpers", () => {
       reasoning: true,
       contextWindow: 100_000,
     });
+  });
+
+  test("builtInFor / form shows 内置 for deepseek thinkingFormat", () => {
+    const scope = { kind: "model" as const, modelId: "deepseek-v4-flash" };
+    expect(builtInFor(scope)?.thinkingFormat).toBe("deepseek");
+    expect(builtInFor({ kind: "provider" })).toBeUndefined();
+
+    const input = baseInput({
+      models: ["deepseek-v4-flash"],
+      scope,
+    });
+    const items = buildFormItems(input, scope, {});
+    const thinking = items.find((i) => i.id === FORM_ITEM_ID.thinkingFormat);
+    expect(thinking?.currentValue).toBe("内置 deepseek");
+    expect(byId(items, FORM_ITEM_ID.useBuiltInCompat)?.currentValue).toBe("默认 开启");
+
+    const opts = thinkingSubmenuOptions({}, undefined, undefined, builtInFor(scope));
+    expect(opts.some((o) => o.label === "不覆写（内置 deepseek）")).toBe(true);
+  });
+
+  test("useBuiltInCompat false hides 内置 and shows 覆写 关闭", () => {
+    const scope = { kind: "model" as const, modelId: "deepseek-v4-flash" };
+    const draft = { useBuiltInCompat: false };
+    expect(builtInFor(scope, userMetaForBuiltInGate(draft, undefined))).toBeUndefined();
+    const items = buildFormItems(
+      baseInput({ models: ["deepseek-v4-flash"], scope }),
+      scope,
+      draft,
+    );
+    expect(byId(items, FORM_ITEM_ID.thinkingFormat)?.currentValue).toBe("默认");
+    expect(byId(items, FORM_ITEM_ID.useBuiltInCompat)?.currentValue).toBe("覆写 关闭");
+  });
+
+  test("cycleUseBuiltInCompat and shouldShowBuiltInCompatRow", () => {
+    const d: ModelMetaOverride = {};
+    cycleUseBuiltInCompat(d);
+    expect(d.useBuiltInCompat).toBe(false);
+    cycleUseBuiltInCompat(d);
+    expect(d.useBuiltInCompat).toBe(true);
+    cycleUseBuiltInCompat(d);
+    expect(d.useBuiltInCompat).toBeUndefined();
+
+    expect(useBuiltInCompatStateText({}, undefined)).toBe("默认 开启");
+    expect(shouldShowBuiltInCompatRow({ kind: "model", modelId: "glm-4.6" }, {}, undefined)).toBe(
+      false,
+    );
+    expect(
+      shouldShowBuiltInCompatRow(
+        { kind: "model", modelId: "deepseek-v4-flash" },
+        {},
+        undefined,
+      ),
+    ).toBe(true);
   });
 
   test("inheritedFor at model scope includes matching glob (not exact)", () => {
@@ -206,6 +264,7 @@ describe("buildFormItems", () => {
       FORM_ITEM_ID.contextWindow,
       FORM_ITEM_ID.maxTokens,
       FORM_ITEM_ID.thinkingFormat,
+      FORM_ITEM_ID.useBuiltInCompat, // provider scope always offers fleet opt-out
       FORM_ITEM_ID.save,
       FORM_ITEM_ID.cancel,
     ]);
