@@ -291,17 +291,24 @@ describe("settings + registration for Chat tuple compat", () => {
           : undefined,
     });
     const models = cfg?.models as Array<{ id: string; compat?: Record<string, unknown> }>;
-    // Provider wire (#62) adds supportsStore=false for unknown Chat relays;
+    // Provider wire (#62/#66) adds conservative Chat wire defaults for unknown relays;
     // exact-model tuple (#64) fields still apply only to the targeted model.
+    const chatWireDefaults = {
+      supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+      requiresToolResultName: false,
+      requiresAssistantAfterToolResult: false,
+    };
     expect(models[0]?.compat).toEqual({
       supportsDeveloperRole: false,
       supportsReasoningEffort: false,
       maxTokensField: "max_tokens",
       thinkingFormat: "openai",
       requiresReasoningContentOnAssistantMessages: true,
-      supportsStore: false,
+      ...chatWireDefaults,
     });
-    expect(models[1]?.compat).toEqual({ supportsStore: false });
+    expect(models[1]?.compat).toEqual(chatWireDefaults);
     expect(models[1]?.compat).not.toHaveProperty("supportsDeveloperRole");
   });
 

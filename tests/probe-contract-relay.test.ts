@@ -864,6 +864,8 @@ describe("Chat Provider wire remaining fields request characterization (#66)", (
       });
       const config = buildProviderConfig(provider, ["relay-model"], {
         rules: [],
+        // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+        modelMeta: { maxTokens: 64_000 },
         providerWireCompat,
       });
       const built = config?.models[0];
@@ -920,6 +922,8 @@ describe("Chat Provider wire remaining fields request characterization (#66)", (
       });
       const config = buildProviderConfig(provider, ["relay-model"], {
         rules: [],
+        // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+        modelMeta: { maxTokens: 64_000 },
         providerWireCompat,
       });
       const built = config?.models[0];
@@ -975,6 +979,8 @@ describe("Chat Provider wire remaining fields request characterization (#66)", (
     });
     const config = buildProviderConfig(provider, ["relay-model"], {
       rules: [],
+      // Issue #63: wire characterization needs a trusted maxTokens so the model registers.
+      modelMeta: { maxTokens: 64_000 },
       providerWireCompat,
     });
     const built = config?.models[0];
