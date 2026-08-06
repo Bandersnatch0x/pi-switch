@@ -1,21 +1,23 @@
 /**
- * Chat Completions exact-model tuple wire compatibility (issue #64).
+ * Exact-model tuple wire compatibility
+ * (issue #64 Chat Completions + #67 Anthropic Messages).
  *
  * Scope: exact Provider/model only. Never Provider/global/default.
  * Authority is independent of model capability and Provider wire compat.
  *
  * Canonical shape under modelOverrides.<exactId>.compat:
- *   { api: "openai-completions", supportsDeveloperRole?, supportsReasoningEffort?,
- *     maxTokensField?, thinkingFormat?, requiresReasoningContentOnAssistantMessages? }
+ *   Chat: { api: "openai-completions", supportsDeveloperRole?, … }
+ *   Anthropic: { api: "anthropic-messages", forceAdaptiveThinking?, supportsTemperature? }
  *
  * Legacy flat modelMeta fields (thinkingFormat / supportsDeveloperRole /
- * requiresReasoningContentOnAssistantMessages) still load with deprecation.
+ * requiresReasoningContentOnAssistantMessages) still load with deprecation for Chat.
  */
 
 import type { ModelMetaOverride, ThinkingFormat } from "./types.ts";
 import { isThinkingFormat } from "./types.ts";
 
 export const CHAT_COMPLETIONS_API = "openai-completions" as const;
+export const ANTHROPIC_MESSAGES_API = "anthropic-messages" as const;
 
 export const MAX_TOKENS_FIELDS = ["max_tokens", "max_completion_tokens"] as const;
 export type MaxTokensField = (typeof MAX_TOKENS_FIELDS)[number];
@@ -24,7 +26,7 @@ export function isMaxTokensField(v: string): v is MaxTokensField {
   return (MAX_TOKENS_FIELDS as readonly string[]).includes(v);
 }
 
-const TUPLE_COMPAT_KEYS = new Set([
+const CHAT_TUPLE_KEYS = new Set([
   "api",
   "supportsDeveloperRole",
   "supportsReasoningEffort",
@@ -33,7 +35,13 @@ const TUPLE_COMPAT_KEYS = new Set([
   "requiresReasoningContentOnAssistantMessages",
 ]);
 
-/** Canonical Chat exact-model tuple wire dialect. */
+const ANTHROPIC_TUPLE_KEYS = new Set([
+  "api",
+  "forceAdaptiveThinking",
+  "supportsTemperature",
+]);
+
+/** Canonical Chat exact-model tuple wire dialect (#64). */
 export interface ChatTupleCompat {
   api: typeof CHAT_COMPLETIONS_API;
   supportsDeveloperRole?: boolean;
@@ -42,6 +50,15 @@ export interface ChatTupleCompat {
   thinkingFormat?: ThinkingFormat;
   requiresReasoningContentOnAssistantMessages?: boolean;
 }
+
+/** Canonical Anthropic exact-model tuple wire dialect (#67). */
+export interface AnthropicTupleCompat {
+  api: typeof ANTHROPIC_MESSAGES_API;
+  forceAdaptiveThinking?: boolean;
+  supportsTemperature?: boolean;
+}
+
+export type ModelTupleCompat = ChatTupleCompat | AnthropicTupleCompat;
 
 export type TupleCompatSource =
   | "user-exact-tuple"
@@ -53,7 +70,9 @@ export type TupleCompatField =
   | "supportsReasoningEffort"
   | "maxTokensField"
   | "thinkingFormat"
-  | "requiresReasoningContentOnAssistantMessages";
+  | "requiresReasoningContentOnAssistantMessages"
+  | "forceAdaptiveThinking"
+  | "supportsTemperature";
 
 export interface ResolvedTupleField<T> {
   value: T;
@@ -78,6 +97,21 @@ export interface ResolvedChatTupleCompat {
   deprecations: string[];
 }
 
+export interface ResolvedAnthropicTupleCompat {
+  api: typeof ANTHROPIC_MESSAGES_API;
+  modelId: string;
+  scope: "exact-model";
+  fields: {
+    forceAdaptiveThinking?: ResolvedTupleField<boolean>;
+    supportsTemperature?: ResolvedTupleField<boolean>;
+  };
+  deprecations: string[];
+}
+
+export type ResolvedModelTupleCompat =
+  | ResolvedChatTupleCompat
+  | ResolvedAnthropicTupleCompat;
+
 /** Registration-facing model.compat slice for pi-ai. */
 export interface RegistrationTupleCompat {
   supportsDeveloperRole?: boolean;
@@ -85,6 +119,8 @@ export interface RegistrationTupleCompat {
   maxTokensField?: MaxTokensField;
   thinkingFormat?: string;
   requiresReasoningContentOnAssistantMessages?: boolean;
+  forceAdaptiveThinking?: boolean;
+  supportsTemperature?: boolean;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -95,65 +131,92 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-/** Parse the exact-model Chat tuple compat contract. */
-export function parseChatTupleCompat(
+function requireBooleanField(
+  raw: Record<string, unknown>,
+  key: string,
+  path: string,
+): boolean | undefined {
+  if (!hasOwn(raw, key)) return undefined;
+  if (typeof raw[key] !== "boolean") {
+    throw new Error(`invalid ${path}.${key}: expected boolean`);
+  }
+  return raw[key] as boolean;
+}
+
+/** Parse exact-model tuple compat (Chat or Anthropic discriminator). */
+export function parseModelTupleCompat(
   raw: unknown,
   path = "model tuple compat",
-): ChatTupleCompat | undefined {
+): ModelTupleCompat | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) {
     throw new Error(`invalid ${path}: expected an object`);
   }
 
-  const unknownKeys = Object.keys(raw).filter((key) => !TUPLE_COMPAT_KEYS.has(key));
-  if (unknownKeys.length) {
-    throw new Error(
-      `invalid ${path}: unknown key${unknownKeys.length === 1 ? "" : "s"} ${unknownKeys.join(", ")}`,
-    );
+  if (raw.api === CHAT_COMPLETIONS_API) {
+    const unknownKeys = Object.keys(raw).filter((key) => !CHAT_TUPLE_KEYS.has(key));
+    if (unknownKeys.length) {
+      throw new Error(
+        `invalid ${path}: unknown key${unknownKeys.length === 1 ? "" : "s"} ${unknownKeys.join(", ")}`,
+      );
+    }
+    const out: ChatTupleCompat = { api: CHAT_COMPLETIONS_API };
+    const sd = requireBooleanField(raw, "supportsDeveloperRole", path);
+    if (typeof sd === "boolean") out.supportsDeveloperRole = sd;
+    const sre = requireBooleanField(raw, "supportsReasoningEffort", path);
+    if (typeof sre === "boolean") out.supportsReasoningEffort = sre;
+    if (hasOwn(raw, "maxTokensField")) {
+      if (typeof raw.maxTokensField !== "string" || !isMaxTokensField(raw.maxTokensField)) {
+        throw new Error(
+          `invalid ${path}.maxTokensField: expected max_tokens|max_completion_tokens`,
+        );
+      }
+      out.maxTokensField = raw.maxTokensField;
+    }
+    if (hasOwn(raw, "thinkingFormat")) {
+      if (typeof raw.thinkingFormat !== "string" || !isThinkingFormat(raw.thinkingFormat)) {
+        throw new Error(`invalid ${path}.thinkingFormat: expected a pi-ai thinkingFormat enum`);
+      }
+      out.thinkingFormat = raw.thinkingFormat;
+    }
+    const rr = requireBooleanField(raw, "requiresReasoningContentOnAssistantMessages", path);
+    if (typeof rr === "boolean") out.requiresReasoningContentOnAssistantMessages = rr;
+    return out;
   }
-  if (raw.api !== CHAT_COMPLETIONS_API) {
+
+  if (raw.api === ANTHROPIC_MESSAGES_API) {
+    const unknownKeys = Object.keys(raw).filter(
+      (key) => !ANTHROPIC_TUPLE_KEYS.has(key),
+    );
+    if (unknownKeys.length) {
+      throw new Error(
+        `invalid ${path}: unknown key${unknownKeys.length === 1 ? "" : "s"} ${unknownKeys.join(", ")}`,
+      );
+    }
+    const out: AnthropicTupleCompat = { api: ANTHROPIC_MESSAGES_API };
+    const fat = requireBooleanField(raw, "forceAdaptiveThinking", path);
+    if (typeof fat === "boolean") out.forceAdaptiveThinking = fat;
+    const st = requireBooleanField(raw, "supportsTemperature", path);
+    if (typeof st === "boolean") out.supportsTemperature = st;
+    return out;
+  }
+
+  throw new Error(
+    `invalid ${path}.api: expected ${CHAT_COMPLETIONS_API} or ${ANTHROPIC_MESSAGES_API}`,
+  );
+}
+
+/** @deprecated Prefer parseModelTupleCompat — Chat-only alias for #64 callers. */
+export function parseChatTupleCompat(
+  raw: unknown,
+  path = "model tuple compat",
+): ChatTupleCompat | undefined {
+  const parsed = parseModelTupleCompat(raw, path);
+  if (!parsed) return undefined;
+  if (parsed.api !== CHAT_COMPLETIONS_API) {
     throw new Error(`invalid ${path}.api: expected ${CHAT_COMPLETIONS_API}`);
   }
-
-  const out: ChatTupleCompat = { api: CHAT_COMPLETIONS_API };
-
-  if (hasOwn(raw, "supportsDeveloperRole")) {
-    if (typeof raw.supportsDeveloperRole !== "boolean") {
-      throw new Error(`invalid ${path}.supportsDeveloperRole: expected boolean`);
-    }
-    out.supportsDeveloperRole = raw.supportsDeveloperRole;
-  }
-  if (hasOwn(raw, "supportsReasoningEffort")) {
-    if (typeof raw.supportsReasoningEffort !== "boolean") {
-      throw new Error(`invalid ${path}.supportsReasoningEffort: expected boolean`);
-    }
-    out.supportsReasoningEffort = raw.supportsReasoningEffort;
-  }
-  if (hasOwn(raw, "maxTokensField")) {
-    if (typeof raw.maxTokensField !== "string" || !isMaxTokensField(raw.maxTokensField)) {
-      throw new Error(
-        `invalid ${path}.maxTokensField: expected max_tokens|max_completion_tokens`,
-      );
-    }
-    out.maxTokensField = raw.maxTokensField;
-  }
-  if (hasOwn(raw, "thinkingFormat")) {
-    if (typeof raw.thinkingFormat !== "string" || !isThinkingFormat(raw.thinkingFormat)) {
-      throw new Error(`invalid ${path}.thinkingFormat: expected a pi-ai thinkingFormat enum`);
-    }
-    out.thinkingFormat = raw.thinkingFormat;
-  }
-  if (hasOwn(raw, "requiresReasoningContentOnAssistantMessages")) {
-    if (typeof raw.requiresReasoningContentOnAssistantMessages !== "boolean") {
-      throw new Error(
-        `invalid ${path}.requiresReasoningContentOnAssistantMessages: expected boolean`,
-      );
-    }
-    out.requiresReasoningContentOnAssistantMessages =
-      raw.requiresReasoningContentOnAssistantMessages;
-  }
-
-  return out;
+  return parsed;
 }
 
 /** Legacy flat fields that map onto tuple compat (issue #64 deprecation path). */
@@ -209,19 +272,28 @@ export function resolveChatTupleCompat(input: {
 }): ResolvedChatTupleCompat | undefined {
   const { modelId, providerApi, tuple, legacyFlat, officialOpenAi } = input;
   if (tuple && tuple.api !== CHAT_COMPLETIONS_API) {
-    throw new Error(
-      `tuple compat api ${tuple.api} is not ${CHAT_COMPLETIONS_API}`,
-    );
+    // Soft-ignore wrong-API leftover (Anthropic tuple on Chat provider).
+    if (tuple.api === ANTHROPIC_MESSAGES_API) {
+      // Fall through as if no tuple — still allow legacy flat Chat fields.
+    } else {
+      throw new Error(
+        `tuple compat api ${tuple.api} is not ${CHAT_COMPLETIONS_API}`,
+      );
+    }
   }
-  if (tuple && providerApi && providerApi !== CHAT_COMPLETIONS_API) {
+  const chatTuple =
+    tuple && tuple.api === CHAT_COMPLETIONS_API ? tuple : undefined;
+  if (chatTuple && providerApi && providerApi !== CHAT_COMPLETIONS_API) {
     throw new Error(
-      `tuple compat api ${tuple.api} does not match provider api ${providerApi}`,
+      `tuple compat api ${chatTuple.api} does not match provider api ${providerApi}`,
     );
   }
   // Non-Chat providers never receive Chat tuple resolution.
-  if (providerApi && providerApi !== CHAT_COMPLETIONS_API && !tuple) {
+  if (providerApi && providerApi !== CHAT_COMPLETIONS_API && !chatTuple) {
     return undefined;
   }
+  // Use chatTuple instead of tuple below.
+  const tupleChat = chatTuple;
 
   const legacy = legacyFlatTuple(legacyFlat);
   const deprecations: string[] = [];
@@ -268,26 +340,26 @@ export function resolveChatTupleCompat(input: {
 
   mergeBool(
     "supportsDeveloperRole",
-    tuple?.supportsDeveloperRole,
+    tupleChat?.supportsDeveloperRole,
     legacy.supportsDeveloperRole,
   );
   mergeBool(
     "requiresReasoningContentOnAssistantMessages",
-    tuple?.requiresReasoningContentOnAssistantMessages,
+    tupleChat?.requiresReasoningContentOnAssistantMessages,
     legacy.requiresReasoningContentOnAssistantMessages,
   );
 
   // supportsReasoningEffort + maxTokensField: tuple-only (no legacy flat).
-  if (typeof tuple?.supportsReasoningEffort === "boolean") {
+  if (typeof tupleChat?.supportsReasoningEffort === "boolean") {
     fields.supportsReasoningEffort = {
-      value: tuple.supportsReasoningEffort,
+      value: tupleChat.supportsReasoningEffort,
       source: "user-exact-tuple",
       scope: "exact-model",
     };
   }
-  if (tuple?.maxTokensField) {
+  if (tupleChat?.maxTokensField) {
     fields.maxTokensField = {
-      value: tuple.maxTokensField,
+      value: tupleChat.maxTokensField,
       source: "user-exact-tuple",
       scope: "exact-model",
     };
@@ -295,16 +367,16 @@ export function resolveChatTupleCompat(input: {
 
   // thinkingFormat: tuple or legacy flat
   {
-    const hasTuple = typeof tuple?.thinkingFormat === "string";
+    const hasTuple = typeof tupleChat?.thinkingFormat === "string";
     const hasLegacy = typeof legacy.thinkingFormat === "string";
-    if (hasTuple && hasLegacy && tuple!.thinkingFormat !== legacy.thinkingFormat) {
+    if (hasTuple && hasLegacy && tupleChat!.thinkingFormat !== legacy.thinkingFormat) {
       throw new Error(
-        `tuple compat conflict on thinkingFormat: tuple=${tuple!.thinkingFormat} vs legacy flat=${legacy.thinkingFormat}`,
+        `tuple compat conflict on thinkingFormat: tuple=${tupleChat!.thinkingFormat} vs legacy flat=${legacy.thinkingFormat}`,
       );
     }
     if (hasTuple) {
       fields.thinkingFormat = {
-        value: tuple!.thinkingFormat as ThinkingFormat,
+        value: tupleChat!.thinkingFormat as ThinkingFormat,
         source: "user-exact-tuple",
         scope: "exact-model",
         ...(hasLegacy ? { deprecated: true } : {}),
@@ -354,12 +426,102 @@ export function resolveChatTupleCompat(input: {
   };
 }
 
+/**
+ * Resolve Anthropic exact-model tuple (#67).
+ * Only explicit exact-model config produces fields — no protocol/id/models.dev
+ * guessing and no Provider wire inheritance.
+ */
+export function resolveAnthropicTupleCompat(input: {
+  modelId: string;
+  providerApi: string | null | undefined;
+  tuple?: AnthropicTupleCompat;
+}): ResolvedAnthropicTupleCompat | undefined {
+  const { modelId, providerApi, tuple } = input;
+  if (tuple && tuple.api !== ANTHROPIC_MESSAGES_API) {
+    // Soft-ignore Chat leftover on Anthropic provider.
+    if (tuple.api === CHAT_COMPLETIONS_API) return undefined;
+    throw new Error(
+      `tuple compat api ${(tuple as { api: string }).api} is not ${ANTHROPIC_MESSAGES_API}`,
+    );
+  }
+  // Soft-ignore leftover Anthropic tuple on a non-Anthropic provider.
+  if (tuple && providerApi && providerApi !== ANTHROPIC_MESSAGES_API) {
+    return undefined;
+  }
+  if (providerApi && providerApi !== ANTHROPIC_MESSAGES_API && !tuple) {
+    return undefined;
+  }
+  if (!tuple) return undefined;
+
+  const fields: ResolvedAnthropicTupleCompat["fields"] = {};
+  if (typeof tuple.forceAdaptiveThinking === "boolean") {
+    fields.forceAdaptiveThinking = {
+      value: tuple.forceAdaptiveThinking,
+      source: "user-exact-tuple",
+      scope: "exact-model",
+    };
+  }
+  if (typeof tuple.supportsTemperature === "boolean") {
+    fields.supportsTemperature = {
+      value: tuple.supportsTemperature,
+      source: "user-exact-tuple",
+      scope: "exact-model",
+    };
+  }
+  if (!Object.keys(fields).length) return undefined;
+
+  return {
+    api: ANTHROPIC_MESSAGES_API,
+    modelId,
+    scope: "exact-model",
+    fields,
+    deprecations: [],
+  };
+}
+
+/** Dispatch resolve by provider API / tuple discriminator. */
+export function resolveModelTupleCompat(input: {
+  modelId: string;
+  providerApi: string | null | undefined;
+  tuple?: ModelTupleCompat;
+  legacyFlat?: LegacyFlatTupleFields;
+  officialOpenAi?: boolean;
+}): ResolvedModelTupleCompat | undefined {
+  const { providerApi, tuple } = input;
+  if (tuple?.api === ANTHROPIC_MESSAGES_API || providerApi === ANTHROPIC_MESSAGES_API) {
+    return resolveAnthropicTupleCompat({
+      modelId: input.modelId,
+      providerApi,
+      tuple: tuple?.api === ANTHROPIC_MESSAGES_API ? tuple : undefined,
+    });
+  }
+  return resolveChatTupleCompat({
+    modelId: input.modelId,
+    providerApi,
+    tuple: tuple?.api === CHAT_COMPLETIONS_API ? tuple : undefined,
+    legacyFlat: input.legacyFlat,
+    officialOpenAi: input.officialOpenAi,
+  });
+}
+
 /** Map resolved tuple to pi-ai model.compat registration fields. */
 export function tupleCompatForRegistration(
-  resolved: ResolvedChatTupleCompat | undefined,
+  resolved: ResolvedModelTupleCompat | undefined,
 ): RegistrationTupleCompat | undefined {
   if (!resolved) return undefined;
   const out: RegistrationTupleCompat = {};
+
+  if (resolved.api === ANTHROPIC_MESSAGES_API) {
+    const f = resolved.fields;
+    if (f.forceAdaptiveThinking) {
+      out.forceAdaptiveThinking = f.forceAdaptiveThinking.value;
+    }
+    if (f.supportsTemperature) {
+      out.supportsTemperature = f.supportsTemperature.value;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
   const f = resolved.fields;
   // Official adapter developer role stays native — do not emit an override.
   if (
@@ -387,6 +549,15 @@ export function tupleCompatForRegistration(
 export function isOfficialOpenAiChatEndpoint(baseUrl: string): boolean {
   try {
     return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+export function isOfficialAnthropicEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
   } catch {
     return false;
   }

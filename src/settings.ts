@@ -29,8 +29,8 @@ import {
   type ProviderWireCompat,
 } from "./provider-wire-compat.ts";
 import {
-  parseChatTupleCompat,
-  type ChatTupleCompat,
+  parseModelTupleCompat,
+  type ModelTupleCompat,
 } from "./model-tuple-compat.ts";
 import {
   readJsonObjectLenient,
@@ -250,6 +250,19 @@ function rejectNestedWireCompat(value: unknown, path: string): void {
   }
 }
 
+/** Exact-model tuple keys that must not appear at Provider scope. */
+function looksLikeExactModelTupleCompat(c: Record<string, unknown>): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(c, "supportsDeveloperRole") ||
+    Object.prototype.hasOwnProperty.call(c, "supportsReasoningEffort") ||
+    Object.prototype.hasOwnProperty.call(c, "maxTokensField") ||
+    Object.prototype.hasOwnProperty.call(c, "thinkingFormat") ||
+    Object.prototype.hasOwnProperty.call(c, "requiresReasoningContentOnAssistantMessages") ||
+    Object.prototype.hasOwnProperty.call(c, "forceAdaptiveThinking") ||
+    Object.prototype.hasOwnProperty.call(c, "supportsTemperature")
+  );
+}
+
 function parseModelOverrideEntry(
   raw: Record<string, unknown>,
   path: string,
@@ -257,7 +270,7 @@ function parseModelOverrideEntry(
   const meta = parseModelMeta(raw) ?? {};
   const entry: ModelOverrideEntry = { ...meta };
   if (hasOwn(raw, "compat")) {
-    entry.compat = parseChatTupleCompat(raw.compat, `${path}.compat`);
+    entry.compat = parseModelTupleCompat(raw.compat, `${path}.compat`);
   }
   return entry;
 }
@@ -284,14 +297,9 @@ function parseProviderOverrideEntry(
   // Provider-scope compat is Provider wire (#62), never Chat tuple (#64).
   if (hasOwn(raw, "compat")) {
     const c = raw.compat;
-    if (
-      isPlainObject(c) &&
-      (hasOwn(c, "supportsDeveloperRole") ||
-        hasOwn(c, "supportsReasoningEffort") ||
-        hasOwn(c, "maxTokensField"))
-    ) {
+    if (isPlainObject(c) && looksLikeExactModelTupleCompat(c)) {
       throw new Error(
-        `invalid ${path}.compat scope: Chat tuple compat belongs under modelOverrides.<model>.compat`,
+        `invalid ${path}.compat scope: exact-model tuple compat belongs under modelOverrides.<model>.compat`,
       );
     }
     next.compat = parseProviderWireCompat(raw.compat, `${path}.compat`);
@@ -654,19 +662,19 @@ export function writeProviderModelMeta(
   return writeModelMetaOverride(fs, configPath, provider, { kind: "provider" }, modelMeta, pid);
 }
 
-export function writeChatTupleCompat(
+export function writeModelTupleCompat(
   fs: FsLike,
   configPath: string,
   provider: Pick<CcProvider, "id" | "displayName" | "api"> & { appType?: string },
   modelId: string,
-  compat: ChatTupleCompat | null,
+  compat: ModelTupleCompat | null,
   pid: number,
 ): { ok: boolean; error?: string } {
   try {
     const id = modelId.trim();
     if (!id) return { ok: false, error: "empty model id" };
     const parsed = compat
-      ? parseChatTupleCompat(compat, "model tuple compat")
+      ? parseModelTupleCompat(compat, "model tuple compat")
       : undefined;
     if (parsed && provider.api && provider.api !== parsed.api) {
       return {
@@ -713,6 +721,9 @@ export function writeChatTupleCompat(
     };
   }
 }
+
+/** @deprecated Use writeModelTupleCompat (Chat #64 / Anthropic #67). */
+export const writeChatTupleCompat = writeModelTupleCompat;
 
 /** Legacy pin key (pre-identity-migration); still used for back-compat matching. */
 export function pinKey(dbId: string, model: string): string {
