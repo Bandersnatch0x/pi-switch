@@ -153,7 +153,7 @@ describe("runDoctor", () => {
     expect(check?.fix).toContain("providerOverrides");
   });
 
-  test("stale Chat wire override on a non-Chat selection does not crash doctor", () => {
+  test("stale Chat wire override on Anthropic selection does not crash doctor (#65)", () => {
     const p = mk({
       id: "claude-relay",
       displayName: "claude",
@@ -161,12 +161,13 @@ describe("runDoctor", () => {
       api: "anthropic-messages",
       baseUrl: "https://relay.example",
     });
-    // Leftover Chat compat after API change: soft-fail to undefined, doctor still runs.
+    // Leftover Chat compat is ignored; Anthropic still resolves its own defaults.
     const providerWireCompat = resolveProviderWireCompat({
       provider: p,
       override: { api: "openai-completions", supportsStore: true },
     });
-    expect(providerWireCompat).toBeUndefined();
+    expect(providerWireCompat?.api).toBe("anthropic-messages");
+    expect(providerWireCompat?.source).toBe("conservative-default");
 
     const report = runDoctor({
       home: "/h",
@@ -181,9 +182,13 @@ describe("runDoctor", () => {
     });
 
     expect(report.summary.fail).toBe(0);
-    expect(
-      report.checks.find((candidate) => candidate.id === "provider-wire-compat"),
-    ).toBeUndefined();
+    const check = report.checks.find(
+      (candidate) => candidate.id === "provider-wire-compat",
+    );
+    expect(check?.status).toBe("pass");
+    expect(check?.detail).toContain("anthropic-messages");
+    expect(check?.detail).toContain("supportsEagerToolInputStreaming=false");
+    expect(check?.detail).not.toContain("secret");
   });
 
   test("warns when fingerprint uses fallbacks", () => {

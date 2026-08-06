@@ -413,7 +413,7 @@ describe("buildProviderConfig", () => {
     }
   });
 
-  test("official OpenAI and non-Chat APIs do not receive a model compat override", () => {
+  test("official OpenAI does not receive supportsStore; Anthropic relay gets Anthropic defaults (#65)", () => {
     const official = buildProviderConfig(
       mk({
         id: "official-openai",
@@ -438,7 +438,60 @@ describe("buildProviderConfig", () => {
     expect(official?.models[0]).toBeDefined();
     expect(anthropic?.models[0]).toBeDefined();
     expect(official?.models[0]?.compat?.supportsStore).toBeUndefined();
+    // Unknown Anthropic relay: conservative false for all three (#65).
+    expect(anthropic?.models[0]?.compat).toMatchObject({
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+    });
     expect(anthropic?.models[0]?.compat?.supportsStore).toBeUndefined();
+  });
+
+  test("Anthropic Provider wire overrides reach every registered model (#65)", () => {
+    const relay = mk({
+      id: "anthropic-relay",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+    });
+    const providerWireCompat = resolveProviderWireCompat({
+      provider: relay,
+      override: {
+        api: "anthropic-messages",
+        supportsEagerToolInputStreaming: false,
+        supportsCacheControlOnTools: true,
+        supportsLongCacheRetention: false,
+      },
+    });
+    const cfg = buildProviderConfig(relay, ["model-a", "model-b"], {
+      rules: [],
+      providerWireCompat,
+    });
+
+    for (const model of cfg?.models ?? []) {
+      expect(model.compat).toMatchObject({
+        supportsEagerToolInputStreaming: false,
+        supportsCacheControlOnTools: true,
+        supportsLongCacheRetention: false,
+      });
+      expect(model.compat?.supportsStore).toBeUndefined();
+    }
+  });
+
+  test("official Anthropic does not emit Anthropic wire overrides (#65)", () => {
+    const cfg = buildProviderConfig(
+      mk({
+        id: "official-anthropic",
+        appType: "claude",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+      ["claude-sonnet"],
+      { rules: [] },
+    );
+    expect(cfg?.models[0]?.compat?.supportsEagerToolInputStreaming).toBeUndefined();
+    expect(cfg?.models[0]?.compat?.supportsCacheControlOnTools).toBeUndefined();
+    expect(cfg?.models[0]?.compat?.supportsLongCacheRetention).toBeUndefined();
   });
 
   test("omitting providerWireCompat applies defaults only; providerWireOverride restores user fact", () => {

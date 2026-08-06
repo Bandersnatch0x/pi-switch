@@ -530,23 +530,32 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     });
   }
 
-  // 11.5 Provider wire compat (issue #62): provenance + override conflicts
+  // 11.5 Provider wire compat (issue #62 Chat + #65 Anthropic)
   if (input.providerWireCompat) {
     const wire = input.providerWireCompat;
     const conflictRows = wire.conflicts.map(
       (c) =>
         `${c.field}=${c.effective}(${c.effectiveSource}, scope=${wire.scope}) vs ${c.overridden}(${c.overriddenSource})`,
     );
+    let facts: string;
+    if (wire.api === "openai-completions") {
+      facts = `supportsStore=${wire.value}(${wire.source}, scope=${wire.scope})`;
+    } else {
+      const fieldParts = Object.entries(wire.fields).map(
+        ([name, entry]) => `${name}=${entry.value}(${entry.source})`,
+      );
+      facts = `api=anthropic-messages scope=${wire.scope} · ${fieldParts.join(" · ")}`;
+    }
     const detail = conflictRows.length
-      ? conflictRows.join("；")
-      : `supportsStore=${wire.value}(${wire.source}, scope=${wire.scope})`;
+      ? `${facts}；${conflictRows.join("；")}`
+      : facts;
     checks.push({
       id: "provider-wire-compat",
       title: "Provider 请求线兼容",
       status: conflictRows.length ? "warn" : "pass",
       detail,
       fix: conflictRows.length
-        ? "显式 providerOverrides.<provider>.compat 覆盖了官方 adapter 事实；确认中转是否真的不支持 store，或删除该覆写"
+        ? "显式 providerOverrides.<provider>.compat 覆盖了官方 adapter 事实；确认中转是否真的不支持该 wire 能力，或删除该覆写"
         : undefined,
     });
   }
