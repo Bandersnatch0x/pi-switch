@@ -10,6 +10,7 @@ import type { ModelMetaOverride, PiApi } from "../types.ts";
 import { API_MODEL_META, DEFAULT_MODEL_META } from "../types.ts";
 import { applyAnyrouterModelMeta } from "../headers/anyrouter.ts";
 import { bracketContextWindow } from "../parse/common.ts";
+import { mergeBuiltInCompatUnderUser } from "../compat/built-in-compat-profile.ts";
 import type { ModelsDevCapabilities } from "./models-dev.ts";
 import {
   isMaxTokensResolved,
@@ -45,6 +46,7 @@ export function ccMetaFrom(
  * Protocol structural floors for registration/doctor.
  * Issue #63: contextWindow may still use protocol tier; maxTokens and
  * reasoning must NOT — those come only from the trusted authority chain.
+ * Compat fields come later via mergeBuiltInCompatUnderUser (user > built-in).
  */
 export function protocolCapabilityDefaults(
   api: PiApi | null | undefined,
@@ -151,13 +153,13 @@ export function resolveRegistrationCapability(input: {
     maxTokens: resolved.maxTokens.value as number,
     reasoning: resolved.reasoning.value === true,
   };
-  // Compat/effort fields come only from user config (not capability layers).
-  const user = input.userMeta;
-  if (user?.thinkingFormat) out.thinkingFormat = user.thinkingFormat;
-  if (user?.thinkingLevelMap) out.thinkingLevelMap = user.thinkingLevelMap;
-  if (typeof user?.requiresReasoningContentOnAssistantMessages === "boolean") {
+  // Compat/effort: user override > built-in profile (not capability layers).
+  const compat = mergeBuiltInCompatUnderUser(input.modelId, input.userMeta);
+  if (compat?.thinkingFormat) out.thinkingFormat = compat.thinkingFormat;
+  if (compat?.thinkingLevelMap) out.thinkingLevelMap = compat.thinkingLevelMap;
+  if (typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean") {
     out.requiresReasoningContentOnAssistantMessages =
-      user.requiresReasoningContentOnAssistantMessages;
+      compat.requiresReasoningContentOnAssistantMessages;
   }
   return {
     resolved,
@@ -194,12 +196,13 @@ export function resolveRegistrationMeta(input: {
         : defaults.contextWindow,
     reasoning: decision.resolved.reasoning.value === true,
   };
-  const user = input.userMeta;
-  if (user?.thinkingFormat) out.thinkingFormat = user.thinkingFormat;
-  if (user?.thinkingLevelMap) out.thinkingLevelMap = user.thinkingLevelMap;
-  if (typeof user?.requiresReasoningContentOnAssistantMessages === "boolean") {
+  // Same compat merge as the resolved path (user > built-in).
+  const compat = mergeBuiltInCompatUnderUser(input.modelId, input.userMeta);
+  if (compat?.thinkingFormat) out.thinkingFormat = compat.thinkingFormat;
+  if (compat?.thinkingLevelMap) out.thinkingLevelMap = compat.thinkingLevelMap;
+  if (typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean") {
     out.requiresReasoningContentOnAssistantMessages =
-      user.requiresReasoningContentOnAssistantMessages;
+      compat.requiresReasoningContentOnAssistantMessages;
   }
   return out;
 }

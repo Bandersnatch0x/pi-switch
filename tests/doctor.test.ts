@@ -91,10 +91,59 @@ describe("runDoctor", () => {
     });
     const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
     expect(detail).toContain("reasoning=false");
-    expect(detail).toContain("defaultModelMeta");
-    expect(detail).toContain("provider");
-    expect(detail).toContain("model[glm-4.6]");
+    expect(detail).toContain("用户: defaultModelMeta → provider → model[glm-4.6]");
     expect(report.checks.find((c) => c.id === "model-overrides")?.status).toBe("pass");
+  });
+
+  test("model-meta includes builtInCompat source for deepseek*", () => {
+    const p = mk({
+      id: "1",
+      displayName: "ds",
+      appType: "hermes",
+      configModels: ["deepseek-v4-flash"],
+    });
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "/usr/bin/sqlite3",
+      providers: [p],
+      selection: { dbId: "1", model: "deepseek-v4-flash" },
+      config: {},
+      headerRuleCount: 0,
+    });
+    const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
+    expect(detail).toContain("thinkingFormat=deepseek");
+    expect(detail).toContain("内置: deepseek*");
+    expect(detail).not.toContain("builtInCompat[");
+  });
+
+  test("model-meta shows 内置: 已关闭 when useBuiltInCompat is false", () => {
+    const p = mk({
+      id: "1",
+      displayName: "ds",
+      appType: "hermes",
+      configModels: ["deepseek-v4-flash"],
+    });
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "/usr/bin/sqlite3",
+      providers: [p],
+      selection: { dbId: "1", model: "deepseek-v4-flash" },
+      config: {
+        providerOverrides: {
+          "1": { modelOverrides: { "deepseek-v4-flash": { useBuiltInCompat: false } } },
+        },
+      },
+      headerRuleCount: 0,
+    });
+    const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
+    expect(detail).toContain("useBuiltInCompat=false");
+    expect(detail).toContain("内置: 已关闭");
+    expect(detail).not.toContain("thinkingFormat=deepseek");
+    expect(detail).not.toContain("内置: deepseek*");
   });
 
   test("warns on per-model override keys missing from the provider", () => {

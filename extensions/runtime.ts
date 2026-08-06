@@ -17,6 +17,7 @@ import { createLocalState, type LocalState } from "../src/local-state.ts";
 import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
 import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
 import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
+import { withBuiltInCompatUnderUser } from "../src/compat/built-in-compat-profile.ts";
 import { resolveRoutingProbeUrl, ROUTING_PROBE_TIMEOUT_MS } from "../src/routing.ts";
 import {
   CAPABILITIES_FAILURE_COOLDOWN_MS,
@@ -424,7 +425,8 @@ export class Runtime {
   /** Resolve capability facts for a provider/model (full #36/#63 priority chain). */
   capabilitiesFor(provider: CcProvider, modelId: string) {
     const cache = this.modelsDevFor(modelId);
-    const user = this.modelMetaFor(provider, modelId);
+    // User-config layers only — built-in compat is not a capability source.
+    const user = resolveEffectiveModelMeta(this.config, provider, modelId);
     const api = provider.api;
     const tier = api ? API_MODEL_META[api] : undefined;
     // Issue #63: protocol defaults supply contextWindow/vision only — never
@@ -538,12 +540,20 @@ export class Runtime {
     };
   }
 
-  /** Effective modelMeta: model override > provider override > defaultModelMeta. */
+  /**
+   * Registration/display effective modelMeta:
+   *   built-in compat < defaultModelMeta < provider.modelMeta < modelOverrides
+   * (user wins per field). Same compat resolveRegistrationMeta applies.
+   * For user-config layers only, use modelMetaLayers(...).effective.
+   */
   modelMetaFor(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
   ) {
-    return resolveEffectiveModelMeta(this.config, provider, modelId);
+    return withBuiltInCompatUnderUser(
+      modelId,
+      resolveEffectiveModelMeta(this.config, provider, modelId),
+    );
   }
 
   /**

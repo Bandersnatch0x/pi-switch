@@ -373,7 +373,14 @@ describe("buildProviderConfig", () => {
       supportsStore: false,
     });
     expect(b.contextWindow).toBe(128_000);
-    expect(b.compat).toMatchObject({ thinkingFormat: "openai", supportsStore: false });
+    // User only overrides thinkingFormat; built-in deepseek* still fills
+    // requiresReasoningContentOnAssistantMessages (user wins per field).
+    // Provider wire (#62/#66) also adds conservative Chat wire defaults.
+    expect(b.compat).toMatchObject({
+      thinkingFormat: "openai",
+      requiresReasoningContentOnAssistantMessages: true,
+      supportsStore: false,
+    });
   });
 
   test("unknown Chat relay defaults all Chat wire fields conservatively (#66)", () => {

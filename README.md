@@ -243,7 +243,7 @@ Parameter override · elysiver-claude · model glm-4.6 ✱
 Enter/Space switch or open submenu · Esc back · s save
 ```
 
-Each row reads one of three states: **override** (set in this scope), **inherit** (a lower layer set it), **default** (protocol tier). Count fields offer common presets (`200k`, `256k`, `500k`, `1M`) plus custom input (k/M suffix). Saving writes `providerOverrides` keyed by the cc-switch **dbId**; model-scope edits go under `modelOverrides[modelId]` (default scope is the preselected model when opened from the picker's `o` key; the § submenu switches to provider-scope or another model/glob). If that provider is currently active, pi-switch re-registers it immediately.
+Each row reads one of four states: **override** (set in this scope), **inherit** (a lower user-config layer), **built-in** (built-in compat profile), **default** (protocol tier). Count fields offer common presets (`200k`, `256k`, `500k`, `1M`) plus custom input (k/M suffix). Saving writes `providerOverrides` keyed by the cc-switch **dbId**; model-scope edits go under `modelOverrides[modelId]` (default scope is the preselected model when opened from the picker's `o` key; the § submenu switches to provider-scope or another model/glob). If that provider is currently active, pi-switch re-registers it immediately.
 
 ## Requirements
 
@@ -355,12 +355,38 @@ Supported `modelMeta` fields (stored flat in `pi-switch.json`; registration resh
 | `maxTokens` | Max output tokens |
 | `thinkingLevelMap` | Optional map of Pi levels (`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`) → provider effort strings, or `null` for unsupported → registered top-level |
 | `requiresReasoningContentOnAssistantMessages` | OpenAI-compat: require empty `reasoning_content` on assistant turns → registered under `compat` |
+| `useBuiltInCompat` | pi-switch only (not sent to Pi): `false` disables the whole built-in compat profile; unset/`true` keeps the default (apply when id matches) |
 
-The UI only edits the four scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`). Object fields such as `thinkingLevelMap` are config-only (edit `pi-switch.json` or call the write APIs).
+The UI edits the common scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`) plus the **内置compat** toggle. Object fields such as `thinkingLevelMap` are config-only (edit `pi-switch.json` or call the write APIs). Each form row shows **override / inherit / built-in / default** (built-in = matched profile and not opted out).
+
+### Built-in compat profiles
+
+models.dev covers capability scalars (`contextWindow` / `maxTokens` / `reasoning`) only. Some models also need compat fields such as `thinkingFormat` to register correctly. pi-switch ships a **small** in-code profile table for known families:
+
+| Model id match | Built-in fields |
+| --- | --- |
+| `deepseek*` | `thinkingFormat=deepseek`, `requiresReasoningContentOnAssistantMessages=true`, DeepSeek-style `thinkingLevelMap` |
+| `qwen*` | `thinkingFormat=qwen` |
+
+Precedence: **user override > built-in profile**. Profiles never set `contextWindow` / `maxTokens` / `reasoning` (those still flow models.dev → protocol default).
+
+**Disable the whole profile**: in `/ps-override` set **内置compat → 关闭**, or write:
+
+```json
+{
+  "modelOverrides": {
+    "deepseek-v4-flash": { "useBuiltInCompat": false }
+  }
+}
+```
+
+Provider-scope `modelMeta.useBuiltInCompat: false` turns it off for all matching models under that provider; a model-scope `true` re-enables one id. `/ps-doctor` and the post-switch notify share the same effective meta; doctor sources look like `用户: …；内置: deepseek*` (omitted when disabled).
 
 ### DeepSeek V4 Flash example
 
-Compact is executed by Pi itself; pi-switch does not compress sessions. Per-switch registration means the same model id can use different `contextWindow` / compat under different providers. A recommended model override:
+Compact is executed by Pi itself; pi-switch does not compress sessions. Per-switch registration means the same model id can use different `contextWindow` / compat under different providers.
+
+Thinking compat for `deepseek*` is **already supplied by the built-in profile**. To raise the window / enable reasoning when models.dev misses, override only the capability fields:
 
 ```json
 {
@@ -370,16 +396,7 @@ Compact is executed by Pi itself; pi-switch does not compress sessions. Per-swit
         "deepseek-v4-flash": {
           "reasoning": true,
           "contextWindow": 1000000,
-          "maxTokens": 384000,
-          "thinkingFormat": "deepseek",
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingLevelMap": {
-            "minimal": "high",
-            "low": "high",
-            "medium": "high",
-            "high": "high",
-            "xhigh": "max"
-          }
+          "maxTokens": 384000
         }
       }
     }
@@ -387,13 +404,13 @@ Compact is executed by Pi itself; pi-switch does not compress sessions. Per-swit
 }
 ```
 
-At register time this becomes Pi model config with top-level `thinkingLevelMap` and nested `compat` (no top-level `thinkingFormat`). The `[1M]` model-id tag only sets `contextWindow=1000000`; it does **not** imply DeepSeek compat — set the fields above explicitly.
+At register time this becomes Pi model config with top-level `thinkingLevelMap` and nested `compat` (no top-level `thinkingFormat`). The `[1M]` model-id tag only sets `contextWindow=1000000`; it does **not** replace the DeepSeek thinking map (that comes from the built-in profile or a user override).
 
 After save, if the provider is currently active, pi-switch re-registers it so the override applies immediately.
 
 The latest selection is stored as `piSwitchSelection` in Pi settings, so it can be highlighted the next time the switcher opens.
 
-> Note: remote model list fetching currently returns model **IDs only**. Per-model parameters are not imported from `/models`; use protocol defaults plus `providerOverrides.modelMeta` / `modelOverrides` instead.
+> Note: remote model list fetching currently returns model **IDs only**. Per-model parameters are not imported from `/models`; use protocol defaults plus built-in compat profiles plus `providerOverrides.modelMeta` / `modelOverrides` instead.
 
 ## Header Rules
 
