@@ -1,10 +1,14 @@
 /** @see src/compat/gemini-tool-compat.ts — single source of truth */
 import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 import type { ProviderWireCompat } from "./provider-wire-compat.ts";
-import type { ChatTupleCompat } from "./model-tuple-compat.ts";
+import type {
+  AnthropicTupleCompat,
+  ChatTupleCompat,
+  ModelTupleCompat,
+} from "./model-tuple-compat.ts";
 export type { GeminiToolCompatConfig };
 export type { ProviderWireCompat };
-export type { ChatTupleCompat };
+export type { AnthropicTupleCompat, ChatTupleCompat, ModelTupleCompat };
 
 /** Supported Pi API protocols for registration. */
 export type PiApi =
@@ -130,10 +134,10 @@ export interface ModelMetaOverride {
 
 /**
  * Exact-model override entry: capability/meta fields + optional tuple compat.
- * `compat` is Chat-only and never inherits across models/providers (#64).
+ * `compat` is exact-model tuple (Chat #64 / Anthropic #67); never inherits across models/providers.
  */
 export type ModelOverrideEntry = ModelMetaOverride & {
-  compat?: ChatTupleCompat;
+  compat?: ModelTupleCompat;
 };
 
 

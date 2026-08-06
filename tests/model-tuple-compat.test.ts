@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   parseChatTupleCompat,
+  parseModelTupleCompat,
+  resolveAnthropicTupleCompat,
   resolveChatTupleCompat,
+  resolveModelTupleCompat,
   tupleCompatForRegistration,
 } from "../src/model-tuple-compat.ts";
 import { buildProviderConfig } from "../src/register.ts";
@@ -9,6 +12,7 @@ import type { CcProvider } from "../src/types.ts";
 import {
   readPiSwitchConfig,
   writeChatTupleCompat,
+  writeModelTupleCompat,
   type FsLike,
 } from "../src/settings.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
@@ -255,9 +259,12 @@ describe("settings + registration for Chat tuple compat", () => {
       readPiSwitchConfig(fs, "/c.json").providerOverrides,
       p,
     );
-    expect(loaded?.modelOverrides?.["relay-model"]?.compat?.supportsDeveloperRole).toBe(
-      false,
-    );
+    const loadedCompat = loaded?.modelOverrides?.["relay-model"]?.compat;
+    expect(
+      loadedCompat && "supportsDeveloperRole" in loadedCompat
+        ? loadedCompat.supportsDeveloperRole
+        : undefined,
+    ).toBe(false);
     expect(loaded?.modelOverrides?.["relay-model"]?.reasoning).toBe(false);
 
     expect(writeChatTupleCompat(fs, "/c.json", p, "relay-model", null, 1)).toEqual({
@@ -322,5 +329,193 @@ describe("settings + registration for Chat tuple compat", () => {
       { rules: [], modelMeta: { maxTokens: 128000 } },
     );
     expect((cfg?.models as any[])[0].compat?.supportsDeveloperRole).toBeUndefined();
+  });
+});
+
+describe("Anthropic exact-model tuple compat (#67)", () => {
+  test("parses forceAdaptiveThinking and supportsTemperature with field absence", () => {
+    expect(
+      parseModelTupleCompat({
+        api: "anthropic-messages",
+        forceAdaptiveThinking: true,
+        supportsTemperature: false,
+      }),
+    ).toEqual({
+      api: "anthropic-messages",
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+    });
+    expect(parseModelTupleCompat({ api: "anthropic-messages" })).toEqual({
+      api: "anthropic-messages",
+    });
+  });
+
+  test("rejects Chat keys on Anthropic tuple and unknown keys", () => {
+    expect(() =>
+      parseModelTupleCompat({
+        api: "anthropic-messages",
+        supportsDeveloperRole: false,
+      }),
+    ).toThrow(/unknown key/);
+    expect(() =>
+      parseModelTupleCompat({
+        api: "anthropic-messages",
+        forceAdaptiveThinking: "yes",
+      }),
+    ).toThrow(/boolean/);
+    expect(() =>
+      parseModelTupleCompat({
+        api: "openai-completions",
+        forceAdaptiveThinking: true,
+      }),
+    ).toThrow(/unknown key/);
+  });
+
+  test("resolve only emits explicit exact-model fields (no guessing)", () => {
+    expect(
+      resolveAnthropicTupleCompat({
+        modelId: "claude-model",
+        providerApi: "anthropic-messages",
+      }),
+    ).toBeUndefined();
+
+    const resolved = resolveAnthropicTupleCompat({
+      modelId: "claude-model",
+      providerApi: "anthropic-messages",
+      tuple: {
+        api: "anthropic-messages",
+        forceAdaptiveThinking: true,
+        supportsTemperature: false,
+      },
+    });
+    expect(resolved?.fields.forceAdaptiveThinking).toMatchObject({
+      value: true,
+      source: "user-exact-tuple",
+      scope: "exact-model",
+    });
+    expect(resolved?.fields.supportsTemperature).toMatchObject({
+      value: false,
+      source: "user-exact-tuple",
+      scope: "exact-model",
+    });
+    expect(tupleCompatForRegistration(resolved)).toEqual({
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+    });
+  });
+
+  test("does not apply Anthropic tuple to Chat provider or sibling models", () => {
+    expect(
+      resolveModelTupleCompat({
+        modelId: "gpt",
+        providerApi: "openai-completions",
+        tuple: {
+          api: "anthropic-messages",
+          forceAdaptiveThinking: true,
+        },
+      }),
+    ).toBeUndefined();
+
+    const p = provider({
+      id: "claude-1",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+    });
+    const cfg = buildProviderConfig(p, ["adaptive-model", "other-model"], {
+      rules: [],
+      modelMeta: { maxTokens: 8192 },
+      tupleCompatFor: (id) =>
+        id === "adaptive-model"
+          ? {
+              tuple: {
+                api: "anthropic-messages",
+                forceAdaptiveThinking: true,
+                supportsTemperature: false,
+              },
+            }
+          : undefined,
+    });
+    const models = cfg?.models as Array<{ id: string; compat?: Record<string, unknown> }>;
+    // Provider wire (#65) adds conservative Anthropic wire defaults for unknown relays;
+    // exact-model tuple (#67) fields still apply only to the targeted model.
+    const anthropicWireDefaults = {
+      supportsEagerToolInputStreaming: false,
+      supportsCacheControlOnTools: false,
+      supportsLongCacheRetention: false,
+    };
+    expect(models[0]?.compat).toEqual({
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+      ...anthropicWireDefaults,
+    });
+    expect(models[1]?.compat).toEqual(anthropicWireDefaults);
+    expect(models[1]?.compat).not.toHaveProperty("forceAdaptiveThinking");
+  });
+
+  test("writeModelTupleCompat persists Anthropic exact-model fields", () => {
+    const fs = memFs({ "/c.json": "{}" });
+    const p = provider({
+      id: "p1",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+    });
+    expect(
+      writeModelTupleCompat(
+        fs,
+        "/c.json",
+        p,
+        "claude-opus",
+        {
+          api: "anthropic-messages",
+          forceAdaptiveThinking: true,
+          supportsTemperature: false,
+        },
+        1,
+      ),
+    ).toEqual({ ok: true });
+
+    const entry = resolveProviderOverride(
+      readPiSwitchConfig(fs, "/c.json").providerOverrides,
+      p,
+    );
+    expect(entry?.modelOverrides?.["claude-opus"]?.compat).toEqual({
+      api: "anthropic-messages",
+      forceAdaptiveThinking: true,
+      supportsTemperature: false,
+    });
+
+    // Reject writing Anthropic tuple onto a Chat provider.
+    expect(
+      writeModelTupleCompat(
+        fs,
+        "/c.json",
+        provider({ id: "chat", api: "openai-completions" }),
+        "m",
+        { api: "anthropic-messages", forceAdaptiveThinking: true },
+        1,
+      ).ok,
+    ).toBe(false);
+  });
+
+  test("rejects Anthropic tuple at provider scope", () => {
+    expect(() =>
+      readPiSwitchConfig(
+        memFs({
+          "/bad.json": JSON.stringify({
+            providerOverrides: {
+              p1: {
+                compat: {
+                  api: "anthropic-messages",
+                  forceAdaptiveThinking: true,
+                },
+              },
+            },
+          }),
+        }),
+        "/bad.json",
+      ),
+    ).toThrow(/modelOverrides/);
   });
 });

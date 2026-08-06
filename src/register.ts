@@ -12,10 +12,10 @@ import {
 } from "./capabilities/registration.ts";
 import {
   isOfficialOpenAiChatEndpoint,
-  resolveChatTupleCompat,
+  resolveModelTupleCompat,
   tupleCompatForRegistration,
-  type ChatTupleCompat,
-  type ResolvedChatTupleCompat,
+  type ModelTupleCompat,
+  type ResolvedModelTupleCompat,
 } from "./model-tuple-compat.ts";
 import {
   providerWireCompatForRegistration,
@@ -44,8 +44,8 @@ export function toModelConfig(
   api?: PiApi | null,
   /** Per-provider overrides from pi-switch.json providerOverrides[dbId].modelMeta. */
   meta?: ModelMetaOverride,
-  /** Exact-model Chat tuple wire dialect (issue #64). */
-  tupleCompat?: ResolvedChatTupleCompat,
+  /** Exact-model tuple wire dialect (Chat #64 / Anthropic #67). */
+  tupleCompat?: ResolvedModelTupleCompat,
 ) {
   const tier = api ? API_MODEL_META[api] : undefined;
   const compat: Record<string, unknown> = {};
@@ -126,11 +126,11 @@ export function buildProviderConfig(
     /** Raw Provider-scoped wire override when providerWireCompat omitted. */
     providerWireOverride?: ProviderWireCompat;
     /**
-     * Exact-model Chat tuple compat resolver (issue #64).
+     * Exact-model tuple compat resolver (Chat #64 / Anthropic #67).
      * Independent of model capability and Provider wire compat.
      */
     tupleCompatFor?: (modelId: string) =>
-      | { tuple?: ChatTupleCompat; legacyFlat?: ModelMetaOverride }
+      | { tuple?: ModelTupleCompat; legacyFlat?: ModelMetaOverride }
       | undefined;
   },
 ): BuiltProviderConfig | undefined {
@@ -159,7 +159,7 @@ export function buildProviderConfig(
       // Issue #63: skip models with no trusted maxTokens authority.
       if (decision.maxTokensUnresolved || !decision.meta) return [];
       const tupleInput = opts.tupleCompatFor?.(id);
-      const tupleResolved = resolveChatTupleCompat({
+      const tupleResolved = resolveModelTupleCompat({
         modelId: id,
         providerApi: provider.api,
         tuple: tupleInput?.tuple,
@@ -233,7 +233,7 @@ export function registerProvider(
     providerWireCompat?: ResolvedProviderWireCompat;
     providerWireOverride?: ProviderWireCompat;
     tupleCompatFor?: (modelId: string) =>
-      | { tuple?: ChatTupleCompat; legacyFlat?: ModelMetaOverride }
+      | { tuple?: ModelTupleCompat; legacyFlat?: ModelMetaOverride }
       | undefined;
   },
 ): boolean {
