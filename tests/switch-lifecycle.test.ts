@@ -82,8 +82,8 @@ function setup(options?: {
   failRecentWrite?: boolean;
   failUnregister?: boolean;
   hasUnregister?: boolean;
-  /** Active model already set on ctx (Pi restore succeeded). */
-  activeModel?: { provider: string; id: string };
+  /** Session model already set on ctx (Pi restore succeeded). */
+  sessionModel?: { provider: string; id: string };
   /** Session branch for getBranch (continue/resume model recovery). */
   branch?: Array<Record<string, unknown>>;
   /** Stub for Runtime.providerWireCompatFor (issue #62). */
@@ -187,7 +187,7 @@ function setup(options?: {
         return { provider: name, id: modelId ?? "gpt-5" };
       },
     },
-    model: options?.activeModel,
+    model: options?.sessionModel,
     sessionManager: options?.branch
       ? { getBranch: () => options.branch ?? [] }
       : undefined,
@@ -556,7 +556,7 @@ describe("switch lifecycle interface", () => {
       branch: [
         { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
       ],
-      activeModel: { provider: "zhipu-glm-en", id: "glm-5.2" },
+      sessionModel: { provider: "zhipu-glm-en", id: "glm-5.2" },
     });
 
     state.lifecycle.install();

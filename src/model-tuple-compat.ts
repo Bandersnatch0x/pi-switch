@@ -545,20 +545,3 @@ export function tupleCompatForRegistration(
   }
   return Object.keys(out).length ? out : undefined;
 }
-
-export function isOfficialOpenAiChatEndpoint(baseUrl: string): boolean {
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return false;
-  }
-}
-
-export function isOfficialAnthropicEndpoint(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
-  } catch {
-    return false;
-  }
-}

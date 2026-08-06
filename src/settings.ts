@@ -495,7 +495,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Mutate the override entry where resolveProviderOverride will read it.
+ * Return a new raw document with the override entry updated, so
+ * resolveProviderOverride reads the edited values.
+ *
+ * Immutable: `raw` is never mutated; a shallow copy carrying the updated
+ * `providerOverrides` is returned.
  *
  * With appType, the canonical slot is nested [appType][id]; a shadowed
  * top-level [id] entry (left by the old flat write path) is absorbed into

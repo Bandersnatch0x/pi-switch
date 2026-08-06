@@ -7,6 +7,10 @@
  */
 
 import type { CcProvider } from "./types.ts";
+import {
+  isOfficialOpenAiChatEndpoint,
+  isOfficialAnthropicEndpoint,
+} from "./endpoints.ts";
 
 export const CHAT_COMPLETIONS_API = "openai-completions" as const;
 export const ANTHROPIC_MESSAGES_API = "anthropic-messages" as const;
@@ -193,23 +197,6 @@ export function parseProviderWireCompat(
   );
 }
 
-function isOfficialOpenAiEndpoint(baseUrl: string): boolean {
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return false;
-  }
-}
-
-function isOfficialAnthropicEndpoint(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.anthropic.com" || host.endsWith(".anthropic.com");
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Official OpenAI Chat Completions adapter facts (pi-ai defaults).
  * Unknown relays use conservative unsupported for every field when absent.
@@ -300,7 +287,7 @@ function resolveChatWire(input: {
   const effectiveOverride =
     override && override.api === CHAT_COMPLETIONS_API ? override : undefined;
 
-  const official = isOfficialOpenAiEndpoint(provider.baseUrl);
+  const official = isOfficialOpenAiChatEndpoint(provider.baseUrl);
   const userOverride: Partial<Record<ChatWireField, boolean>> = {};
   if (effectiveOverride) {
     for (const field of CHAT_WIRE_FIELDS) {
