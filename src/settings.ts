@@ -32,6 +32,7 @@ import {
   parseModelTupleCompat,
   type ModelTupleCompat,
 } from "./model-tuple-compat.ts";
+import { hasOwn, isPlainObject } from "./compat/wire-shared.ts";
 import {
   readJsonObjectLenient,
   updateJsonObjectAtomic,
@@ -237,10 +238,6 @@ const PROVIDER_OVERRIDE_ENTRY_KEYS = new Set([
   "claudeCodeCompat",
   "geminiToolCompat",
 ]);
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
 
 function rejectNestedWireCompat(value: unknown, path: string): void {
   if (isPlainObject(value) && hasOwn(value, "compat")) {
@@ -499,10 +496,6 @@ export function entryIsEmpty(entry: MutableOverrideEntry): boolean {
     !entry.geminiToolCompat &&
     modelCount === 0
   );
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

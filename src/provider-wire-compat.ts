@@ -11,9 +11,14 @@ import {
   isOfficialOpenAiChatEndpoint,
   isOfficialAnthropicEndpoint,
 } from "./endpoints.ts";
+import {
+  ANTHROPIC_MESSAGES_API,
+  CHAT_COMPLETIONS_API,
+  isPlainObject,
+  requireBoolean,
+} from "./compat/wire-shared.ts";
 
-export const CHAT_COMPLETIONS_API = "openai-completions" as const;
-export const ANTHROPIC_MESSAGES_API = "anthropic-messages" as const;
+export { ANTHROPIC_MESSAGES_API, CHAT_COMPLETIONS_API } from "./compat/wire-shared.ts";
 
 /** Chat Provider wire fields (issue #62 + #66). */
 export const CHAT_WIRE_FIELDS = [
@@ -129,26 +134,6 @@ export type RegistrationAnthropicWireCompat = {
 export type RegistrationProviderWireCompat =
   | RegistrationChatWireCompat
   | RegistrationAnthropicWireCompat;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function requireBoolean(
-  raw: Record<string, unknown>,
-  key: string,
-  path: string,
-): boolean | undefined {
-  if (!hasOwn(raw, key)) return undefined;
-  if (typeof raw[key] !== "boolean") {
-    throw new Error(`invalid ${path}.${key}: expected boolean`);
-  }
-  return raw[key] as boolean;
-}
 
 /** Parse Provider-only wire compatibility (Chat or Anthropic discriminator). */
 export function parseProviderWireCompat(
