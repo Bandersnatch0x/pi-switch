@@ -7,6 +7,16 @@ import type { CcProvider, PinEntry, PiSwitchConfig, PiSwitchSelection, RecentEnt
 import { compareSemver, PI_MIN_VERSION } from "./settings.ts";
 import { isSwitchable } from "./parse/index.ts";
 import {
+  bold,
+  dim,
+  GLYPH,
+  paint,
+  STATUS_COLOR,
+  statusBadge,
+  type StatusKey,
+} from "./ui/tui-theme.ts";
+import { t, tf } from "./ui/tui-locale.ts";
+import {
   CC_SWITCH_SCHEMA_LATEST,
   CC_SWITCH_SCHEMA_MIN,
   KNOWN_PROVIDERS_COLUMNS,
@@ -103,6 +113,28 @@ function countBy(checks: DoctorCheck[]): DoctorReport["summary"] {
   };
 }
 
+function doctorSummaryText(summary: DoctorReport["summary"]): string {
+  return `${t("pass")}=${summary.pass} ${t("warn")}=${summary.warn} ${t("fail")}=${summary.fail}`;
+}
+
+function formatDoctorCheckLines(
+  checks: DoctorCheck[],
+  format: {
+    heading: (check: DoctorCheck) => string;
+    detail: (detail: string) => string;
+    fix: (fix: string) => string;
+  },
+): string[] {
+  const lines: string[] = [];
+  for (const check of checks) {
+    lines.push(format.heading(check));
+    lines.push(format.detail(check.detail));
+    if (!check.fix) continue;
+    for (const fix of check.fix.split("；")) lines.push(format.fix(fix));
+  }
+  return lines;
+}
+
 export function runDoctor(input: DoctorInput): DoctorReport {
   const checks: DoctorCheck[] = [];
 
@@ -110,17 +142,17 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (input.sqlite3Path) {
     checks.push({
       id: "sqlite3",
-      title: "sqlite3 可执行文件",
+      title: t("docTitleSqlite3"),
       status: "pass",
       detail: input.sqlite3Path,
     });
   } else {
     checks.push({
       id: "sqlite3",
-      title: "sqlite3 可执行文件",
+      title: t("docTitleSqlite3"),
       status: "fail",
-      detail: `未找到 sqlite3。tried: ${(input.sqlite3Tried ?? []).join(", ") || "(none)"}`,
-      fix: "安装 sqlite3 并加入 PATH，或设置 SQLITE3_PATH / pi-switch.json.sqlitePath",
+      detail: `${t("docSqlite3NotFound")}${(input.sqlite3Tried ?? []).join(", ") || "(none)"}`,
+      fix: t("docFixSqlite3"),
     });
   }
 
@@ -129,15 +161,12 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     const m = input.migrationSummary;
     checks.push({
       id: "identity-migration",
-      title: "身份迁移",
+      title: t("docTitleIdentity"),
       status: m.ambiguous || m.stale ? "warn" : "pass",
       detail: m.skipped
-        ? `已跳过（${m.skipped}）`
+        ? `${t("docSkipped")} (${m.skipped})`
         : `migrated=${m.migrated} stale=${m.stale} ambiguous=${m.ambiguous}`,
-      fix:
-        m.ambiguous || m.stale
-          ? "stale：dbId 已不在 DB；ambiguous：同 id 跨 app type，未猜测；迁移前备份为 settings.json/pi-switch.json .bak-<ts>"
-          : undefined,
+      fix: m.ambiguous || m.stale ? t("docIdentityFix") : undefined,
     });
   }
 
@@ -154,13 +183,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         status: nothingSwitchable ? "warn" : "pass",
         detail:
           `direct=${row.direct} visible=${row.visible} routed=${row.routed}` +
-          (reasons ? `（${reasons}）` : "") +
-          (row.routed
-            ? "；routed 后备仅应用级启用（客户端指向 CC Switch 代理时）"
-            : ""),
-        fix: nothingSwitchable
-          ? "该 app type 无静态凭据条目；managed-auth 条目可见不可切换（SPEC §11），或用 CC Switch 路由（应用级）"
-          : undefined,
+          (reasons ? ` (${reasons})` : "") +
+          (row.routed ? t("docTierRoutedNote") : ""),
+        fix: nothingSwitchable ? t("docTierNothingSwitchableFix") : undefined,
       });
     }
   }
@@ -169,17 +194,17 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (input.dbExists) {
     checks.push({
       id: "db-file",
-      title: "cc-switch 数据库",
+      title: t("docTitleCcDb"),
       status: "pass",
       detail: input.dbPath,
     });
   } else {
     checks.push({
       id: "db-file",
-      title: "cc-switch 数据库",
+      title: t("docTitleCcDb"),
       status: "fail",
-      detail: `不存在: ${input.dbPath}`,
-      fix: "先用 cc-switch 创建 Provider，或设置 CC_SWITCH_DB 指向正确路径",
+      detail: `${t("docDbMissing")}${input.dbPath}`,
+      fix: t("docFixDb"),
     });
   }
 
@@ -195,17 +220,17 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     let fix: string | undefined;
     if (cap.userVersion !== undefined && cap.userVersion > CC_SWITCH_SCHEMA_LATEST) {
       status = "warn";
-      fix = "SCHEMA_VERSION 过新：升级 pi-switch 获取新列契约";
+      fix = t("docFixSchemaNew");
     } else if (cap.userVersion !== undefined && cap.userVersion < CC_SWITCH_SCHEMA_MIN) {
       status = "warn";
-      fix = "SCHEMA_VERSION 过旧：升级 CC Switch 到窗口内版本（≥3.14.0）";
+      fix = t("docFixSchemaOld");
     } else if (unknown.length) {
       status = "warn";
-      fix = `探测到未知列（${unknown.join(", ")}）：升级 pi-switch`;
+      fix = tf("docFixSchemaUnknown", { cols: unknown.join(", ") });
     }
     checks.push({
       id: "schema",
-      title: "CC Switch 数据契约",
+      title: t("docTitleSchema"),
       status,
       detail: `${input.providers.length} providers · ${facts}`,
       fix,
@@ -213,10 +238,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   } else if (input.dbExists) {
     checks.push({
       id: "schema",
-      title: "CC Switch 数据契约",
+      title: t("docTitleSchema"),
       status: "warn",
-      detail: "schema 探测失败（按核心列尽力读取）",
-      fix: "检查 sqlite3 可执行文件与 DB 只读权限；身份配对将按 dbId 尽力匹配",
+      detail: t("docSchemaProbeFail"),
+      fix: t("docFixSchemaFail"),
     });
   }
 
@@ -224,27 +249,27 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (input.providersError && !input.providers.length) {
     checks.push({
       id: "providers",
-      title: "读取 providers",
+      title: t("docTitleReadProviders"),
       status: "fail",
       detail: input.providersError,
-      fix: "检查 sqlite3 与 DB 路径；确认 providers 表可查询",
+      fix: t("docFixProviders"),
     });
   } else {
     const switchable = input.providers.filter(isSwitchable).length;
     const blocked = input.providers.length - switchable;
     checks.push({
       id: "providers",
-      title: "providers 快照",
+      title: t("docTitleProvidersSnap"),
       status: input.providers.length ? "pass" : "warn",
       detail: input.providers.length
-        ? `共 ${input.providers.length} 条（可切换 ${switchable}，不可切换 ${blocked}）`
-        : "数据库为空",
-      fix: input.providers.length ? undefined : "在 cc-switch 中添加至少一个 Provider",
+        ? tf("docProvidersSnapOk", { n: input.providers.length, s: switchable, b: blocked })
+        : t("docDbEmpty"),
+      fix: input.providers.length ? undefined : t("docFixProvidersEmpty"),
     });
     if (input.providersError) {
       checks.push({
         id: "providers-stale",
-        title: "providers 读取警告",
+        title: t("docTitleProvidersStale"),
         status: "warn",
         detail: input.providersError,
       });
@@ -256,10 +281,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   if (!sel) {
     checks.push({
       id: "selection",
-      title: "已保存选择",
+      title: t("docTitleSelection"),
       status: "warn",
-      detail: "尚无 piSwitchSelection",
-      fix: "运行 /ps-config 选择一次 Provider/Model",
+      detail: t("docNoSelection"),
+      fix: t("docFixSelectionNone"),
     });
   } else {
     const match = input.providers.find(
@@ -268,23 +293,23 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     if (!match) {
       checks.push({
         id: "selection",
-        title: "已保存选择",
+        title: t("docTitleSelection"),
         status: "fail",
-        detail: `dbId=${sel.dbId}${sel.appType ? ` appType=${sel.appType}` : ""} model=${sel.model} 在当前 DB 中不存在`,
-        fix: "运行 /ps-config 重新选择；旧选择会在成功后覆盖",
+        detail: `dbId=${sel.dbId}${sel.appType ? ` appType=${sel.appType}` : ""} model=${sel.model}${t("docSelNotInDb")}`,
+        fix: t("docFixSelectionMissing"),
       });
     } else if (!isSwitchable(match)) {
       checks.push({
         id: "selection",
-        title: "已保存选择",
+        title: t("docTitleSelection"),
         status: "fail",
-        detail: `${match.appType}/${match.displayName} 不可切换: ${match.parseError ?? "unknown"}`,
-        fix: "在 cc-switch 补全 baseUrl/apiKey，或换一个可切换 Provider",
+        detail: `${match.appType}/${match.displayName}${t("docSelNotSwitchable")}${match.parseError ?? "unknown"}`,
+        fix: t("docFixSelectionNotSwitchable"),
       });
     } else {
       checks.push({
         id: "selection",
-        title: "已保存选择",
+        title: t("docTitleSelection"),
         status: "pass",
         detail: `${match.appType}/${match.displayName} · ${sel.model}`,
       });
@@ -294,10 +319,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   // 5. headers
   checks.push({
     id: "headers",
-    title: "Header 规则",
+    title: t("docTitleHeaders"),
     status: input.headerRuleCount > 0 ? "pass" : "warn",
-    detail: `已加载 ${input.headerRuleCount} 条规则（defaults + provider-headers.json）`,
-    fix: input.headerRuleCount ? undefined : "检查包内 defaults/headers.json 是否随安装发布",
+    detail: `${input.headerRuleCount}${t("docHeadersLoaded")}`,
+    fix: input.headerRuleCount ? undefined : t("docFixHeaders"),
   });
 
   // 6. fingerprint vars (W5: fallback + out-of-snapshot detection)
@@ -325,18 +350,14 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     const status: DoctorStatus = fallbacks.length || outOfSnapshot.length ? "warn" : "pass";
     const fixes: string[] = [];
     if (fallbacks.length) {
-      fixes.push(
-        `未探测到本机 CLI（${fallbacks.join(", ")}），使用兜底版本；可安装 CLI 或在 pi-switch.json.vars 显式指定`,
-      );
+      fixes.push(tf("docFixFingerprintFallback", { list: fallbacks.join(", ") }));
     }
     if (outOfSnapshot.length) {
-      fixes.push(
-        `本机版本超出快照契约（${outOfSnapshot.join("; ")}）；升级 pi-switch 得新快照，或 pi-switch.json.vars 显式钉版本`,
-      );
+      fixes.push(tf("docFixFingerprintSnapshot", { list: outOfSnapshot.join("; ") }));
     }
     checks.push({
       id: "fingerprint",
-      title: "客户端伪装指纹",
+      title: t("docTitleFingerprint"),
       status,
       detail:
         `codex=${v.codexVersion}(${v.codexVersionSource}) · ` +
@@ -344,7 +365,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         `gemini=${v.geminiVersion}(${v.geminiVersionSource}) · ` +
         `originator=${v.codexOriginator} · beta=${v.anthropicBeta}` +
         (snap ? ` · snapshot=v${snap.snapshotVersion}` : ""),
-      fix: fixes.length ? fixes.join("；") : undefined,
+      fix: fixes.length ? fixes.join("; ") : undefined,
     });
   }
 
@@ -366,23 +387,23 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       if (layers.provider) userSources.push("provider");
       if (layers.model) userSources.push(`model[${layers.modelKey}]`);
       const sourceBits: string[] = [];
-      if (userSources.length) sourceBits.push(`用户: ${userSources.join(" → ")}`);
-      if (builtIn) sourceBits.push(`内置: ${builtIn.key}`);
+      if (userSources.length) sourceBits.push(`${t("docUser")}: ${userSources.join(" → ")}`);
+      if (builtIn) sourceBits.push(`${t("docBuiltIn")}: ${builtIn.key}`);
       else if (isBuiltInCompatDisabled(layers.effective) && matchBuiltInCompatProfile(sel.model)) {
-        sourceBits.push("内置: 已关闭");
+        sourceBits.push(`${t("docBuiltIn")}: ${t("docBuiltInDisabled")}`);
       }
       const detail =
         summarizeModelMeta(effective) +
-        (sourceBits.length ? `（${sourceBits.join("；")}）` : "");
+        (sourceBits.length ? ` (${sourceBits.join("; ")})` : "");
       checks.push({
         id: "model-meta",
-        title: "当前 modelMeta 策略",
+        title: t("docTitleModelMeta"),
         status: "pass",
         detail,
         fix:
           effective?.reasoning === false
             ? undefined
-            : "若中转报 400 reasoning/thinking，用 /ps-override 选「中转兼容」或设 defaultModelMeta.reasoning=false",
+            : t("docFixModelMeta"),
       });
     }
   }
@@ -402,14 +423,16 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     }
     checks.push({
       id: "model-overrides",
-      title: "按模型覆写",
+      title: t("docTitleModelOverrides"),
       status: stale.length ? "warn" : "pass",
-      detail:
-        `${modelOverrideCount} 条` +
-        (stale.length ? `（${stale.length} 条不在 DB 模型列表: ${stale.slice(0, 3).join(", ")}）` : ""),
-      fix: stale.length
-        ? "模型 id 可能已改名或只在远端存在；用 /ps-override 重新设置或清除该层"
-        : undefined,
+      detail: stale.length
+        ? tf("docModelOverridesStale", {
+            n: modelOverrideCount,
+            m: stale.length,
+            list: stale.slice(0, 3).join(", "),
+          })
+        : tf("docModelOverridesOk", { n: modelOverrideCount }),
+      fix: stale.length ? t("docFixModelOverrides") : undefined,
     });
   }
 
@@ -419,17 +442,19 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     const broken = pins.filter((p) => !input.providers.some((x) => x.id === p.dbId));
     checks.push({
       id: "pins",
-      title: "常用 pin",
+      title: t("docTitlePins"),
       status: broken.length ? "warn" : "pass",
-      detail: `${pins.length} 条 pin` + (broken.length ? `（${broken.length} 条 dbId 失效）` : ""),
-      fix: broken.length ? "在 /ps-config 用 p 重新 pin，或编辑 pi-switch.json.pins" : undefined,
+      detail: broken.length
+        ? `${tf("docPinsOk", { n: pins.length })}${tf("docPinsBroken", { n: broken.length })}`
+        : tf("docPinsOk", { n: pins.length }),
+      fix: broken.length ? t("docFixPins") : undefined,
     });
   } else {
     checks.push({
       id: "pins",
-      title: "常用 pin",
+      title: t("docTitlePins"),
       status: "pass",
-      detail: "无 pin（在 /ps-config 选中模型后按 p 添加）",
+      detail: t("docNoPins"),
     });
   }
 
@@ -437,23 +462,23 @@ export function runDoctor(input: DoctorInput): DoctorReport {
   const recent = input.recent ?? input.config.recent ?? [];
   checks.push({
     id: "recent",
-    title: "最近切换",
+    title: t("docTitleRecent"),
     status: "pass",
-    detail: recent.length ? `保留 ${recent.length} 条 last-N` : "尚无 recent 记录",
+    detail: recent.length ? tf("docRecentKept", { n: recent.length }) : t("docRecentNone"),
   });
 
   // 10. routing (W3): CC Switch Local Routing proxy reachability
   if (input.routingProbe) {
     checks.push({
       id: "routing",
-      title: "CC Switch 路由服务",
+      title: t("docTitleRouting"),
       status: input.routingProbe.reachable ? "pass" : "warn",
       detail: input.routingProbe.reachable
-        ? `可达 ${input.routingProbe.url}`
-        : `不可达 ${input.routingProbe.url}（Direct 路径不受影响）`,
+        ? tf("docRoutingReach", { url: input.routingProbe.url })
+        : tf("docRoutingUnreach", { url: input.routingProbe.url }),
       fix: input.routingProbe.reachable
         ? undefined
-        : "在 CC Switch 应用内检查代理/切换状态（设置 → 代理）；仅 routed 应用需要它",
+        : t("docFixRouting"),
     });
   }
 
@@ -471,11 +496,11 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     ) => {
       const src =
         e.source === "models-dev"
-          ? `models.dev@${e.fetchedAt ?? "?"}${e.stale ? "(过期)" : ""}`
+          ? `models.dev@${e.fetchedAt ?? "?"}${e.stale ? t("docStale") : ""}`
           : e.source === "model-id-tag"
-            ? "模型 id 标签"
+            ? t("docSrcModelIdTag")
             : e.source === "host-adaptation"
-              ? "宿主适配"
+              ? t("docSrcHostAdapt")
               : e.source === "conservative-default"
                 ? "unknown→conservative"
                 : e.source === "unresolved"
@@ -493,30 +518,30 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       cap.maxTokens.source === "unresolved" ||
       typeof cap.maxTokens.value !== "number"
     ) {
-      failRows.push("maxTokens=unresolved（不可注册）");
+      failRows.push(`maxTokens=unresolved${t("docCapUnresolved")}`);
     }
     if (cap.reasoning.source === "conservative-default") {
-      warnRows.push("reasoning=unknown→conservative false（不写回配置）");
+      warnRows.push(`reasoning=unknown→conservative false${t("docCapReasoningUnknown")}`);
     }
     for (const c of cap.conflicts) {
       warnRows.push(`${c.field}=${c.effective}(${c.effectiveSource}) vs ${c.overridden}(${c.overriddenSource})`);
     }
     for (const e of [cap.contextWindow, cap.maxTokens, cap.reasoning, cap.vision]) {
       if (e.source === "models-dev" && e.stale) {
-        warnRows.push(`models.dev@${e.fetchedAt ?? "?"} 过期（保留 last-good）`);
+        warnRows.push(`models.dev@${e.fetchedAt ?? "?"} ${t("docStale")}${t("docCapLastGood")}`);
       }
     }
     // Issue #39: cache-state lines are informational; miss/cold never upgrade warn.
     const infoRows: string[] = [];
     if (input.modelsDevCache?.state === "miss") {
       const at = input.modelsDevCache.observedAt ?? "?";
-      infoRows.push(`models.dev: 无此条目（已确认 @${at}）`);
+      infoRows.push(`models.dev: ${tf("docCapMiss", { at })}`);
     } else if (input.modelsDevCache?.state === "cold") {
-      infoRows.push("未查询（下次注册后台刷新）");
+      infoRows.push(t("docCapCold"));
     }
     if (input.refreshFailure) {
-      const t = new Date(input.refreshFailure.at).toISOString();
-      infoRows.push(`上次后台刷新失败 @${t}`);
+      const iso = new Date(input.refreshFailure.at).toISOString();
+      infoRows.push(tf("docCapRefreshFail", { t: iso }));
     }
     const detail =
       `${input.capabilities.modelId}: ` +
@@ -526,9 +551,9 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         fieldLine("reasoning", cap.reasoning),
         fieldLine("vision", cap.vision),
       ].join(" · ") +
-      (failRows.length ? `；${failRows.join("；")}` : "") +
-      (warnRows.length ? `；${warnRows.join("；")}` : "") +
-      (infoRows.length ? `；${infoRows.join("；")}` : "");
+      (failRows.length ? `; ${failRows.join("; ")}` : "") +
+      (warnRows.length ? `; ${warnRows.join("; ")}` : "") +
+      (infoRows.length ? `; ${infoRows.join("; ")}` : "");
     const status: DoctorStatus = failRows.length
       ? "fail"
       : warnRows.length
@@ -536,13 +561,13 @@ export function runDoctor(input: DoctorInput): DoctorReport {
         : "pass";
     checks.push({
       id: "capabilities",
-      title: "模型能力元数据",
+      title: t("docTitleCapabilities"),
       status,
       detail,
       fix: failRows.length
-        ? `在 providerOverrides 为 model "${input.capabilities.modelId}" 写 exact-model maxTokens（modelOverrides.<id>.maxTokens）`
+        ? tf("docFixCapabilitiesFail", { id: input.capabilities.modelId })
         : warnRows.length
-          ? "冲突：可显式 override 钉值；过期：清缓存重拉（pi-switch-cache.json 或 config.capabilitiesRefresh）；reasoning unknown 可钉 exact-model reasoning"
+          ? t("docFixCapabilitiesWarn")
           : undefined,
     });
   }
@@ -559,15 +584,15 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     );
     const facts = `api=${wire.api} scope=${wire.scope} · ${fieldParts.join(" · ")}`;
     const detail = conflictRows.length
-      ? `${facts}；${conflictRows.join("；")}`
+      ? `${facts}; ${conflictRows.join("; ")}`
       : facts;
     checks.push({
       id: "provider-wire-compat",
-      title: "Provider 请求线兼容",
+      title: t("docTitleWireCompat"),
       status: conflictRows.length ? "warn" : "pass",
       detail,
       fix: conflictRows.length
-        ? "显式 providerOverrides.<provider>.compat 覆盖了官方 adapter 事实；确认中转是否真的不支持该 wire 能力，或删除该覆写"
+        ? t("docFixWireCompat")
         : undefined,
     });
   }
@@ -578,37 +603,66 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     const below = compareSemver(input.piVersion, min) < 0;
     checks.push({
       id: "sdk",
-      title: "Pi 运行版本",
+      title: t("docTitleSdk"),
       status: below ? "fail" : "pass",
       detail: below
-        ? `Pi ${input.piVersion} < 最低 ${min}（peer range ≥${min}，本进程越界加载）`
-        : `Pi ${input.piVersion} ≥ 最低 ${min}`,
-      fix: below ? "升级 Pi（pi 自更新或 npm i -g @earendil-works/pi-coding-agent）" : undefined,
+        ? tf("docSdkBelow", { ver: input.piVersion, min })
+        : tf("docSdkOk", { ver: input.piVersion, min }),
+      fix: below ? t("docFixSdk") : undefined,
     });
   } else {
     checks.push({
       id: "sdk",
-      title: "Pi 运行版本",
+      title: t("docTitleSdk"),
       status: "pass",
-      detail: `未探测到（安装期 peer range ≥${min} 已拦截窗口外版本）`,
+      detail: tf("docSdkUndetected", { min }),
     });
   }
 
   const summary = countBy(checks);
-  const icon = (s: DoctorStatus) => (s === "pass" ? "PASS" : s === "warn" ? "WARN" : "FAIL");
   const lines: string[] = [
-    `pi-switch doctor · pass=${summary.pass} warn=${summary.warn} fail=${summary.fail}`,
+    `pi-switch doctor · ${doctorSummaryText(summary)}`,
     "",
+    ...formatDoctorCheckLines(checks, {
+      heading: (check) => `[${t(check.status)}] ${check.title}`,
+      detail: (detail) => `  ${detail}`,
+      fix: (fix) => `  ${t("fix")} ${fix}`,
+    }),
   ];
-  for (const c of checks) {
-    lines.push(`[${icon(c.status)}] ${c.title}`);
-    lines.push(`  ${c.detail}`);
-    if (c.fix) lines.push(`  fix: ${c.fix}`);
-  }
   return { checks, summary, lines };
 }
 
-/** Render report as a single notify-friendly string. */
+/** Width-agnostic horizontal rule using box-drawing light horizontal. */
+function hr(width: number): string {
+  return "─".repeat(Math.max(1, width));
+}
+
+/** Render report as a single notify-friendly, colorized string. */
 export function formatDoctorReport(report: DoctorReport): string {
-  return report.lines.join("\n");
+  const { checks, summary } = report;
+  const width = 60; // stable width for top/bottom rules; body wraps naturally
+
+  const out: string[] = [];
+  out.push(paint("cyan", hr(width)));
+  out.push(bold("pi-switch doctor"));
+  out.push(dim(doctorSummaryText(summary)));
+
+  const badge = (status: DoctorStatus, count: number) =>
+    `${paint(STATUS_COLOR[status], GLYPH.active)} ${statusBadge(status, t(status))} ${count}`;
+  out.push([badge("pass", summary.pass), badge("warn", summary.warn), badge("fail", summary.fail)].join("  "));
+
+  out.push(dim(`${checks.length} ${t("checks")}`));
+  out.push(paint("cyan", hr(width)));
+
+  out.push(
+    ...formatDoctorCheckLines(checks, {
+      heading: (check) =>
+        `${statusBadge(check.status, t(check.status))} ${bold(check.title)}`,
+      detail: (detail) => `  ${detail}`,
+      fix: (fix) => `  ${paint("yellow", t("fix"))} ${fix}`,
+    }),
+  );
+
+  out.push(paint("cyan", hr(width)));
+  return out.join("\n");
 }

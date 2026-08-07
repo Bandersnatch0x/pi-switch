@@ -19,6 +19,7 @@ import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
   ProbeRunPrecheckSnapshot,
   ProbeRequest,
@@ -286,17 +287,23 @@ describe("registerCommands (probe/repair wiring)", () => {
     return { commands, pi, rt, lifecycle };
   }
 
-  test("registers ps-probe and ps-repair with descriptions + handlers", () => {
-    const { commands } = captureCommands();
-    const probe = commands.get("ps-probe");
-    const repair = commands.get("ps-repair");
+  test("registers localized ps-probe and ps-repair descriptions + handlers", () => {
+    try {
+      setLocale("en");
+      const english = captureCommands().commands;
+      expect(english.get("ps-probe")?.description).toContain("compatibility probes");
+      expect(english.get("ps-repair")?.description).toContain("whitelisted repair");
+      expect(english.get("ps-probe")?.description).not.toMatch(/[\u3400-\u9fff]/);
+      expect(typeof english.get("ps-probe")?.handler).toBe("function");
+      expect(typeof english.get("ps-repair")?.handler).toBe("function");
 
-    expect(probe).toBeDefined();
-    expect(probe?.description).toContain("兼容性探针");
-    expect(typeof probe?.handler).toBe("function");
-    expect(repair).toBeDefined();
-    expect(repair?.description).toContain("证据驱动修复");
-    expect(typeof repair?.handler).toBe("function");
+      setLocale("zh");
+      const chinese = captureCommands().commands;
+      expect(chinese.get("ps-probe")?.description).toContain("兼容性探针");
+      expect(chinese.get("ps-repair")?.description).toContain("证据驱动修复");
+    } finally {
+      setLocale("en");
+    }
   });
 
   test("registered ps-repair handler forwards headless rejection", async () => {
@@ -349,12 +356,11 @@ describe("runProbeCommand (command flow)", () => {
     const { pi } = makePi();
     const { ctx } = makeCtx({
       mode: "rpc",
-      select: async (title, options) => {
-        if (title === "选择类型") return options[0];
-        if (title.includes("选择名称")) {
+      select: async (_title, options) => {
+        if (options.some((option) => option.startsWith("Relay "))) {
           return options.find((option) => option.startsWith("Relay Two"));
         }
-        return options.find((option) => option === "m1");
+        return options.find((option) => option === "m1") ?? options[0];
       },
     });
 

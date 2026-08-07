@@ -57,14 +57,16 @@ describe("buildQuickEntries", () => {
     expect(entries.map((e) => e.modelId)).toEqual(["ok"]);
   });
 
-  test("caps the list at 10 entries", () => {
+  test("keeps the full list so the picker can page beyond 10 entries", () => {
     const recent: RecentEntry[] = Array.from({ length: 15 }, (_, i) => ({
       dbId: "a",
       model: `m${i}`,
       at: i,
     }));
     const entries = buildQuickEntries([], recent, providers);
-    expect(entries.length).toBe(10);
+    expect(entries).toHaveLength(15);
+    expect(entries[0].modelId).toBe("m14");
+    expect(entries.at(-1)?.modelId).toBe("m0");
   });
 
   test("composite identity: same dbId across app types stays distinct", () => {

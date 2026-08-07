@@ -19,6 +19,7 @@ import { buildQuickEntries } from "../src/ui/quick-pick.ts";
 import { quickSwitchPick } from "../src/ui/quick-switch-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
+import { pickOverrideProvider } from "../src/ui/provider-override-pick.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
@@ -39,13 +40,14 @@ import type {
   ActivationStageResult,
 } from "./switch-lifecycle.ts";
 import { runProbeCommand, runRepairCommand } from "./probe-commands.ts";
+import { t, tf } from "../src/ui/tui-locale.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
   return {
     select: (title, options) => ui.select(title, options),
     input: (prompt, defaultValue) => ui.input(prompt, defaultValue),
-    confirm: (message) => ui.confirm("确认", message),
+    confirm: (message) => ui.confirm(t("confirm"), message),
     notify: (message, level) => {
       const t =
         level === "error" || level === "warning" || level === "info"
@@ -68,7 +70,7 @@ function tierMeta(provider: CcProvider): ModelMetaOverride | undefined {
 }
 
 function scopeText(scope: ModelMetaScope): string {
-  return scope.kind === "provider" ? "全部模型" : `模型 ${scope.modelId}`;
+  return scope.kind === "provider" ? t("scopeAllModels") : tf("scopeModel", { id: scope.modelId });
 }
 
 async function persistAndMaybeReapplyMeta(
@@ -81,7 +83,10 @@ async function persistAndMaybeReapplyMeta(
 ): Promise<boolean> {
   const written = rt.state.saveModelMetaOverride(provider, scope, modelMeta);
   if (!written.ok) {
-    ctx.ui?.notify?.(`参数覆写保存失败：${written.error}`, "error");
+    ctx.ui?.notify?.(
+      tf("overrideSaveFailed", { error: written.error ?? "unknown" }),
+      "error",
+    );
     return false;
   }
 
@@ -90,8 +95,8 @@ async function persistAndMaybeReapplyMeta(
 
   const summary =
     modelMeta == null
-      ? "已清除 modelMeta 覆写"
-      : `已保存：${summarizeModelMeta(modelMeta)}`;
+      ? t("overrideCleared")
+      : tf("overrideSaved", { summary: summarizeModelMeta(modelMeta) });
   ctx.ui?.notify?.(
     `${summary} · ${provider.displayName} · ${scopeText(scope)}`,
     "info",
@@ -107,12 +112,15 @@ async function clearAllAndMaybeReapply(
 ): Promise<void> {
   const written = rt.state.clearModelMetaOverrides(provider);
   if (!written.ok) {
-    ctx.ui?.notify?.(`清除覆写失败：${written.error}`, "error");
+    ctx.ui?.notify?.(
+      tf("overrideClearFailed", { error: written.error ?? "unknown" }),
+      "error",
+    );
     return;
   }
   rt.reloadConfig();
   await reapplyIfActive(rt, lifecycle, ctx, provider);
-  ctx.ui?.notify?.(`已清除全部覆写 · ${provider.displayName}`, "info");
+  ctx.ui?.notify?.(tf("overrideClearedAll", { provider: provider.displayName }), "info");
 }
 
 /** Re-apply registration when this provider is currently registered/active. */
@@ -139,7 +147,7 @@ async function reapplyIfActive(
     ctx,
   );
   if (result.kind === "failed") {
-    ctx.ui?.notify?.(`已保存覆写，但重新应用失败：${result.error}`, "warning");
+    ctx.ui?.notify?.(tf("overrideReapplyFailed", { error: result.error }), "warning");
   }
 }
 
@@ -152,7 +160,10 @@ async function openProviderOverride(
   modelId?: string,
 ): Promise<void> {
   if (!isSwitchable(provider)) {
-    ctx.ui?.notify?.(`不可切换: ${provider.parseError ?? "unknown"}`, "warning");
+    ctx.ui?.notify?.(
+      tf("notSwitchableReason", { reason: provider.parseError ?? "unknown" }),
+      "warning",
+    );
     return;
   }
   // Reload so dialog shows latest disk values.
@@ -214,7 +225,7 @@ export async function runOverrideCommand(
   rt.reloadConfig();
   const switchable = providers.filter(isSwitchable);
   if (!switchable.length) {
-    ctx.ui?.notify?.("没有可切换的 Provider", "warning");
+    ctx.ui?.notify?.(t("noSwitchableProviders"), "warning");
     return;
   }
 
@@ -229,13 +240,16 @@ export async function runOverrideCommand(
     const mark = p.id === currentId ? "★ " : "";
     const entry = resolveProviderOverride(rt.config.providerOverrides, p);
     const n = Object.keys(entry?.modelOverrides ?? {}).length;
-    const badge = entry?.modelMeta ? (n ? ` · 覆写+${n}模型` : " · 覆写") : n ? ` · ${n}模型覆写` : "";
+    const badge = entry?.modelMeta
+      ? ` · ${n ? tf("combinedOverrideBadge", { n }) : t("overrideBadge")}`
+      : n
+        ? ` · ${tf("modelOverrideBadge", { n })}`
+        : "";
     return `${mark}${p.appType}/${p.displayName}${badge}`;
   });
 
-  const pick = await ctx.ui.select("参数覆写 · 选择 Provider", labels);
-  if (!pick) return;
-  const idx = labels.indexOf(pick);
+  const idx = await pickOverrideProvider(ctx, t("overrideProviderTitle"), labels);
+  if (idx === undefined) return;
   const provider = ordered[idx];
   if (!provider) return;
   await openProviderOverride(rt, lifecycle, ctx, provider);
@@ -349,7 +363,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
   }
 
   if (!provider || !modelId) {
-    ctx.ui?.notify?.("没有可显示的当前或已保存 pi-switch 配置", "warning");
+    ctx.ui?.notify?.(t("effectiveConfigEmpty"), "warning");
     return;
   }
 
@@ -374,8 +388,13 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
       typeof caps.maxTokens.value !== "number";
     ctx.ui?.notify?.(
       maxUnresolved
-        ? `无法构建有效配置：${provider.displayName} · ${resolvedModelId} maxTokens=unresolved；请写 exact-model maxTokens override`
-        : `无法构建有效配置：${provider.parseError ?? provider.displayName}`,
+        ? tf("effectiveConfigMaxUnresolved", {
+            provider: provider.displayName,
+            model: resolvedModelId,
+          })
+        : tf("effectiveConfigBuildFailed", {
+            reason: provider.parseError ?? provider.displayName,
+          }),
       "error",
     );
     return;
@@ -425,10 +444,7 @@ export async function runCommand(
     const { providers: live, error: snapErr } = rt.refreshSnapshot();
     if (snapErr) ctx.ui.notify(snapErr, "warning");
     if (!live.length) {
-      ctx.ui.notify(
-        "未找到 cc-switch provider（检查 ~/.cc-switch/cc-switch.db 或 CC_SWITCH_DB）",
-        "warning",
-      );
+      ctx.ui.notify(t("noCcProviders"), "warning");
       return;
     }
     const sel = rt.state.readOrMigrateSelection(live);
@@ -501,21 +517,24 @@ function notifyActivation(
 ): void {
   if (result.kind === "failed") {
     const label =
-      result.failedStage === "providerRegistration" ? "Provider 注册" : "模型切换";
-    ctx.ui.notify(`切换失败（${label}）：${result.error}`, "error");
+      result.failedStage === "providerRegistration"
+        ? t("stageProviderRegistration")
+        : t("stageModelSwitch");
+    ctx.ui.notify(tf("activationFailed", { stage: label, error: result.error }), "error");
     return;
   }
 
   const warnings = activationWarnings(result);
   if (warnings.length) {
-    ctx.ui.notify(
-      `已切换，但部分阶段未完成：\n- ${warnings.join("\n- ")}`,
-      "warning",
-    );
+    ctx.ui.notify(tf("activationPartial", { warnings: warnings.join("\n- ") }), "warning");
   } else {
     const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
     ctx.ui.notify(
-      `已切换到 ${provider.displayName} · ${modelId}（${metaHint}）`,
+      tf("activationSuccess", {
+        provider: provider.displayName,
+        model: modelId,
+        meta: metaHint,
+      }),
       "info",
     );
   }
@@ -530,9 +549,9 @@ function stageIssue(
   failedLabel: string,
   skippedLabel?: string,
 ): string | undefined {
-  if (stage.status === "failed") return `${failedLabel}：${stage.error}`;
+  if (stage.status === "failed") return `${failedLabel}: ${stage.error}`;
   if (stage.status === "skipped" && skippedLabel && stage.reason) {
-    return `${skippedLabel}：${stage.reason}`;
+    return `${skippedLabel}: ${stage.reason}`;
   }
   return undefined;
 }
@@ -541,9 +560,13 @@ export function activationWarnings(
   result: Extract<ActivationResult, { kind: "activated" }>,
 ): string[] {
   return [
-    stageIssue(result.stages.providerCleanup, "旧 Provider 清理失败", "旧 Provider 清理跳过"),
-    stageIssue(result.stages.selectionPersistence, "selection 保存失败"),
-    stageIssue(result.stages.recentPersistence, "recent 保存失败"),
+    stageIssue(
+      result.stages.providerCleanup,
+      t("oldProviderCleanupFailed"),
+      t("oldProviderCleanupSkipped"),
+    ),
+    stageIssue(result.stages.selectionPersistence, t("selectionSaveFailed")),
+    stageIssue(result.stages.recentPersistence, t("recentSaveFailed")),
   ].filter((item): item is string => Boolean(item));
 }
 
@@ -557,7 +580,7 @@ export async function runQuickSwitch(
   const { providers: live, error: snapErr } = rt.refreshSnapshot();
   if (snapErr) ctx.ui.notify(snapErr, "warning");
   if (!buildQuickEntries(rt.config.pins ?? [], rt.config.recent ?? [], live).length) {
-    ctx.ui.notify("没有可用的 pin / recent；先用 /ps-config 完成一次切换", "warning");
+    ctx.ui.notify(t("quickEmptyHint"), "warning");
     return;
   }
   const onTogglePin = async (entry: PinEntry): Promise<PinEntry[]> => {
@@ -590,14 +613,14 @@ export function registerCommands(
   lifecycle: SwitchLifecycle,
 ): void {
   pi.registerCommand("ps-config", {
-    description: "从 cc-switch 选择 Provider 与 Model 并切换（pin/recent 本地快捷）",
+    description: t("cmdConfigDescription"),
     handler: async (_args, ctx) => {
       await runCommand(rt, lifecycle, ctx);
     },
   });
 
   pi.registerCommand("ps", {
-    description: "快速切换：pin + recent 一屏直达",
+    description: t("cmdQuickDescription"),
     handler: async (_args, ctx) => {
       await runQuickSwitch(rt, lifecycle, ctx);
     },
@@ -605,7 +628,7 @@ export function registerCommands(
 
   if (rt.config.aliasCcs !== false) {
     pi.registerCommand("ccs", {
-      description: "ps-config 别名",
+      description: t("cmdAliasDescription"),
       handler: async (_args, ctx) => {
         await runCommand(rt, lifecycle, ctx);
       },
@@ -613,37 +636,35 @@ export function registerCommands(
   }
 
   pi.registerCommand("ps-override", {
-    description: "设置 modelMeta 参数覆写（可按模型细粒度；预设：中转兼容 / 完整推理）",
+    description: t("cmdOverrideDescription"),
     handler: async (_args, ctx) => {
       await runOverrideCommand(rt, lifecycle, ctx);
     },
   });
 
   pi.registerCommand("ps-doctor", {
-    description: "诊断 pi-switch 环境（sqlite3 / DB / 指纹 / modelMeta / pin）",
+    description: t("cmdDoctorDescription"),
     handler: async (_args, ctx) => {
       await runDoctorCommand(rt, ctx);
     },
   });
 
   pi.registerCommand("ps-probe", {
-    description:
-      "兼容性探针（只读）：对当前/指定 Target 跑 basic/reasoning/tool 契约，输出结构化证据",
+    description: t("cmdProbeDescription"),
     handler: async (_args, ctx) => {
       await runProbeCommand(pi, rt, ctx);
     },
   });
 
   pi.registerCommand("ps-repair", {
-    description:
-      "证据驱动修复（交互）：重新 Probe → 白名单 Recipe → 确认 → 内存候选验证 → CAS 提交，不切换 Session Model",
+    description: t("cmdRepairDescription"),
     handler: async (_args, ctx) => {
       await runRepairCommand(pi, rt, lifecycle, ctx);
     },
   });
 
   pi.registerCommand("ps-info", {
-    description: "显示当前生效的 Provider、Model、参数与非敏感 Header 名称",
+    description: t("cmdInfoDescription"),
     handler: async (_args, ctx) => {
       runEffectiveConfigCommand(rt, ctx);
     },

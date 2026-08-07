@@ -20,6 +20,7 @@
  * Lines truncated via pi-tui visibleWidth / truncateToWidth.
  */
 
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
 import { isSwitchable } from "../parse/index.ts";
 import { isPinned } from "../settings.ts";
@@ -28,10 +29,12 @@ import {
   filterProviders,
   getAppTypeIcon,
   sortProviders,
-  yellowHighlight,
 } from "./labels.ts";
+import { GLYPH } from "./tui-theme.ts";
+import { t, tf } from "./tui-locale.ts";
 import { mergeModelLists } from "../models-fetch.ts";
 import type { PiSwitchCtx } from "../pi-context.ts";
+import { PAGE_SIZE, ensureScroll, pageFlip } from "./pagination.ts";
 
 export type ThreeLevelResult =
   | { kind: "ok"; provider: CcProvider; modelId: string }
@@ -80,7 +83,7 @@ export interface ThreeLevelPickOpts {
 
 const MANUAL = "__manual__";
 const FETCH = "__fetch__";
-const COL_LABELS = ["类型", "名称", "模型"] as const;
+const COL_KEYS = ["colType", "colName", "colModel"] as const;
 
 type WidthFns = {
   visibleWidth: (s: string) => number;
@@ -88,7 +91,7 @@ type WidthFns = {
 };
 
 type ThemeLike = {
-  fg?: (key: string, text: string) => string;
+  fg?: (key: ThemeColor, text: string) => string;
   bold?: (text: string) => string;
 };
 
@@ -131,6 +134,11 @@ export function allocateColumns(
   }
   c2 = Math.max(4, c2);
   return { c0, c1, c2, usable };
+}
+
+/** Width available for a header label before its gap and right-aligned count. */
+export function headerLabelWidth(colWidth: number, countWidth: number): number {
+  return Math.max(0, colWidth - countWidth - 1);
 }
 
 /** Pi-style key hint: dim key + muted description. */
@@ -176,29 +184,30 @@ export function formatFooterHints(
   const revealed = opts?.revealed ?? 0;
   const col = opts?.col ?? 0;
   const enterHint =
-    col < 2 ? (col === 0 ? "next 名称" : "next 模型") : "select";
+    col < 2 ? (col === 0 ? t("enterNextName") : t("enterNextModel")) : t("select");
   const parts = [
-    formatKeyHint(theme, "↑↓", "nav"),
+    formatKeyHint(theme, "↑↓", t("nav")),
+    formatKeyHint(theme, "PgUp/PgDn", t("page")),
     formatKeyHint(theme, "enter", enterHint),
   ];
   if (revealed > 0) {
-    parts.unshift(formatKeyHint(theme, "←→", "column"));
+    parts.unshift(formatKeyHint(theme, "←→", t("column")));
   }
   parts.push(
-    formatKeyHint(theme, "/", "search"),
-    formatKeyHint(theme, "m", "manual"),
-    formatKeyHint(theme, "f", "refresh"),
+    formatKeyHint(theme, "/", t("search")),
+    formatKeyHint(theme, "m", t("manual")),
+    formatKeyHint(theme, "f", t("refresh")),
   );
   // o closes custom TUI then opens override dialog outside (no nested UI).
   if (!opts?.readOnly && revealed > 0) {
-    parts.push(formatKeyHint(theme, "o", "override"));
+    parts.push(formatKeyHint(theme, "o", t("override")));
   }
   // p toggles pin for current provider+model without closing the picker.
   if (!opts?.readOnly && revealed >= 2) {
-    parts.push(formatKeyHint(theme, "p", "pin"));
+    parts.push(formatKeyHint(theme, "p", t("pin")));
   }
   // Esc pops reveal depth; only type-only view exits the whole command.
-  parts.push(formatKeyHint(theme, "esc", revealed === 0 ? "退出" : "返回"));
+  parts.push(formatKeyHint(theme, "esc", revealed === 0 ? t("escExit") : t("escBack")));
   return parts.join(sep);
 }
 
@@ -207,9 +216,9 @@ export function formatSearchFooterHints(theme?: ThemeLike): string {
   const sep =
     typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
   return [
-    formatKeyHint(theme, "type", "过滤"),
-    formatKeyHint(theme, "enter", "确认"),
-    formatKeyHint(theme, "esc", "取消搜索"),
+    formatKeyHint(theme, "type", t("filter")),
+    formatKeyHint(theme, "enter", t("confirm")),
+    formatKeyHint(theme, "esc", t("cancelSearch")),
   ].join(sep);
 }
 
@@ -218,10 +227,23 @@ export function formatManualFooterHints(theme?: ThemeLike): string {
   const sep =
     typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
   return [
-    formatKeyHint(theme, "type", "model id"),
-    formatKeyHint(theme, "enter", "切换"),
-    formatKeyHint(theme, "esc", "取消"),
+    formatKeyHint(theme, "type", t("modelId")),
+    formatKeyHint(theme, "enter", t("switch")),
+    formatKeyHint(theme, "esc", t("cancel")),
   ].join(sep);
+}
+
+/** Semantic legend for picker marks (mirrors the canvas spec). */
+export function formatTuiLegend(theme?: ThemeLike): string {
+  const g = (key: ThemeColor, s: string) =>
+    typeof theme?.fg === "function" ? theme.fg(key, s) : s;
+  return [
+    `${g("accent", GLYPH.cursor)}${t("cursor")}`,
+    `${GLYPH.pin}${t("pinned")}`,
+    `${GLYPH.override}${t("overridden")}`,
+    `${g("warning", GLYPH.blocked)}${t("blocked")}`,
+    `${g("success", GLYPH.active)}${t("active")}`,
+  ].join("  ");
 }
 
 export async function threeLevelPick(
@@ -374,11 +396,13 @@ async function threeLevelCustom(
     }
 
     function modelLabel(id: string, provider?: CcProvider): string {
-      if (id === MANUAL) return "+ 手动输入";
-      if (id === FETCH) return "r 刷新模型";
-      const gear = provider && opts.hasOverride?.(provider, id) ? fg("accent", " *") : "";
-      if (provider && isPinned(livePins, provider.id, id, provider.appType)) return `* ${id}${gear}`;
-      return `${id}${gear}`;
+      if (id === MANUAL) return `+ ${t("manualInput")}`;
+      if (id === FETCH) return `r ${t("refreshModel")}`;
+      const pin = provider && isPinned(livePins, provider.id, id, provider.appType)
+        ? ` ${GLYPH.pin}`
+        : "";
+      const gear = provider && opts.hasOverride?.(provider, id) ? ` ${GLYPH.override}` : "";
+      return `${id}${pin}${gear}`;
     }
 
     function providerHasPin(provider: CcProvider | undefined): boolean {
@@ -409,7 +433,7 @@ async function threeLevelCustom(
         const { provider } = current();
         if (!provider) return false;
         if (!isSwitchable(provider)) {
-          ctx.ui.notify(`不可切换: ${provider.parseError ?? "unknown"}`, "warning");
+          ctx.ui.notify(`${t("notSwitchable")}: ${provider.parseError ?? "unknown"}`, "warning");
           return false;
         }
         revealed = Math.max(revealed, 2);
@@ -436,14 +460,7 @@ async function threeLevelCustom(
       return { tabs, tIdx, appType, names, provider, models };
     }
 
-    function ensureScroll(idx: number, scroll: number, vis: number, total: number): number {
-      if (total <= vis) return 0;
-      if (idx < scroll) return idx;
-      if (idx >= scroll + vis) return idx - vis + 1;
-      return scroll;
-    }
-
-    function fg(key: string, s: string): string {
+    function fg(key: ThemeColor, s: string): string {
       return typeof theme.fg === "function" ? theme.fg(key, s) : s;
     }
     function bold(s: string): string {
@@ -471,16 +488,35 @@ async function threeLevelCustom(
       return active ? fg("accent", "│") : fg("dim", "│");
     }
 
-    function headerCell(label: string, focused: boolean, colWidth: number): string {
-      if (focused) {
-        return fit(fg("accent", bold(`> ${label}`)), colWidth);
+    function headerCell(
+      label: string,
+      focused: boolean,
+      colWidth: number,
+      count?: string,
+    ): string {
+      const mark = focused ? "› " : "  ";
+      const body = `${mark}${label}`;
+      if (count) {
+        const cw = wf.visibleWidth(count);
+        const labelRoom = headerLabelWidth(colWidth, cw);
+        if (labelRoom >= 2) {
+          const styled = focused ? fg("accent", bold(body)) : fg("muted", body);
+          // fit pads the label segment to labelRoom so the │ separators stay
+          // aligned; the count is appended after a single gap (same width fn as
+          // the body, so CJK double-width labels won't shift the column).
+          return `${fit(styled, labelRoom)} ${fg(focused ? "accent" : "dim", count)}`;
+        }
+        // Column too narrow to split — keep it on one line and let fit truncate.
+        const styled = focused ? fg("accent", bold(body)) : fg("muted", body);
+        return fit(`${styled} ${count}`, colWidth);
       }
-      return fit(fg("muted", `  ${label}`), colWidth);
+      if (focused) return fit(fg("accent", bold(body)), colWidth);
+      return fit(fg("muted", body), colWidth);
     }
 
     function rowMarker(selected: boolean, focused: boolean, body: string): string {
-      if (selected && focused) return fg("accent", bold(`> ${body}`));
-      if (selected) return fg("muted", `> ${body}`);
+      if (selected && focused) return fg("accent", bold(`› ${body}`));
+      if (selected) return fg("muted", `› ${body}`);
       return `  ${body}`;
     }
 
@@ -493,7 +529,7 @@ async function threeLevelCustom(
       const sepWidth = 1;
       const { c0, c1, c2 } = allocateColumns(width, sepWidth, levels);
 
-      const maxVis = Math.min(12, Math.max(5, Math.floor((16 * width) / 120)));
+      const maxVis = PAGE_SIZE;
 
       typeScroll = ensureScroll(tIdx, typeScroll, maxVis, tabs.length);
       if (revealed >= 1) {
@@ -509,27 +545,33 @@ async function threeLevelCustom(
       push(border(width, "accent"));
       push(fg("accent", bold("pi-switch")));
 
-      const metaParts = [`${tabs.length} 类型`];
-      if (revealed >= 1) metaParts.push(`${names.length} 名称`);
+      const metaParts = [`${tabs.length} ${t("colType")}`];
+      if (revealed >= 1) metaParts.push(`${names.length} ${t("colName")}`);
       if (revealed >= 2) {
         const realModels = models.filter((m) => m !== MANUAL && m !== FETCH).length;
-        metaParts.push(`${realModels} 模型`);
+        metaParts.push(`${realModels} ${t("colModel")}`);
       }
       if (manualMode) {
-        metaParts.push(`手动 model "${manualDraft}█"`);
+        metaParts.push(`${t("manual")} model "${manualDraft}█"`);
       } else if (searchMode) {
-        metaParts.push(`搜索[${COL_LABELS[col]}] "${query}█"`);
+        metaParts.push(`${t("searching")}[${t(COL_KEYS[col])}] "${query}█"`);
       } else if (query) {
-        metaParts.push(`搜索[${COL_LABELS[col]}] "${query}"`);
+        metaParts.push(`${t("searching")}[${t(COL_KEYS[col])}] "${query}"`);
       }
       const metaLine = metaParts.join(" · ");
       push(manualMode || searchMode ? fg("accent", metaLine) : fg("dim", metaLine));
       push(border(width, "borderMuted"));
 
-      // Headers only for revealed columns
-      let header = headerCell(COL_LABELS[0], col === 0, c0);
-      if (revealed >= 1) header += vsep(col === 0 || col === 1) + headerCell(COL_LABELS[1], col === 1, c1);
-      if (revealed >= 2) header += vsep(col === 1 || col === 2) + headerCell(COL_LABELS[2], col === 2, c2);
+      // Headers only for revealed columns; each header carries its own
+      // position count (cur/total) right-aligned, so the reader always knows
+      // which column a number belongs to.
+      let header = headerCell(t(COL_KEYS[0]), col === 0, c0, `${tIdx + 1}/${Math.max(tabs.length, 1)}`);
+      if (revealed >= 1) {
+        header += vsep(col === 0 || col === 1) + headerCell(t(COL_KEYS[1]), col === 1, c1, `${nameIdx + 1}/${Math.max(names.length, 1)}`);
+      }
+      if (revealed >= 2) {
+        header += vsep(col === 1 || col === 2) + headerCell(t(COL_KEYS[2]), col === 2, c2, `${modelIdx + 1}/${Math.max(models.length, 1)}`);
+      }
       push(header);
       push(border(width, "dim"));
 
@@ -551,7 +593,7 @@ async function threeLevelCustom(
               : `${namePart} ${fg("dim", countPart)}`;
           tCell = rowMarker(sel, col === 0, body);
         } else if (row === 0 && tabs.length === 0) {
-          tCell = fg("dim", "  (空)");
+          tCell = fg("dim", `  (${t("empty")})`);
         }
 
         let rowLine = fit(tCell, c0);
@@ -560,26 +602,38 @@ async function threeLevelCustom(
           let nCell = "";
           if (ni < names.length) {
             const p = names[ni];
-            const nameBudget = Math.max(4, c1 - 6);
-            const pinMark = providerHasPin(p) ? "* " : "";
-            const gear = providerHasOverride(p) ? " *" : "";
-            const reserved = (pinMark ? 2 : 0) + (gear ? 2 : 0);
-            const name = truncatePlain(p.displayName, Math.max(2, nameBudget - reserved));
-            const labeled = `${pinMark}${name}${gear}`;
             const ok = isSwitchable(p);
-            const core = ok
-              ? labeled
-              : `${labeled} ${fg("dim", "-")} ${fg("warning", "不可切换")}`;
-            const sel = ni === nameIdx;
             const active = opts.activePiName === p.piName;
-            if (sel && col === 1) {
-              nCell = fg("accent", `> ${labeled}${ok ? "" : " - 不可切换"}`);
-            } else if (sel && active) nCell = `> ${yellowHighlight(labeled)}`;
-            else if (sel) nCell = `> ${ok ? labeled : `${labeled} - 不可切换`}`;
-            else if (active) nCell = `  ${yellowHighlight(labeled)}`;
-            else nCell = `  ${core}`;
+            const pinMark = providerHasPin(p) ? GLYPH.pin : "";
+            const gear = providerHasOverride(p) ? GLYPH.override : "";
+            const activeMark = active ? GLYPH.active : "";
+            // Reserve marker width with the SAME width function fit() uses
+            // (wf.visibleWidth) so the │ separators stay aligned. The new marks
+            // (★ ⚙ ✕ ● ›) are double-width in a CJK terminal.
+            let lead = "";
+            let tail = "";
+            if (!ok) {
+              lead = `${GLYPH.blocked} `;
+              tail = `(${t("notSwitchable")})`;
+            } else {
+              if (activeMark) lead += `${activeMark} `;
+              if (pinMark) lead += `${pinMark} `;
+              if (gear) tail = ` ${gear}`;
+            }
+            const overhead = wf.visibleWidth(lead) + wf.visibleWidth(tail);
+            const nameBudget = Math.max(4, c1 - 12);
+            const name = truncatePlain(p.displayName, Math.max(2, nameBudget - overhead));
+            const labeled = `${lead}${name}${tail}`;
+            const sel = ni === nameIdx;
+            if (sel) {
+              nCell = fg("accent", `› ${labeled}`);
+            } else if (active) {
+              nCell = `  ${fg("success", labeled)}`;
+            } else {
+              nCell = `  ${labeled}`;
+            }
           } else if (row === 0 && names.length === 0) {
-            nCell = fg("dim", "  (无匹配)");
+            nCell = fg("dim", `  (${t("noMatches")})`);
           }
           rowLine += vsep() + fit(nCell, c1);
         }
@@ -598,8 +652,8 @@ async function threeLevelCustom(
           } else if (row === 0 && models.length === 0) {
             const reason =
               provider && !isSwitchable(provider)
-                ? truncatePlain(provider.parseError ?? "不可切换", Math.max(4, c2 - 2))
-                : "无模型";
+                ? truncatePlain(provider.parseError ?? t("notSwitchable"), Math.max(4, c2 - 2))
+                : t("noModels");
             mCell = fg("dim", `  ${reason}`);
           }
           rowLine += vsep() + fit(mCell, c2);
@@ -659,10 +713,8 @@ async function threeLevelCustom(
             : modelLabel(mid ?? "—", provider);
         parts.push(fg("accent", modelPart));
       }
-      let pos = `  ${tIdx + 1}/${Math.max(tabs.length, 1)}`;
-      if (revealed >= 1) pos += ` · ${nameIdx + 1}/${Math.max(names.length, 1)}`;
-      if (revealed >= 2) pos += ` · ${modelIdx + 1}/${Math.max(models.length, 1)}`;
-      push(parts.join(arrow) + fg("dim", pos));
+      push(parts.join(arrow));
+      push(formatTuiLegend(theme));
 
       push(
         manualMode
@@ -687,7 +739,7 @@ async function threeLevelCustom(
     function beginManualEntry(): void {
       const { provider } = current();
       if (!provider || !isSwitchable(provider)) {
-        ctx.ui.notify("当前名称不可切换", "warning");
+        ctx.ui.notify(t("nameNotSwitchable"), "warning");
         return;
       }
       searchMode = false;
@@ -701,19 +753,19 @@ async function threeLevelCustom(
 
     async function doFetch(p: CcProvider) {
       if (!opts.fetchRemote) {
-        ctx.ui.notify("未配置远端拉取", "warning");
+        ctx.ui.notify(t("remoteFetchUnavailable"), "warning");
         return;
       }
-      ctx.ui.setStatus?.("pi-switch", "刷新模型…");
+      ctx.ui.setStatus?.("pi-switch", t("refreshingModels"));
       try {
         const ids = await opts.fetchRemote(p);
         remoteById.set(p.id, ids);
         ctx.ui.notify(
-          ids.length ? `已刷新 ${ids.length} 个模型` : "模型列表为空",
+          ids.length ? tf("modelsRefreshed", { n: ids.length }) : t("modelListEmpty"),
           ids.length ? "info" : "warning",
         );
       } catch (e) {
-        ctx.ui.notify(`拉取失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+        ctx.ui.notify(`${t("fetchFailed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
       }
       ctx.ui.setStatus?.("pi-switch", undefined);
       modelIdx = 0;
@@ -736,12 +788,12 @@ async function threeLevelCustom(
         if (matchesKey(data, Key.enter)) {
           const id = manualDraft.trim();
           if (!id) {
-            ctx.ui.notify("model id 不能为空", "warning");
+            ctx.ui.notify(t("modelIdRequired"), "warning");
             return;
           }
           const { provider } = current();
           if (!provider || !isSwitchable(provider)) {
-            ctx.ui.notify("当前名称不可切换", "warning");
+            ctx.ui.notify(t("nameNotSwitchable"), "warning");
             manualMode = false;
             invalidate();
             tui.requestRender();
@@ -854,6 +906,39 @@ async function threeLevelCustom(
         return;
       }
 
+      if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+        const dir = matchesKey(data, Key.pageDown) ? 1 : -1;
+        const { names, models } = current();
+        if (col === 0) {
+          const tabsV = visibleTabs();
+          let vIdx = tabsV.findIndex((t) => t.appType === allTabs[typeIdx]?.appType);
+          if (vIdx < 0) vIdx = 0;
+          const flipped = pageFlip(vIdx, typeScroll, tabsV.length, PAGE_SIZE, dir);
+          typeScroll = flipped.scroll;
+          const app = tabsV[flipped.idx]?.appType;
+          const real = allTabs.findIndex((t) => t.appType === app);
+          if (real >= 0) typeIdx = real;
+          nameIdx = 0;
+          modelIdx = 0;
+          if (revealed > 0) {
+            revealed = 0;
+            col = 0;
+          }
+        } else if (col === 1) {
+          const flipped = pageFlip(nameIdx, nameScroll, names.length, PAGE_SIZE, dir);
+          nameIdx = flipped.idx;
+          nameScroll = flipped.scroll;
+          modelIdx = 0;
+        } else {
+          const flipped = pageFlip(modelIdx, modelScroll, models.length, PAGE_SIZE, dir);
+          modelIdx = flipped.idx;
+          modelScroll = flipped.scroll;
+        }
+        invalidate();
+        tui.requestRender();
+        return;
+      }
+
       if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
         const dir = matchesKey(data, Key.up) ? -1 : 1;
         const { names, models } = current();
@@ -903,7 +988,7 @@ async function threeLevelCustom(
       if (data === "f" || data === "F") {
         const { provider } = current();
         if (!provider || !isSwitchable(provider)) {
-          ctx.ui.notify("当前名称不可切换", "warning");
+          ctx.ui.notify(t("nameNotSwitchable"), "warning");
           return;
         }
         void doFetch(provider);
@@ -913,21 +998,21 @@ async function threeLevelCustom(
       // Toggle pin for current provider + focused model (stays open).
       if (!opts.readOnly && (data === "p" || data === "P")) {
         if (revealed < 2) {
-          ctx.ui.notify("请先进入模型列再 pin", "warning");
+          ctx.ui.notify(t("pinNeedModel"), "warning");
           return;
         }
         const { provider, models } = current();
         if (!provider || !isSwitchable(provider)) {
-          ctx.ui.notify("当前名称不可切换", "warning");
+          ctx.ui.notify(t("nameNotSwitchable"), "warning");
           return;
         }
         const mid = models[modelIdx];
         if (!mid || mid === MANUAL || mid === FETCH) {
-          ctx.ui.notify("请选中具体模型再 pin", "warning");
+          ctx.ui.notify(t("pinNeedSelectedModel"), "warning");
           return;
         }
         if (!opts.onTogglePin) {
-          ctx.ui.notify("未配置 pin 持久化", "warning");
+          ctx.ui.notify(t("pinNoPersist"), "warning");
           return;
         }
         void (async () => {
@@ -942,15 +1027,15 @@ async function threeLevelCustom(
             const nowPinned = isPinned(livePins, provider.id, mid, provider.appType);
             ctx.ui.notify(
               nowPinned
-                ? `已 pin · ${provider.displayName} · ${mid}`
-                : `已取消 pin · ${provider.displayName} · ${mid}`,
+                ? `${t("pinOn")} · ${provider.displayName} · ${mid}`
+                : `${t("pinOff")} · ${provider.displayName} · ${mid}`,
               "info",
             );
             invalidate();
             tui.requestRender();
           } catch (e) {
             ctx.ui.notify(
-              `pin 失败: ${e instanceof Error ? e.message : String(e)}`,
+              `${t("pinFail")}: ${e instanceof Error ? e.message : String(e)}`,
               "error",
             );
           }
@@ -961,12 +1046,12 @@ async function threeLevelCustom(
       // Close custom TUI first; caller opens override dialog outside (H1: no nested UI).
       if (!opts.readOnly && (data === "o" || data === "O")) {
         if (revealed < 1) {
-          ctx.ui.notify("请先进入名称列再设置参数覆写", "warning");
+          ctx.ui.notify(t("overrideNeedName"), "warning");
           return;
         }
         const { provider, models } = current();
         if (!provider || !isSwitchable(provider)) {
-          ctx.ui.notify("当前名称不可切换", "warning");
+          ctx.ui.notify(t("nameNotSwitchable"), "warning");
           return;
         }
         // At model level, preselect model scope from the highlighted row.
@@ -987,12 +1072,12 @@ async function threeLevelCustom(
         const { provider, models } = current();
         if (!provider) return;
         if (!isSwitchable(provider)) {
-          ctx.ui.notify(`不可切换: ${provider.parseError ?? "unknown"}`, "warning");
+          ctx.ui.notify(`${t("notSwitchable")}: ${provider.parseError ?? "unknown"}`, "warning");
           return;
         }
         const mid = models[modelIdx];
         if (!mid) {
-          ctx.ui.notify("无可用模型，可手动输入或刷新模型", "warning");
+          ctx.ui.notify(t("noAvailableModels"), "warning");
           return;
         }
         if (mid === MANUAL) {
@@ -1026,7 +1111,7 @@ async function threeLevelFallback(
   if (!tabs.length) return { kind: "cancel" };
 
   const typeLabels = tabs.map((t) => `${t.appType} ${t.count}`);
-  const typePick = await ctx.ui.select("选择类型", typeLabels);
+  const typePick = await ctx.ui.select(t("selectType"), typeLabels);
   if (!typePick) return { kind: "cancel" };
   const tab = tabs[typeLabels.indexOf(typePick)];
   if (!tab) return { kind: "cancel" };
@@ -1037,27 +1122,29 @@ async function threeLevelFallback(
     (opts.pins ?? []).map((p) => p.dbId),
   );
   const nameLabels = names.map((p) =>
-    isSwitchable(p) ? p.displayName : `${p.displayName} · 不可切换`,
+    isSwitchable(p) ? p.displayName : `${p.displayName} · ${t("notSwitchable")}`,
   );
-  const namePick = await ctx.ui.select(`选择名称 · ${tab.appType}`, nameLabels);
+  const namePick = await ctx.ui.select(`${t("selectName")} · ${tab.appType}`, nameLabels);
   if (!namePick) return { kind: "cancel" };
   const provider = names[nameLabels.indexOf(namePick)];
   if (!provider || !isSwitchable(provider)) return { kind: "cancel" };
 
-  const models = [...mergeModelLists(provider.configModels, []), "✎ 手动输入", "↻ 刷新模型"];
-  const modelPick = await ctx.ui.select(`选择模型 · ${provider.displayName}`, models);
+  const manualLabel = `✎ ${t("manualInput")}`;
+  const refreshLabel = `↻ ${t("refreshModel")}`;
+  const models = [...mergeModelLists(provider.configModels, []), manualLabel, refreshLabel];
+  const modelPick = await ctx.ui.select(`${t("selectModel")} · ${provider.displayName}`, models);
   if (!modelPick) return { kind: "cancel" };
-  if (modelPick === "↻ 刷新模型") {
+  if (modelPick === refreshLabel) {
     if (opts.fetchRemote) {
       try {
         const ids = await opts.fetchRemote(provider);
-        const again = await ctx.ui.select(`选择模型 · ${provider.displayName}`, [
+        const again = await ctx.ui.select(`${t("selectModel")} · ${provider.displayName}`, [
           ...mergeModelLists(provider.configModels, ids),
-          "✎ 手动输入",
+          manualLabel,
         ]);
         if (!again) return { kind: "cancel" };
-        if (again === "✎ 手动输入") {
-          const manual = await ctx.ui.input("输入 model id", provider.configModels[0] ?? "");
+        if (again === manualLabel) {
+          const manual = await ctx.ui.input(t("inputModelId"), provider.configModels[0] ?? "");
           if (!manual?.trim()) return { kind: "cancel" };
           return { kind: "ok", provider, modelId: manual.trim() };
         }
@@ -1068,8 +1155,8 @@ async function threeLevelFallback(
     }
     return { kind: "cancel" };
   }
-  if (modelPick === "✎ 手动输入") {
-    const manual = await ctx.ui.input("输入 model id", provider.configModels[0] ?? "");
+  if (modelPick === manualLabel) {
+    const manual = await ctx.ui.input(t("inputModelId"), provider.configModels[0] ?? "");
     if (!manual?.trim()) return { kind: "cancel" };
     return { kind: "ok", provider, modelId: manual.trim() };
   }
