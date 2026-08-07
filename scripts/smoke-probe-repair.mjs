@@ -8,40 +8,31 @@
  * change. Real cc-switch data, credentials, and pi-switch.json stay untouched.
  */
 
-import crypto from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  assert,
+  assertFileStatesUnchanged,
+  buildTempEnv,
+  captureFileStates,
+  createRpcClient,
+  formatError,
+  locatePiCli,
+  mkdtemp,
+  readJsonRequest,
+  resolveExecutable,
+  sendJsonError,
+  sha256IfExists,
+  smokeStatePaths,
+  sqlQuote,
+  startHttpRelay,
+  writeSse,
+} from "./_smoke-harness.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const COMMAND_TIMEOUT_MS = 180_000;
-
-function sha256(file) {
-  try {
-    return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-function resolveExecutable(name, envName) {
-  const explicit = process.env[envName];
-  if (explicit && fs.existsSync(explicit)) return explicit;
-  const finder = process.platform === "win32" ? "where.exe" : "which";
-  const result = spawnSync(finder, [name], { encoding: "utf8" });
-  const first = result.stdout?.split(/\r?\n/).find(Boolean)?.trim();
-  if (!first || result.status !== 0) {
-    throw new Error(`${name} not found (set ${envName})`);
-  }
-  return first;
-}
-
-function sqlQuote(value) {
-  return `'${String(value).replaceAll("'", "''")}'`;
-}
 
 function createMinimalDb(sqlite3, dbPath, scenario, relayOrigin) {
   const settings = scenario.settings(relayOrigin);
@@ -105,26 +96,6 @@ function geminiSettings(baseUrl, modelId) {
       GEMINI_MODEL: modelId,
     },
   };
-}
-
-function writeSse(res, payload) {
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function sendJsonError(res, status, message, extra = {}) {
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "x-request-id": `repair-smoke-error-${status}`,
-  });
-  res.end(
-    JSON.stringify({
-      error: {
-        message,
-        type: "invalid_request_error",
-        ...extra,
-      },
-    }),
-  );
 }
 
 function sendOpenAiStream(res, body, kind) {
@@ -231,21 +202,6 @@ function sendGeminiStream(res, kind, args) {
   res.end(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function readJsonRequest(req, res, onBody) {
-  let source = "";
-  req.setEncoding("utf8");
-  req.on("data", (chunk) => {
-    source += chunk;
-  });
-  req.on("end", () => {
-    try {
-      onBody(source ? JSON.parse(source) : {});
-    } catch {
-      sendJsonError(res, 400, "invalid JSON");
-    }
-  });
-}
-
 function createReasoningRelayHandler(requests) {
   return (req, res) => {
     readJsonRequest(req, res, (body) => {
@@ -342,161 +298,77 @@ function createGeminiRelayHandler(requests) {
 }
 
 function startRelay(scenario) {
-  const requests = [];
-  const handler = scenario.createHandler(requests);
-  const server = http.createServer(handler);
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("relay did not bind a TCP port"));
-        return;
-      }
-      resolve({ server, port: address.port, requests });
-    });
+  let handler;
+  return startHttpRelay((req, res, requests) => {
+    if (process.env.SMOKE_DEBUG === "1") {
+      console.error(`[repair-smoke] relay ${req.method ?? "unknown"} ${req.url ?? "unknown"}`);
+    }
+    if (req.method !== "POST") {
+      requests.push({ method: req.method, path: req.url, kind: "unexpected-route" });
+      sendJsonError(res, 405, `method not allowed: ${req.method ?? "unknown"}`);
+      return;
+    }
+    const url = new URL(req.url ?? "/", "http://smoke.invalid");
+    const expectedPath =
+      scenario.appType === "gemini"
+        ? url.pathname ===
+            `/v1beta/models/${encodeURIComponent(scenario.modelId)}:streamGenerateContent` &&
+          url.searchParams.get("alt") === "sse"
+        : url.pathname === "/v1/chat/completions";
+    if (!expectedPath) {
+      requests.push({ method: req.method, path: req.url, kind: "unexpected-route" });
+      sendJsonError(res, 404, `unexpected relay path: ${req.url ?? "unknown"}`);
+      return;
+    }
+    handler ??= scenario.createHandler(requests);
+    handler(req, res);
   });
 }
 
-function createRpcClient({ piCli, extension, env, scenario }) {
-  const child = spawn(
-    process.execPath,
-    [
-      piCli,
-      "--mode",
-      "rpc",
-      "--no-session",
-      "--approve",
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
-      "--extension",
-      extension,
-    ],
-    { cwd: ROOT, env, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  let stdoutBuffer = "";
-  let stderr = "";
-  let sequence = 0;
-  const pending = new Map();
-  const notifications = [];
-  const choices = [];
-  const confirmations = [];
-  const extensionErrors = [];
-
-  const write = (value) => {
-    child.stdin.write(`${JSON.stringify(value)}\n`);
-  };
-
-  const send = (type, extra = {}) => {
-    const id = `${scenario.recipeId}-${++sequence}`;
-    write({ id, type, ...extra });
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`RPC timeout waiting for ${type}`));
-      }, COMMAND_TIMEOUT_MS);
-      pending.set(id, (response) => {
-        clearTimeout(timeout);
-        resolve(response);
-      });
-    });
-  };
-
-  const choose = (event) => {
-    const options = event.options ?? [];
-    let value;
-    if (event.title === "选择类型") {
-      value = options.find((option) => new RegExp(`^${scenario.appType}\\b`, "i").test(option));
-    } else if (/^选择名称/.test(event.title ?? "")) {
-      value = options.find((option) => option.trim() === scenario.providerName);
-    } else if (/^选择模型/.test(event.title ?? "")) {
-      value = options.find((option) => option.includes(scenario.modelId));
-    }
-    if (!value) {
-      choices.push({ title: event.title, error: "expected option missing", options });
-      write({ type: "extension_ui_response", id: event.id, cancelled: true });
-      return;
-    }
-    choices.push({ title: event.title, value });
-    write({ type: "extension_ui_response", id: event.id, value });
-  };
-
-  const confirm = (event) => {
-    if (event.title === "确认执行修复？") {
-      const expected = scenario.planFragments.every((fragment) => event.message?.includes(fragment));
-      confirmations.push({ title: event.title, message: event.message, confirmed: expected });
-      write({ type: "extension_ui_response", id: event.id, confirmed: expected });
-      return;
-    }
-    if (event.title === "切换到已修复目标？") {
-      confirmations.push({ title: event.title, message: event.message, confirmed: false });
-      write({ type: "extension_ui_response", id: event.id, confirmed: false });
-      return;
-    }
-    confirmations.push({ title: event.title, message: event.message, confirmed: false });
-    write({ type: "extension_ui_response", id: event.id, confirmed: false });
-  };
-
-  const onEvent = (event) => {
-    if (event.type === "response" && event.id && pending.has(event.id)) {
-      const resolve = pending.get(event.id);
-      pending.delete(event.id);
-      resolve(event);
-      return;
-    }
-    if (event.type === "extension_ui_request") {
-      if (event.method === "notify") {
-        notifications.push({ message: event.message, type: event.notifyType });
-      } else if (event.method === "select") {
-        choose(event);
-      } else if (event.method === "confirm") {
-        confirm(event);
-      } else if (["input", "editor"].includes(event.method)) {
-        write({ type: "extension_ui_response", id: event.id, cancelled: true });
-      }
-    }
-    if (event.type === "extension_error") extensionErrors.push(event);
-  };
-
-  child.stdout.on("data", (chunk) => {
-    stdoutBuffer += chunk.toString("utf8");
-    while (true) {
-      const newline = stdoutBuffer.indexOf("\n");
-      if (newline < 0) break;
-      let line = stdoutBuffer.slice(0, newline);
-      stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
-      if (!line.trim()) continue;
-      try {
-        onEvent(JSON.parse(line));
-      } catch {
-        stderr += `\n[RPC parse] ${line.slice(0, 500)}`;
-      }
-    }
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
-  });
-  child.once("exit", (code, signal) => {
-    if (!pending.size) return;
-    const response = {
-      success: false,
-      error: `Pi RPC exited early: code=${code} signal=${signal}`,
-    };
-    for (const resolve of pending.values()) resolve(response);
-    pending.clear();
-  });
-
+function createScenarioHandlers(scenario, choices, confirmations) {
   return {
-    child,
-    send,
-    notifications,
-    choices,
-    confirmations,
-    extensionErrors,
-    stderr: () => stderr,
+    select(event) {
+      if (process.env.SMOKE_DEBUG === "1") {
+        console.error(
+          `[repair-smoke] select ${JSON.stringify(event.title)} options=${JSON.stringify(event.options)}`,
+        );
+      }
+      const options = event.options ?? [];
+      let value;
+      if (["选择类型", "select type"].includes(event.title)) {
+        value = options.find((option) =>
+          new RegExp(`^${scenario.appType}\\b`, "i").test(option),
+        );
+      } else if (/^(选择名称|select name)/i.test(event.title ?? "")) {
+        value = options.find((option) => option.trim() === scenario.providerName);
+      } else if (/^(选择模型|select model)/i.test(event.title ?? "")) {
+        value = options.find((option) => option.includes(scenario.modelId));
+      }
+      if (!value) {
+        choices.push({ title: event.title, error: "expected option missing", options });
+        return undefined;
+      }
+      choices.push({ title: event.title, value });
+      return value;
+    },
+    confirm(event) {
+      if (process.env.SMOKE_DEBUG === "1") {
+        console.error(`[repair-smoke] confirm ${JSON.stringify(event.title)}`);
+      }
+      if (event.title === "确认执行修复？") {
+        const confirmed = scenario.planFragments.every((fragment) =>
+          event.message?.includes(fragment),
+        );
+        confirmations.push({ title: event.title, message: event.message, confirmed });
+        return confirmed;
+      }
+      if (event.title === "切换到已修复目标？") {
+        confirmations.push({ title: event.title, message: event.message, confirmed: false });
+        return false;
+      }
+      confirmations.push({ title: event.title, message: event.message, confirmed: false });
+      return false;
+    },
   };
 }
 
@@ -505,10 +377,6 @@ function countKinds(requests) {
     out[request.kind] = (out[request.kind] ?? 0) + 1;
     return out;
   }, {});
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
 }
 
 const scenarios = [
@@ -522,7 +390,7 @@ const scenarios = [
     initialOverride: {
       label: "Reasoning Repair Smoke",
       modelOverrides: {
-        "gpt-5.6-reasoning-smoke": { reasoning: true },
+        "gpt-5.6-reasoning-smoke": { reasoning: true, maxTokens: 8192 },
       },
     },
     createHandler: createReasoningRelayHandler,
@@ -550,7 +418,7 @@ const scenarios = [
       label: "Fingerprint Repair Smoke",
       fingerprint: "none",
       modelOverrides: {
-        "gpt-5.6-fingerprint-smoke": { reasoning: false },
+        "gpt-5.6-fingerprint-smoke": { reasoning: false, maxTokens: 8192 },
       },
     },
     createHandler: createFingerprintRelayHandler,
@@ -575,7 +443,7 @@ const scenarios = [
       label: "Gemini Tool Repair Smoke",
       geminiToolCompat: false,
       modelOverrides: {
-        "gemini-2.5-pro-repair-smoke": { reasoning: false },
+        "gemini-2.5-pro-repair-smoke": { reasoning: false, maxTokens: 8192 },
       },
     },
     createHandler: createGeminiRelayHandler,
@@ -591,10 +459,8 @@ const scenarios = [
   },
 ];
 
-async function runScenario({ scenario, sqlite3, piCli, extension, realConfig, realConfigHash }) {
-  const tempRoot = fs.mkdtempSync(
-    path.join(os.tmpdir(), `pi-switch-${scenario.recipeId}-smoke-`),
-  );
+async function runScenario({ scenario, sqlite3, piCli, extension, realState }) {
+  const tempRoot = mkdtemp(scenario.recipeId);
   const tempHome = path.join(tempRoot, "home");
   const dbDir = path.join(tempHome, ".cc-switch");
   const agentDir = path.join(tempHome, ".pi", "agent");
@@ -603,6 +469,10 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realConfig, re
   const relay = await startRelay(scenario);
   let rpc;
   let success = false;
+  let result;
+  let failure;
+  const choices = [];
+  const confirmations = [];
 
   try {
     fs.mkdirSync(dbDir, { recursive: true });
@@ -624,20 +494,16 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realConfig, re
       )}\n`,
       "utf8",
     );
-    const tempConfigBefore = sha256(tempConfig);
-    const root = path.parse(tempHome).root;
-    const env = {
-      ...process.env,
-      HOME: tempHome,
-      USERPROFILE: tempHome,
-      HOMEDRIVE: root.replace(/[\\/]$/, ""),
-      HOMEPATH: tempHome.slice(root.length - 1),
-      LOCALAPPDATA: path.join(tempHome, "AppData", "Local"),
-      APPDATA: path.join(tempHome, "AppData", "Roaming"),
-      PI_CODING_AGENT_DIR: agentDir,
-      SQLITE3_PATH: sqlite3,
-    };
-    rpc = createRpcClient({ piCli, extension, env, scenario });
+    const tempConfigBefore = sha256IfExists(tempConfig);
+    const env = buildTempEnv(tempHome, sqlite3, dbPath);
+    rpc = createRpcClient({
+      piCli,
+      extension,
+      env,
+      cwd: ROOT,
+      label: scenario.recipeId,
+      handlers: createScenarioHandlers(scenario, choices, confirmations),
+    });
 
     const commands = await rpc.send("get_commands");
     const commandNames = (commands.data?.commands ?? []).map((command) => command.name);
@@ -649,29 +515,47 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realConfig, re
     assert(entriesResponse.success === true, "failed to read RPC session entries");
 
     const written = JSON.parse(fs.readFileSync(tempConfig, "utf8"));
-    const tempConfigAfter = sha256(tempConfig);
+    const tempConfigAfter = sha256IfExists(tempConfig);
     const detailEntries = (entriesResponse.data?.entries ?? []).filter(
       (entry) => entry.customType === "ps-repair-case-detail",
     );
     const detail = detailEntries.at(-1)?.data;
     const counts = countKinds(relay.requests);
-    const planConfirm = rpc.confirmations.find((item) => item.title === "确认执行修复？");
-    const switchConfirm = rpc.confirmations.find(
+    const planConfirm = confirmations.find((item) => item.title === "确认执行修复？");
+    const switchConfirm = confirmations.find(
       (item) => item.title === "切换到已修复目标？",
     );
+    const diagnostics = JSON.stringify({
+      choices,
+      confirmations,
+      unexpected: rpc.unexpected,
+      notifications: rpc.notifications.slice(-5),
+      requests: relay.requests,
+      repair: detail?.repair,
+    });
 
-    assert(planConfirm?.confirmed === true, `${scenario.recipeId}: expected plan was not confirmed`);
+    assert(
+      planConfirm?.confirmed === true,
+      `${scenario.recipeId}: expected plan was not confirmed: ${diagnostics}`,
+    );
     assert(switchConfirm?.confirmed === false, `${scenario.recipeId}: session switch was not declined`);
     assert(scenario.assertWritten(written), `${scenario.recipeId}: expected config patch missing`);
     assert(tempConfigBefore !== tempConfigAfter, `${scenario.recipeId}: temp config hash unchanged`);
-    assert(sha256(realConfig) === realConfigHash, `${scenario.recipeId}: real pi-switch.json changed`);
     scenario.assertCounts(counts);
     assert(detail?.repair?.status === "committed", `${scenario.recipeId}: Repair Case not committed`);
     assert(detail?.repair?.persisted === true, `${scenario.recipeId}: persisted flag not true`);
     assert(rpc.extensionErrors.length === 0, `${scenario.recipeId}: extension_error emitted`);
+    assert(
+      rpc.unexpected.length === 0,
+      `${scenario.recipeId}: unexpected UI request: ${JSON.stringify(rpc.unexpected)}`,
+    );
+    assert(
+      choices.every((choice) => !choice.error),
+      `${scenario.recipeId}: expected picker option missing`,
+    );
 
     success = true;
-    return {
+    result = {
       recipeId: scenario.recipeId,
       target: `${scenario.appType}/${scenario.providerName}/${scenario.modelId}`,
       counts,
@@ -679,31 +563,53 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realConfig, re
       notifications: rpc.notifications,
       requestDetails: relay.requests,
     };
+  } catch (error) {
+    failure = error;
   } finally {
-    rpc?.child.kill();
-    await new Promise((resolve) => relay.server.close(resolve));
-    if (success && process.env.KEEP_SMOKE_TEMP !== "1") {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    } else {
+    const errors = failure ? [failure] : [];
+    try {
+      await rpc?.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await relay.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      assertFileStatesUnchanged(realState, `${scenario.recipeId}: real state`);
+    } catch (error) {
+      errors.push(error);
+    }
+    if (success && errors.length === 0 && process.env.KEEP_SMOKE_TEMP !== "1") {
+      try {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!success || errors.length > 0 || process.env.KEEP_SMOKE_TEMP === "1") {
       console.error(`${scenario.recipeId} smoke temp retained: ${tempRoot}`);
     }
+    if (errors.length === 1) failure = errors[0];
+    if (errors.length > 1) {
+      failure = new AggregateError(errors, `${scenario.recipeId} smoke failed`);
+    }
   }
+  if (failure) throw failure;
+  return result;
 }
 
 async function main() {
   const realHome = os.homedir();
-  const realConfig = path.join(realHome, ".pi", "agent", "pi-switch.json");
-  const realConfigHash = sha256(realConfig);
+  const configuredDb = process.env.CC_SWITCH_DB?.trim();
+  const realDb = configuredDb
+    ? path.resolve(configuredDb)
+    : path.join(realHome, ".cc-switch", "cc-switch.db");
+  const realState = captureFileStates(smokeStatePaths(realHome, realDb));
   const sqlite3 = resolveExecutable("sqlite3", "SQLITE3_PATH");
-  const piCli = path.join(
-    ROOT,
-    "node_modules",
-    "@earendil-works",
-    "pi-coding-agent",
-    "dist",
-    "cli.js",
-  );
-  assert(fs.existsSync(piCli), `local Pi CLI not found: ${piCli}`);
+  const piCli = locatePiCli(ROOT);
   const extension = path.join(ROOT, "extensions", "index.ts");
   const requested = process.argv.find((arg) => arg.startsWith("--recipe="))?.slice(9);
   const selected = requested ? scenarios.filter((scenario) => scenario.recipeId === requested) : scenarios;
@@ -717,22 +623,21 @@ async function main() {
       sqlite3,
       piCli,
       extension,
-      realConfig,
-      realConfigHash,
+      realState,
     });
     results.push(result);
     console.log(
       `[PASS] ${result.recipeId} · ${result.target} · requests=${JSON.stringify(result.counts)}`,
     );
   }
-  assert(sha256(realConfig) === realConfigHash, "real pi-switch.json changed after smoke suite");
+  assertFileStatesUnchanged(realState, "real state after smoke suite");
   console.log(`summary: ${results.length}/${selected.length} recipes committed in isolated temp state`);
   console.log("candidate verification: 2 consecutive passes per recipe");
   console.log("session switches: declined");
-  console.log("real pi-switch.json: unchanged");
+  console.log("real settings/config/DB state: unchanged");
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
+  console.error(formatError(error));
   process.exitCode = 1;
 });

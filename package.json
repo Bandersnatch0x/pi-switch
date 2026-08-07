@@ -1,6 +1,6 @@
 {
   "name": "pi-ccs",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Pi package: switch providers/models from local cc-switch, with parameter overrides and short display labels",
   "type": "module",
   "license": "MIT",
@@ -48,7 +48,8 @@
     "release": "bun scripts/release.mjs",
     "release:apply": "bun scripts/release.mjs --apply",
     "smoke": "bun scripts/smoke.mjs",
-    "smoke:probe-repair": "bun scripts/smoke-probe-repair.mjs"
+    "smoke:probe-repair": "bun scripts/smoke-probe-repair.mjs",
+    "smoke:tui": "bun scripts/smoke-tui.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.78.1",

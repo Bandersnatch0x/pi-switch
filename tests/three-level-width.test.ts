@@ -1,10 +1,17 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import {
   allocateColumns,
+  headerLabelWidth,
   formatFooterHints,
   formatKeyHint,
+  formatTuiLegend,
 } from "../src/ui/three-level-pick.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
+
+// Pin zh so the footer/legend assertions match the Chinese UI strings.
+beforeAll(() => setLocale("zh"));
+afterAll(() => setLocale("en"));
 
 /**
  * Mirrors three-level-pick fit/line helpers to prove lines never exceed width.
@@ -21,6 +28,11 @@ function line(text: string, termWidth: number): string {
 }
 
 describe("three-level width safety", () => {
+  test("header count reserves its separating gap", () => {
+    const labelRoom = headerLabelWidth(12, 3);
+    expect(labelRoom + 1 + 3).toBe(12);
+  });
+
   test("fit pads/truncates to exact column width", () => {
     const a = fit("hello", 10);
     expect(visibleWidth(a)).toBe(10);
@@ -85,7 +97,7 @@ describe("key hint formatting", () => {
     expect(formatKeyHint(undefined, "enter", "select")).toBe("enter select");
     // Initial level: no column switch until something is revealed
     expect(formatFooterHints(undefined, { revealed: 0, col: 0 })).toContain(
-      "enter next 名称",
+      "enter 下一级名称",
     );
     expect(formatFooterHints(undefined, { revealed: 0, col: 0 })).toContain(
       "esc 退出",
@@ -94,13 +106,16 @@ describe("key hint formatting", () => {
       "esc 返回",
     );
     expect(formatFooterHints(undefined, { revealed: 1, col: 1 })).toContain(
-      "←→ column",
+      "←→ 切换列",
     );
     expect(formatFooterHints(undefined, { revealed: 2, col: 2 })).toContain(
-      "enter select",
+      "enter 选择",
     );
     expect(formatFooterHints(undefined, { revealed: 2, col: 2 })).toContain(
-      "f refresh",
+      "f 刷新",
+    );
+    expect(formatFooterHints(undefined, { revealed: 2, col: 2 })).toContain(
+      "PgUp/PgDn 翻页",
     );
   });
 
@@ -113,8 +128,27 @@ describe("key hint formatting", () => {
     );
     const footer = formatFooterHints(theme, { revealed: 1, col: 1 });
     expect(footer).toContain("<dim>←→</dim>");
-    expect(footer).toContain("<muted> column</muted>");
+    expect(footer).toContain("<muted> 切换列</muted>");
     expect(footer).toContain("<dim> · </dim>");
+  });
+
+  test("legend only uses Pi-supported theme colors", () => {
+    const supported = new Set([
+      "accent",
+      "success",
+      "warning",
+      "muted",
+      "dim",
+    ]);
+    const theme = {
+      fg: (key: string, text: string) => {
+        if (!supported.has(key)) throw new Error(`Unknown theme color: ${key}`);
+        return `<${key}>${text}</${key}>`;
+      },
+    };
+
+    expect(() => formatTuiLegend(theme)).not.toThrow();
+    expect(formatTuiLegend(theme)).toContain("<success>●</success>");
   });
 
   test("allocateColumns progressive levels", () => {

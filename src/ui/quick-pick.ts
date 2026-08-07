@@ -17,9 +17,6 @@ export interface QuickEntry {
   pin?: PinEntry;
 }
 
-/** ponytail: hard cap keeps /ps a single screen; the 3-level picker covers the long tail. */
-export const QUICK_LIMIT = 10;
-
 /**
  * Pins first (★, config order), then recent by time desc. Deduped by
  * (appType, dbId, model) — composite identity (#9). Stale dbIds and
@@ -39,7 +36,6 @@ export function buildQuickEntries(
   const out: QuickEntry[] = [];
 
   const push = (appType: string, dbId: string, modelId: string, pin?: PinEntry): void => {
-    if (out.length >= QUICK_LIMIT) return;
     const provider = byId.get(`${appType}\n${dbId}`) ?? byIdAny.get(dbId);
     if (!provider || !isSwitchable(provider)) return;
     // Key on the *resolved* provider identity so an appType-less legacy entry

@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { buildTabs } from "../src/ui/tabs.ts";
 import { sortProviders } from "../src/ui/labels.ts";
 import type { CcProvider } from "../src/types.ts";
@@ -10,7 +10,13 @@ import {
   popPickerLevel,
   threeLevelPick,
 } from "../src/ui/three-level-pick.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
+
+// This file asserts the Chinese (zh) UI strings; pin zh so the label assertions
+// hold deterministically regardless of the test runner's LANG.
+beforeAll(() => setLocale("zh"));
+afterAll(() => setLocale("en"));
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -71,6 +77,50 @@ describe("three-level data wiring", () => {
     expect(result).toEqual({ kind: "cancel" });
     expect(customCalls).toBe(0);
     expect(selectCalls).toBe(1);
+  });
+
+  test("PgDn is wired to the type column and selects the next page", async () => {
+    const providers = Array.from({ length: 15 }, (_, index) =>
+      mk({
+        id: `p${index}`,
+        displayName: `provider-${index}`,
+        appType: `type-${String(index).padStart(2, "0")}`,
+        configModels: [`m${index}`],
+      }),
+    );
+    const ctx = {
+      mode: "tui",
+      ui: {
+        custom: async (factory: any) => {
+          let resolve!: (value: unknown) => void;
+          const result = new Promise<unknown>((done) => (resolve = done));
+          const component = factory(
+            { requestRender() {} },
+            { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+            {},
+            resolve,
+          );
+          for (const key of ["\x1b[6~", "\r", "\r", "\r"]) {
+            component.handleInput(key);
+          }
+          return result;
+        },
+        notify() {},
+        select: async () => undefined,
+        input: async () => undefined,
+      },
+    } as unknown as PiSwitchCtx;
+
+    const result = await threeLevelPick(ctx, {
+      providers,
+      tabOrder: providers.map((provider) => provider.appType),
+    });
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.provider.id).toBe("p10");
+      expect(result.modelId).toBe("m10");
+    }
   });
 });
 
@@ -222,7 +272,7 @@ describe("formatFooterHints override key", () => {
   test("shows o override when name column revealed", () => {
     const s = formatFooterHints(undefined, { revealed: 1, col: 1 });
     expect(s).toContain("o");
-    expect(s).toContain("override");
+    expect(s).toContain("覆写");
   });
 
   test("hides mutating actions in read-only mode", () => {
@@ -253,7 +303,7 @@ describe("formatFooterHints override key", () => {
     const s = formatManualFooterHints(undefined);
     expect(s).toContain("enter 切换");
     expect(s).toContain("esc 取消");
-    expect(s).toContain("model id");
+    expect(s).toContain("模型 id");
   });
 
   test("hides o override on type-only view", () => {
@@ -264,12 +314,12 @@ describe("formatFooterHints override key", () => {
   test("shows p pin when model column revealed", () => {
     const s = formatFooterHints(undefined, { revealed: 2, col: 2 });
     expect(s).toContain("p");
-    expect(s).toContain("pin");
+    expect(s).toContain("固定");
   });
 
   test("hides p pin before model column", () => {
     const s = formatFooterHints(undefined, { revealed: 1, col: 1 });
-    expect(s).not.toContain("pin");
+    expect(s).not.toContain("固定");
   });
 });
 

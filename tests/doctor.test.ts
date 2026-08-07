@@ -1,8 +1,14 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { compareSemver } from "../src/settings.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
 import type { CcProvider } from "../src/types.ts";
+
+// Doctor badges are hardcoded-English by design; pin en so the [FAIL] assertion
+// is deterministic regardless of the test runner's LANG.
+beforeAll(() => setLocale("en"));
+afterAll(() => setLocale("en"));
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -66,7 +72,7 @@ describe("runDoctor", () => {
     expect(report.summary.fail).toBe(0);
     expect(report.checks.find((c) => c.id === "selection")?.status).toBe("pass");
     expect(report.checks.find((c) => c.id === "model-meta")?.detail).toContain("reasoning=false");
-    expect(formatDoctorReport(report)).toContain("pass=");
+    expect(formatDoctorReport(report)).toContain("PASS=");
   });
 
   test("model-meta detail names the contributing layers", () => {
@@ -91,7 +97,7 @@ describe("runDoctor", () => {
     });
     const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
     expect(detail).toContain("reasoning=false");
-    expect(detail).toContain("用户: defaultModelMeta → provider → model[glm-4.6]");
+    expect(detail).toContain("user: defaultModelMeta → provider → model[glm-4.6]");
     expect(report.checks.find((c) => c.id === "model-overrides")?.status).toBe("pass");
   });
 
@@ -114,7 +120,7 @@ describe("runDoctor", () => {
     });
     const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
     expect(detail).toContain("thinkingFormat=deepseek");
-    expect(detail).toContain("内置: deepseek*");
+    expect(detail).toContain("built-in: deepseek*");
     expect(detail).not.toContain("builtInCompat[");
   });
 
@@ -141,9 +147,9 @@ describe("runDoctor", () => {
     });
     const detail = report.checks.find((c) => c.id === "model-meta")?.detail ?? "";
     expect(detail).toContain("useBuiltInCompat=false");
-    expect(detail).toContain("内置: 已关闭");
+    expect(detail).toContain("built-in: disabled");
     expect(detail).not.toContain("thinkingFormat=deepseek");
-    expect(detail).not.toContain("内置: deepseek*");
+    expect(detail).not.toContain("built-in: deepseek*");
   });
 
   test("warns on per-model override keys missing from the provider", () => {
@@ -292,7 +298,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "sdk");
     expect(check?.status).toBe("fail");
-    expect(check?.fix).toContain("升级 Pi");
+    expect(check?.fix).toContain("upgrade Pi");
     expect(report.summary.fail).toBeGreaterThanOrEqual(1);
   });
 
@@ -308,7 +314,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "sdk");
     expect(check?.status).toBe("pass");
-    expect(check?.detail).toContain("未探测到");
+    expect(check?.detail).toContain("not detected");
   });
 
   test("compareSemver handles dotted numeric versions", () => {
@@ -374,7 +380,7 @@ describe("runDoctor", () => {
     const check = report.checks.find((c) => c.id === "fingerprint");
     expect(check?.status).toBe("warn");
     expect(check?.detail).toContain("codex=0.144.6(local)");
-    expect(check?.fix).toContain("快照");
+    expect(check?.fix).toContain("snapshot");
   });
 
   test("fingerprint W5: config-pinned version never warns (documented resolution)", () => {
@@ -459,8 +465,8 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "routing");
     expect(check?.status).toBe("warn");
-    expect(check?.detail).toContain("不可达");
-    expect(check?.fix).toContain("代理");
+    expect(check?.detail).toContain("unreachable");
+    expect(check?.fix).toContain("proxy");
   });
 
   test("routing W3: no probe configured -> no routing check", () => {
@@ -591,7 +597,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("warn");
-    expect(check?.detail).toContain("过期");
+    expect(check?.detail).toContain("stale");
   });
 
   test("capabilities #39: miss shows confirmed-absent line and stays pass", () => {
@@ -617,7 +623,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
-    expect(check?.detail).toContain("无此条目（已确认");
+    expect(check?.detail).toContain("no such entry (confirmed");
   });
 
   test("capabilities #39: cold shows unqueried line and stays pass", () => {
@@ -643,7 +649,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
-    expect(check?.detail).toContain("未查询");
+    expect(check?.detail).toContain("not queried");
   });
 
   test("capabilities #39: refreshFailure surfaces background failure line", () => {
@@ -669,7 +675,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
-    expect(check?.detail).toContain("后台刷新失败");
+    expect(check?.detail).toContain("last background refresh failed");
   });
 
   test("capabilities #36: model-id-tag and host-adaptation render Chinese labels", () => {
@@ -694,7 +700,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
-    expect(check?.detail).toContain("context=1000000(模型 id 标签)");
+    expect(check?.detail).toContain("context=1000000(model-id tag)");
 
     const hostReport = runDoctor({
       home: "/h",
@@ -716,7 +722,7 @@ describe("runDoctor", () => {
       },
     });
     const hostCheck = hostReport.checks.find((c) => c.id === "capabilities");
-    expect(hostCheck?.detail).toContain("context=1000000(宿主适配)");
+    expect(hostCheck?.detail).toContain("context=1000000(host adaptation)");
   });
 
   test("tier W2: per-app-type row with direct/visible/routed counts", () => {
@@ -790,7 +796,7 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "schema");
     expect(check?.status).toBe("warn");
-    expect(check?.fix).toContain("升级 pi-switch");
+    expect(check?.fix).toContain("upgrade pi-switch");
   });
 
   test("schema W1: older-than-window user_version warns with cc-switch upgrade", () => {
@@ -832,6 +838,39 @@ describe("runDoctor", () => {
     });
     const check = report.checks.find((c) => c.id === "schema");
     expect(check?.status).toBe("warn");
-    expect(check?.detail).toContain("探测失败");
+    expect(check?.detail).toContain("probe failed");
+  });
+
+  test("en locale report contains no CJK characters", () => {
+    const report = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "/usr/bin/sqlite3",
+      providers: [
+        mk({ id: "1", displayName: "alpha", appType: "claude", configModels: ["glm-4.6"] }),
+        mk({ id: "2", displayName: "o", appType: "openclaw", parseError: "managed auth", apiKey: undefined, baseUrl: undefined }),
+      ],
+      selection: { dbId: "1", model: "glm-4.6" },
+      config: { defaultModelMeta: { reasoning: false } },
+      headerRuleCount: 1,
+      schemaCapabilities: {
+        columns: KNOWN_COLS, hasCategory: true, hasProviderType: true,
+        compositeId: true, userVersion: 16,
+      },
+      capabilities: {
+        modelId: "glm-4.6",
+        resolved: {
+          contextWindow: { value: 200000, source: "protocol-default" },
+          maxTokens: { value: 64000, source: "user-override" },
+          reasoning: { value: true, source: "user-override" },
+          vision: { value: true, source: "protocol-default" },
+          conflicts: [],
+        },
+      },
+      routingProbe: { url: "http://127.0.0.1:15721", reachable: false },
+    });
+    const text = formatDoctorReport(report);
+    expect(text).not.toMatch(/[一-鿿]/);
   });
 });

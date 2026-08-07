@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import {
   buildQuickPickerState,
   quickPickerFooter,
@@ -7,6 +7,10 @@ import {
 import { togglePinEntry } from "../src/settings.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PinEntry, RecentEntry } from "../src/types.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
+
+beforeAll(() => setLocale("zh"));
+afterAll(() => setLocale("en"));
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -44,11 +48,24 @@ describe("quickSwitchPick helpers", () => {
     expect(s2.idx).toBe(0);
   });
 
-  test("quickPickerFooter mentions pin/取消 and enter and esc", () => {
+  test("quickPickerFooter uses the Chinese locale", () => {
     const f = quickPickerFooter();
-    expect(f).toContain("pin/取消");
+    expect(f).toContain("固定/取消固定");
     expect(f).toContain("切换");
     expect(f).toContain("退出");
+  });
+
+  test("quickPickerFooter uses the English locale without CJK", () => {
+    setLocale("en");
+    try {
+      const f = quickPickerFooter();
+      expect(f).toContain("pin/unpin");
+      expect(f).toContain("switch");
+      expect(f).toContain("exit");
+      expect(f).not.toMatch(/[\u3400-\u9fff]/);
+    } finally {
+      setLocale("zh");
+    }
   });
 });
 
@@ -91,6 +108,33 @@ function tuiCtx(notifications: string[]) {
 }
 
 describe("quickSwitchPick pin toggle (custom TUI)", () => {
+  test("PgDn is wired to the quick picker and activates the next page", async () => {
+    const manyProviders = Array.from({ length: 15 }, (_, index) =>
+      mk({ id: `p${index}`, displayName: `provider-${index}`, appType: "codex" }),
+    );
+    const pins: PinEntry[] = manyProviders.map((provider, index) => ({
+      dbId: provider.id,
+      appType: provider.appType,
+      model: `m${index}`,
+    }));
+    const notifications: string[] = [];
+    const h = tuiCtx(notifications);
+    await h.drive(["\x1b[6~", "\r"]);
+    const picked: string[] = [];
+
+    const result = await quickSwitchPick(h.ctx, {
+      providers: manyProviders,
+      pins,
+      recent: [],
+      onPick: async (provider, modelId) => {
+        picked.push(`${provider.id}/${modelId}`);
+      },
+    });
+
+    expect(result.kind).toBe("picked");
+    expect(picked).toEqual(["p10/m10"]);
+  });
+
   test("unpin uses the stored pin identity, not the resolved provider's", async () => {
     // Regression: pin stored as codex, but the snapshot only has this dbId
     // under claude (provider re-tagged/re-added). The row renders via the
@@ -121,7 +165,7 @@ describe("quickSwitchPick pin toggle (custom TUI)", () => {
     expect(toggles).toHaveLength(1);
     expect(toggles[0]).toMatchObject({ dbId: "a", model: "m1", appType: "codex" });
     expect(pins).toEqual([]); // actually unpinned, no duplicate added
-    expect(notifications.join("\n")).toContain("已取消 pin");
+    expect(notifications.join("\n")).toContain("已取消固定");
   });
 
   test("legacy appType-less pin unpin takes the provider appType and heals twins", async () => {
@@ -153,7 +197,7 @@ describe("quickSwitchPick pin toggle (custom TUI)", () => {
     expect(result.kind).toBe("cancel");
     expect(toggles[0].appType).toBe("claude"); // provider appType claims both twins
     expect(pins).toEqual([]);
-    expect(notifications.join("\n")).toContain("已取消 pin");
+    expect(notifications.join("\n")).toContain("已取消固定");
   });
 
   test("pinning a recent row uses the resolved provider identity", async () => {
@@ -184,6 +228,6 @@ describe("quickSwitchPick pin toggle (custom TUI)", () => {
       { dbId: "b", model: "r1", appType: "codex", label: "beta · r1" },
     ]);
     expect(pins).toEqual([{ dbId: "b", model: "r1", appType: "codex", label: "beta · r1" }]);
-    expect(notifications.join("\n")).toContain("已 pin");
+    expect(notifications.join("\n")).toContain("已固定");
   });
 });

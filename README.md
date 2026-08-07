@@ -26,7 +26,7 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 - `/ps` quick switch: pins + recents on one screen, one Enter for the daily hot path.
 - Load provider configuration from the local cc-switch SQLite database in read-only mode.
 - Use a progressive three-level picker: provider type → provider name → model.
-- Search (`/`), manually enter model IDs, refresh remote lists, and pin favorites with `p` (scrollable list — **no** pagination).
+- Search (`/`), manually enter model IDs, refresh remote lists, pin favorites with `p`, and page through long lists with `PgUp`/`PgDn`.
 - Remember last-N successful switches locally (no expose / multi-tool config center).
 - Parse and map common API protocols: Anthropic Messages, OpenAI Responses, OpenAI Chat Completions, and Google Generative AI.
 - Inject CLI-like fingerprints by default (Codex UA + `originator` + `X-Codex-Window-ID`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
@@ -474,6 +474,22 @@ Pre-publish check:
 bun run prepublishOnly
 ```
 
+Run the isolated TUI smoke (requires `pi` and `sqlite3` on `PATH`):
+
+```bash
+bun run smoke:tui
+```
+
+This drives the interactive slash commands through a Pi RPC subprocess under a temporary HOME with a faux OpenAI relay, asserting on state outcomes rather than visual rendering. Real `settings.json`, `pi-switch.json`, the cc-switch DB, and its SQLite sidecars are snapshotted and verified unchanged even when a flow fails. It covers the five main flows:
+
+- `/ps-override` — provider-scope `modelMeta` write round-trip.
+- `/ps-config` — 3-level pick, provider registration, and selection persistence.
+- `/ps-info` — effective-config summary.
+- `/ps-doctor` — diagnostics (offline models.dev/routing items degrade to `warn`, not fail).
+- `/ps` — quick switch off a pinned/recent entry.
+
+Use `--flow=<name>` to run one flow, or `KEEP_SMOKE_TEMP=1` to retain the temp HOME for inspection.
+
 Run the isolated end-to-end `/ps-repair` smoke (requires `pi` and `sqlite3` on `PATH`):
 
 ```bash
@@ -486,7 +502,7 @@ This starts a local faux OpenAI relay and a Pi RPC subprocess under a temporary 
 2. **`client-fingerprint`** — Sets `fingerprint="codex"`; the relay validates real `originator: codex_cli_rs` headers and `User-Agent`.
 3. **`gemini-tool-compat`** — Sets `geminiToolCompat=true`; the relay validates Gemini-style payload (`toolConfig.functionCallingConfig.mode=AUTO`, `parameters` instead of `parametersJsonSchema`).
 
-Each scenario: verifies the candidate twice, declines the post-repair Session Model switch, asserts real `pi-switch.json` hash unchanged, and deletes temporary state after success. Use `--recipe=<id>` to run a single scenario, or `--keep` / `KEEP_SMOKE_TEMP=1` to retain temp files.
+Each scenario: verifies the candidate twice, declines the post-repair Session Model switch, asserts real Pi settings/config and cc-switch DB state remain unchanged, and deletes temporary state after success. Use `--recipe=<id>` to run a single scenario, or `--keep` / `KEEP_SMOKE_TEMP=1` to retain temp files.
 
 ### Release and GitHub auto-publish
 

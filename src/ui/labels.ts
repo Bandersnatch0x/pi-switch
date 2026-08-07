@@ -1,5 +1,27 @@
 import type { CcProvider } from "../types.ts";
 import { isSwitchable } from "../parse/index.ts";
+import {
+  bold,
+  dim,
+  GLYPH,
+  paint,
+  statusBadge,
+  statusLabel,
+  yellowHighlight,
+  type StatusKey,
+} from "./tui-theme.ts";
+
+export {
+  ANSI,
+  bold,
+  dim,
+  GLYPH,
+  paint,
+  statusBadge,
+  statusLabel,
+  yellowHighlight,
+  type StatusKey,
+} from "./tui-theme.ts";
 
 export function extractHostname(url: string): string {
   try {
@@ -9,13 +31,10 @@ export function extractHostname(url: string): string {
   }
 }
 
-/** ANSI styles for TUI highlights. */
+/** @deprecated Use paint("yellow", text) from ./tui-theme.ts instead. */
 export const ANSI_YELLOW = "\x1b[33m";
+/** @deprecated Use paint helpers from ./tui-theme.ts instead. */
 export const ANSI_RESET = "\x1b[0m";
-
-export function yellowHighlight(text: string): string {
-  return `${ANSI_YELLOW}${text}${ANSI_RESET}`;
-}
 
 /**
  * AppType → single-cell ASCII tag for tab / list prefixes. ASCII is used

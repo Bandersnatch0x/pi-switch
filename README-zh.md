@@ -26,7 +26,7 @@ pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会�
 - `/ps` 快速切换：pin + recent 一屏直达，一次回车完成高频切换。
 - 从本机 cc-switch SQLite 数据库只读加载 Provider 配置。
 - 支持按类型 → 名称 → 模型的渐进式三级选择流程。
-- 支持搜索（`/`）、手动输入模型 ID、远程刷新，以及快捷键 `p` 本地 pin 常用模型（可滚动列表，**不做**分页/跳页）。
+- 支持搜索（`/`）、手动输入模型 ID、远程刷新、快捷键 `p` 本地 pin 常用模型，并可用 `PgUp`/`PgDn` 对长列表分页跳转。
 - 本地记录 last-N 最近切换（不做 expose 配置中心）。
 - 自动解析并映射常见协议：Anthropic Messages、OpenAI Responses、OpenAI Chat Completions、Google Generative AI。
 - 默认注入类官方 CLI 指纹（Codex UA + `originator` + `X-Codex-Window-ID`、Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`、GeminiCLI UA + `x-goog-api-client`）。
@@ -472,6 +472,22 @@ bun run typecheck
 bun run prepublishOnly
 ```
 
+运行隔离的 TUI 冒烟（需要 `pi`、`sqlite3` 在 `PATH`）：
+
+```bash
+bun run smoke:tui
+```
+
+该脚本在临时 HOME + 假 OpenAI relay 下，通过 Pi RPC 子进程驱动交互式斜杠命令，对**状态结果**（而非视觉渲染）断言。真实 `settings.json`、`pi-switch.json`、cc-switch DB 及 SQLite 侧文件均先做快照，并在流程失败时也校验未变。覆盖五条主流程：
+
+- `/ps-override` — provider 级 `modelMeta` 写入往返。
+- `/ps-config` — 三级选择、provider 注册、selection 落盘。
+- `/ps-info` — 有效配置摘要。
+- `/ps-doctor` — 诊断（离线时 models.dev / 路由项降级为 `warn`，不 fail）。
+- `/ps` — 基于 pin/recent 的快速切换。
+
+使用 `--flow=<名称>` 单跑一条流程，或 `KEEP_SMOKE_TEMP=1` 保留临时 HOME 供排查。
+
 运行隔离的 `/ps-repair` 端到端冒烟（需要 `pi`、`sqlite3` 在 `PATH`）：
 
 ```bash
@@ -484,7 +500,7 @@ bun run smoke:probe-repair
 2. **`client-fingerprint`** — 设置 `fingerprint="codex"`；relay 校验真实 `originator: codex_cli_rs` header 和 `User-Agent`。
 3. **`gemini-tool-compat`** — 设置 `geminiToolCompat=true`；relay 校验 Gemini payload（`toolConfig.functionCallingConfig.mode=AUTO`、`parameters` 替代 `parametersJsonSchema`）。
 
-每条场景：在内存候选上连续验证两次、拒绝修复后的 Session Model 切换、断言真实 `pi-switch.json` hash 未变、成功后删除全部临时状态。使用 `--recipe=<id>` 单跑一条场景，或 `--keep` / `KEEP_SMOKE_TEMP=1` 保留临时文件。
+每条场景：在内存候选上连续验证两次、拒绝修复后的 Session Model 切换、断言真实 Pi 设置/配置与 cc-switch DB 状态未变、成功后删除全部临时状态。使用 `--recipe=<id>` 单跑一条场景，或 `--keep` / `KEEP_SMOKE_TEMP=1` 保留临时文件。
 
 ### 发布与 GitHub 自动发包
 

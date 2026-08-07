@@ -7,6 +7,7 @@
  *
  * Keys:
  *   ↑ ↓   move within list
+ *   PgUp/PgDn  flip one page (cyclic: past last → first)
  *   enter switch to focused provider+model
  *   p     toggle pin on focused entry (stays open, list rebuilds: pins first)
  *   esc   exit
@@ -19,7 +20,9 @@ import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
 import { isPinned } from "../settings.ts";
 import { buildQuickEntries, type QuickEntry } from "./quick-pick.ts";
 import { formatKeyHint } from "./three-level-pick.ts";
+import { t } from "./tui-locale.ts";
 import type { PiSwitchCtx } from "../pi-context.ts";
+import { pageFlip } from "./pagination.ts";
 
 export interface QuickSwitchPickOpts {
   providers: CcProvider[];
@@ -33,7 +36,7 @@ export interface QuickSwitchPickOpts {
 
 export type QuickSwitchResult = { kind: "picked" } | { kind: "cancel" };
 
-/** Rows visible in the quick list at once (matches QUICK_LIMIT=10). */
+/** Rows visible in the quick list at once; longer lists use cyclic paging. */
 export const QUICK_VIEWPORT = 10;
 
 type ThemeLike = {
@@ -63,10 +66,11 @@ export function buildQuickPickerState(
 export function quickPickerFooter(theme?: ThemeLike): string {
   const sep = typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
   return [
-    formatKeyHint(theme, "↑↓", "nav"),
-    formatKeyHint(theme, "enter", "切换"),
-    formatKeyHint(theme, "p", "pin/取消"),
-    formatKeyHint(theme, "esc", "退出"),
+    formatKeyHint(theme, "↑↓", t("nav")),
+    formatKeyHint(theme, "PgUp/PgDn", t("page")),
+    formatKeyHint(theme, "enter", t("switch")),
+    formatKeyHint(theme, "p", `${t("pin")}/${t("unpin")}`),
+    formatKeyHint(theme, "esc", t("escExit")),
   ].join(sep);
 }
 
@@ -98,7 +102,7 @@ async function quickSwitchCustom(
 
     if (!state.entries.length) {
       queueMicrotask(() => done({ kind: "cancel" }));
-      return { render: () => ["(无 pin / recent)"], invalidate() {}, handleInput() {} };
+      return { render: () => [`(${t("quickEmpty")})`], invalidate() {}, handleInput() {} };
     }
 
     function finish(r: QuickSwitchResult) {
@@ -151,6 +155,19 @@ async function quickSwitchCustom(
           }
           return;
         }
+        if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+          const dir = matchesKey(data, Key.pageDown) ? 1 : -1;
+          const flipped = pageFlip(
+            state.idx,
+            state.scroll,
+            state.entries.length,
+            QUICK_VIEWPORT,
+            dir,
+          );
+          state = { ...state, idx: flipped.idx, scroll: flipped.scroll };
+          tui.requestRender();
+          return;
+        }
         if (matchesKey(data, Key.enter)) {
           const e = state.entries[state.idx];
           if (!e) return;
@@ -166,7 +183,7 @@ async function quickSwitchCustom(
         if (data === "p" || data === "P") {
           const e = state.entries[state.idx];
           if (!e || !opts.onTogglePin) {
-            ctx.ui.notify("未配置 pin 持久化", "warning");
+            ctx.ui.notify(t("pinNoPersist"), "warning");
             return;
           }
           // Unpin with the *stored* pin identity, not the resolved provider's:
@@ -203,13 +220,13 @@ async function quickSwitchCustom(
                 toggleEntry.appType,
               );
               ctx.ui.notify(
-                `${nowPinned ? "已 pin" : "已取消 pin"} · ${e.provider.displayName} · ${e.modelId}`,
+                `${nowPinned ? t("pinOn") : t("pinOff")} · ${e.provider.displayName} · ${e.modelId}`,
                 "info",
               );
               tui.requestRender();
             } catch (err) {
               ctx.ui.notify(
-                `pin 失败: ${err instanceof Error ? err.message : String(err)}`,
+                `${t("pinFail")}: ${err instanceof Error ? err.message : String(err)}`,
                 "error",
               );
             }
@@ -232,7 +249,7 @@ async function quickSwitchFallback(
   const entries = buildQuickEntries(opts.pins, opts.recent, opts.providers);
   if (!entries.length) return { kind: "cancel" };
   const labels = entries.map((e) => e.label);
-  const pick = await ctx.ui.select("快速切换", labels);
+  const pick = await ctx.ui.select(t("quickSwitchTitle"), labels);
   if (!pick) return { kind: "cancel" };
   const entry = entries[labels.indexOf(pick)];
   if (!entry) return { kind: "cancel" };
