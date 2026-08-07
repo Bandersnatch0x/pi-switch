@@ -38,10 +38,17 @@ import {
   updateJsonObjectAtomic,
   type FsLike,
 } from "./json-file.ts";
+import {
+  editConfig,
+  editConfigWithResult,
+  type ConfigWriteTarget,
+} from "./config-edit.ts";
 
 export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
 export type { FsLike };
+export type { ConfigWriteTarget };
+export { editConfig, editConfigWithResult } from "./config-edit.ts";
 
 /**
  * Minimum supported Pi runtime (issue #11 D1, compat-window-policy).
@@ -250,13 +257,13 @@ function rejectNestedWireCompat(value: unknown, path: string): void {
 /** Exact-model tuple keys that must not appear at Provider scope. */
 function looksLikeExactModelTupleCompat(c: Record<string, unknown>): boolean {
   return (
-    Object.prototype.hasOwnProperty.call(c, "supportsDeveloperRole") ||
-    Object.prototype.hasOwnProperty.call(c, "supportsReasoningEffort") ||
-    Object.prototype.hasOwnProperty.call(c, "maxTokensField") ||
-    Object.prototype.hasOwnProperty.call(c, "thinkingFormat") ||
-    Object.prototype.hasOwnProperty.call(c, "requiresReasoningContentOnAssistantMessages") ||
-    Object.prototype.hasOwnProperty.call(c, "forceAdaptiveThinking") ||
-    Object.prototype.hasOwnProperty.call(c, "supportsTemperature")
+    hasOwn(c, "supportsDeveloperRole") ||
+    hasOwn(c, "supportsReasoningEffort") ||
+    hasOwn(c, "maxTokensField") ||
+    hasOwn(c, "thinkingFormat") ||
+    hasOwn(c, "requiresReasoningContentOnAssistantMessages") ||
+    hasOwn(c, "forceAdaptiveThinking") ||
+    hasOwn(c, "supportsTemperature")
   );
 }
 
@@ -393,17 +400,6 @@ export type { ModelMetaOverride };
 export type ModelMetaScope =
   | { kind: "provider" }
   | { kind: "model"; modelId: string };
-
-/**
- * The atomic-write target for config edits: filesystem, config path, and the
- * pid used for temp-file naming. Bundled because every override write passes
- * these three unchanged to updateJsonObjectAtomic.
- */
-export interface ConfigWriteTarget {
-  fs: FsLike;
-  configPath: string;
-  pid: number;
-}
 
 export type MutableOverrideEntry = {
   label?: string;
@@ -572,42 +568,34 @@ export function writeModelMetaOverride(
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
 ): { ok: boolean; error?: string } {
-  const { fs, configPath, pid } = target;
-  try {
-    if (modelMeta) {
-      const valid = validateModelMetaWrite(modelMeta);
-      if (!valid.ok) return valid;
-    }
-
-    if (scope.kind === "model" && !scope.modelId.trim()) {
-      return { ok: false, error: "empty model id" };
-    }
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const document = updateOverrideEntry(raw, provider, (entry) => {
-        const prev = { ...entry };
-        if (scope.kind === "provider") {
-          const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-          if (!cleaned) delete prev.modelMeta;
-          else prev.modelMeta = cleaned;
-        } else {
-          const modelId = scope.modelId.trim();
-          const map = { ...(prev.modelOverrides ?? {}) };
-          const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
-          const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-          if (!cleaned) delete map[key];
-          else map[key] = cleaned;
-          if (Object.keys(map).length) prev.modelOverrides = map;
-          else delete prev.modelOverrides;
-        }
-        if (modelMeta) prev.label = prev.label ?? provider.displayName;
-        return prev;
-      });
-      return { document, result: undefined };
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  if (modelMeta) {
+    const valid = validateModelMetaWrite(modelMeta);
+    if (!valid.ok) return valid;
   }
+  if (scope.kind === "model" && !scope.modelId.trim()) {
+    return { ok: false, error: "empty model id" };
+  }
+  return editConfig(target, (raw) =>
+    updateOverrideEntry(raw, provider, (entry) => {
+      const prev = { ...entry };
+      if (scope.kind === "provider") {
+        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+        if (!cleaned) delete prev.modelMeta;
+        else prev.modelMeta = cleaned;
+      } else {
+        const modelId = scope.modelId.trim();
+        const map = { ...(prev.modelOverrides ?? {}) };
+        const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
+        const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
+        if (!cleaned) delete map[key];
+        else map[key] = cleaned;
+        if (Object.keys(map).length) prev.modelOverrides = map;
+        else delete prev.modelOverrides;
+      }
+      if (modelMeta) prev.label = prev.label ?? provider.displayName;
+      return prev;
+    }),
+  );
 }
 
 /** Persist or clear Provider-scoped request-wire compatibility. */
@@ -618,38 +606,35 @@ export function writeProviderWireCompat(
   },
   compat: ProviderWireCompat | null,
 ): { ok: boolean; error?: string } {
-  const { fs, configPath, pid } = target;
+  let parsed: ProviderWireCompat | undefined;
   try {
-    const parsed = compat
+    parsed = compat
       ? parseProviderWireCompat(compat, "provider compat")
       : undefined;
-    if (parsed && parsed.api !== provider.api) {
-      return {
-        ok: false,
-        error: `provider compat api ${parsed.api} does not match provider api ${provider.api ?? "unsupported"}`,
-      };
-    }
-
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const document = updateOverrideEntry(raw, provider, (entry) => {
-        const next = { ...entry };
-        if (parsed) {
-          next.compat = parsed;
-          next.label = next.label ?? provider.displayName;
-        } else {
-          delete next.compat;
-        }
-        return next;
-      });
-      return { document, result: undefined };
-    });
-    return { ok: true };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  if (parsed && parsed.api !== provider.api) {
+    return {
+      ok: false,
+      error: `provider compat api ${parsed.api} does not match provider api ${provider.api ?? "unsupported"}`,
+    };
+  }
+  return editConfig(target, (raw) =>
+    updateOverrideEntry(raw, provider, (entry) => {
+      const next = { ...entry };
+      if (parsed) {
+        next.compat = parsed;
+        next.label = next.label ?? provider.displayName;
+      } else {
+        delete next.compat;
+      }
+      return next;
+    }),
+  );
 }
 
 /** Drop provider-scope modelMeta and every per-model override for a provider. */
@@ -657,21 +642,14 @@ export function clearAllModelMetaOverrides(
   target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
 ): { ok: boolean; error?: string } {
-  const { fs, configPath, pid } = target;
-  try {
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const document = updateOverrideEntry(raw, provider, (entry) => {
-        const prev = { ...entry };
-        delete prev.modelMeta;
-        delete prev.modelOverrides;
-        return prev;
-      });
-      return { document, result: undefined };
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return editConfig(target, (raw) =>
+    updateOverrideEntry(raw, provider, (entry) => {
+      const prev = { ...entry };
+      delete prev.modelMeta;
+      delete prev.modelOverrides;
+      return prev;
+    }),
+  );
 }
 
 /** Back-compat wrapper: provider-scope write. */
@@ -689,57 +667,55 @@ export function writeModelTupleCompat(
   modelId: string,
   compat: ModelTupleCompat | null,
 ): { ok: boolean; error?: string } {
-  const { fs, configPath, pid } = target;
+  const id = modelId.trim();
+  if (!id) return { ok: false, error: "empty model id" };
+  let parsed: ModelTupleCompat | undefined;
   try {
-    const id = modelId.trim();
-    if (!id) return { ok: false, error: "empty model id" };
-    const parsed = compat
+    parsed = compat
       ? parseModelTupleCompat(compat, "model tuple compat")
       : undefined;
-    if (parsed && provider.api && provider.api !== parsed.api) {
-      return {
-        ok: false,
-        error: `tuple compat api ${parsed.api} does not match provider api ${provider.api}`,
-      };
-    }
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const document = updateOverrideEntry(raw, provider, (entry) => {
-        const prev = { ...entry };
-        const map = { ...(prev.modelOverrides ?? {}) };
-        const key = matchExactModelOverride(map, id)?.key ?? id;
-        const existing = { ...(map[key] ?? {}) } as ModelOverrideEntry;
-        if (parsed) {
-          existing.compat = parsed;
-          map[key] = existing;
-          prev.label = prev.label ?? provider.displayName;
-        } else {
-          delete existing.compat;
-          const remaining = cleanModelMeta(existing);
-          if (remaining && Object.keys(remaining).length) {
-            map[key] = { ...remaining } as ModelOverrideEntry;
-          } else if (Object.keys(existing).length === 0 || !cleanModelMeta(existing)) {
-            // Only compat was present — drop the entry entirely when empty.
-            const stripped = { ...existing };
-            delete stripped.compat;
-            if (Object.keys(stripped).length === 0) delete map[key];
-            else map[key] = stripped as ModelOverrideEntry;
-          } else {
-            map[key] = existing;
-          }
-        }
-        if (Object.keys(map).length) prev.modelOverrides = map;
-        else delete prev.modelOverrides;
-        return prev;
-      });
-      return { document, result: undefined };
-    });
-    return { ok: true };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  if (parsed && provider.api && provider.api !== parsed.api) {
+    return {
+      ok: false,
+      error: `tuple compat api ${parsed.api} does not match provider api ${provider.api}`,
+    };
+  }
+  return editConfig(target, (raw) =>
+    updateOverrideEntry(raw, provider, (entry) => {
+      const prev = { ...entry };
+      const map = { ...(prev.modelOverrides ?? {}) };
+      const key = matchExactModelOverride(map, id)?.key ?? id;
+      const existing = { ...(map[key] ?? {}) } as ModelOverrideEntry;
+      if (parsed) {
+        existing.compat = parsed;
+        map[key] = existing;
+        prev.label = prev.label ?? provider.displayName;
+      } else {
+        delete existing.compat;
+        const remaining = cleanModelMeta(existing);
+        if (remaining && Object.keys(remaining).length) {
+          map[key] = { ...remaining } as ModelOverrideEntry;
+        } else if (Object.keys(existing).length === 0 || !cleanModelMeta(existing)) {
+          // Only compat was present — drop the entry entirely when empty.
+          const stripped = { ...existing };
+          delete stripped.compat;
+          if (Object.keys(stripped).length === 0) delete map[key];
+          else map[key] = stripped as ModelOverrideEntry;
+        } else {
+          map[key] = existing;
+        }
+      }
+      if (Object.keys(map).length) prev.modelOverrides = map;
+      else delete prev.modelOverrides;
+      return prev;
+    }),
+  );
 }
 
 /** @deprecated Use writeModelTupleCompat (Chat #64 / Anthropic #67). */
@@ -821,15 +797,7 @@ export function writePins(
   pins: PinEntry[],
   pid: number,
 ): { ok: boolean; error?: string } {
-  try {
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => ({
-      document: { ...raw, pins },
-      result: undefined,
-    }));
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, pins }));
 }
 
 /** Persist recent array (full replace). */
@@ -839,15 +807,7 @@ export function writeRecent(
   recent: RecentEntry[],
   pid: number,
 ): { ok: boolean; error?: string } {
-  try {
-    updateJsonObjectAtomic(fs, configPath, pid, (raw) => ({
-      document: { ...raw, recent },
-      result: undefined,
-    }));
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, recent }));
 }
 
 export function togglePinAndWrite(
@@ -856,23 +816,17 @@ export function togglePinAndWrite(
   entry: PinEntry,
   pid: number,
 ): { ok: boolean; error?: string; pins: PinEntry[]; pinned: boolean } {
-  try {
-    const next = updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const toggled = togglePinEntry(parsePins(raw.pins), entry);
-      return {
-        document: { ...raw, pins: toggled.pins },
-        result: toggled,
-      };
-    });
-    return { ok: true, ...next };
-  } catch (error) {
+  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
+    const toggled = togglePinEntry(parsePins(raw.pins), entry);
     return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      pins: [],
-      pinned: false,
+      document: { ...raw, pins: toggled.pins },
+      result: toggled,
     };
+  });
+  if (!edited.ok) {
+    return { ok: false, error: edited.error, pins: [], pinned: false };
   }
+  return { ok: true, ...edited.result };
 }
 
 export function recordRecentAndWrite(
@@ -881,26 +835,26 @@ export function recordRecentAndWrite(
   entry: Omit<RecentEntry, "at"> & { at?: number },
   pid: number,
 ): { ok: boolean; error?: string; recent: RecentEntry[] } {
-  try {
-    const recent = updateJsonObjectAtomic(fs, configPath, pid, (raw) => {
-      const config = readPiSwitchConfig({
+  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
+    const config = readPiSwitchConfig(
+      {
         ...fs,
         existsSync: (path) => path === configPath || fs.existsSync(path),
         readFileSync: (path, encoding) =>
-          path === configPath ? JSON.stringify(raw) : fs.readFileSync(path, encoding),
-      }, configPath);
-      const next = pushRecentEntry(config.recent, entry, config.recentLimit);
-      return {
-        document: { ...raw, recent: next },
-        result: next,
-      };
-    });
-    return { ok: true, recent };
-  } catch (error) {
+          path === configPath
+            ? JSON.stringify(raw)
+            : fs.readFileSync(path, encoding),
+      },
+      configPath,
+    );
+    const next = pushRecentEntry(config.recent, entry, config.recentLimit);
     return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      recent: [],
+      document: { ...raw, recent: next },
+      result: next,
     };
+  });
+  if (!edited.ok) {
+    return { ok: false, error: edited.error, recent: [] };
   }
+  return { ok: true, recent: edited.result };
 }
