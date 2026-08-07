@@ -7,11 +7,12 @@
  */
 
 import type { ModelMetaOverride, PiApi } from "../types.ts";
-import { API_MODEL_META, DEFAULT_MODEL_META } from "../types.ts";
-import { applyAnyrouterModelMeta } from "../headers/anyrouter.ts";
-import { bracketContextWindow } from "../parse/common.ts";
 import { mergeBuiltInCompatUnderUser } from "../compat/built-in-compat-profile.ts";
 import type { ModelsDevCapabilities } from "./models-dev.ts";
+import {
+  assembleCapabilityLayers,
+  protocolCapabilityDefaults,
+} from "./layers.ts";
 import {
   isMaxTokensResolved,
   resolveModelCapabilities,
@@ -20,48 +21,9 @@ import {
   type ResolvedCapabilities,
 } from "./resolve.ts";
 
-/** Extract capability fields from a provider's cc-switch meta blob. */
-export function ccMetaFrom(
-  meta: Record<string, unknown> | undefined,
-): CapabilityMeta | undefined {
-  if (!meta) return undefined;
-  if (
-    typeof meta.contextWindow !== "number" &&
-    typeof meta.maxTokens !== "number" &&
-    typeof meta.reasoning !== "boolean" &&
-    typeof meta.vision !== "boolean"
-  ) {
-    return undefined;
-  }
-  return {
-    contextWindow:
-      typeof meta.contextWindow === "number" ? meta.contextWindow : undefined,
-    maxTokens: typeof meta.maxTokens === "number" ? meta.maxTokens : undefined,
-    reasoning: typeof meta.reasoning === "boolean" ? meta.reasoning : undefined,
-    vision: typeof meta.vision === "boolean" ? meta.vision : undefined,
-  };
-}
-
-/**
- * Protocol structural floors for registration/doctor.
- * Issue #63: contextWindow may still use protocol tier; maxTokens and
- * reasoning must NOT — those come only from the trusted authority chain.
- * Compat fields come later via mergeBuiltInCompatUnderUser (user > built-in).
- */
-export function protocolCapabilityDefaults(
-  api: PiApi | null | undefined,
-): CapabilityMeta {
-  const tier = api ? API_MODEL_META[api] : undefined;
-  if (tier) {
-    return {
-      contextWindow: tier.contextWindow,
-      // intentionally omit maxTokens + reasoning (#63)
-    };
-  }
-  return {
-    contextWindow: DEFAULT_MODEL_META.contextWindow,
-  };
-}
+// Deep-import compat: helpers live in layers.ts; keep prior registration
+// surface so existing `from "./registration.ts"` importers still resolve.
+export { ccMetaFrom, protocolCapabilityDefaults } from "./layers.ts";
 
 export type RegistrationCapabilityDecision = {
   /** Full resolved chain (for doctor / effective config / precheck). */
@@ -116,22 +78,16 @@ export function resolveRegistrationCapability(input: {
   modelsDev?: ModelsDevCapabilities;
   ccMeta?: CapabilityMeta;
 }): RegistrationCapabilityDecision {
-  const defaults = protocolCapabilityDefaults(input.api);
-
-  const cw = bracketContextWindow(input.modelId);
-  const idTag: CapabilityMeta | undefined =
-    cw !== undefined ? { contextWindow: cw } : undefined;
-
-  const hostAdaptation = applyAnyrouterModelMeta(input.api, input.baseUrl);
-
-  const resolved = resolveModelCapabilities({
-    user: input.userMeta,
-    idTag,
-    hostAdaptation,
-    modelsDev: input.modelsDev,
-    ccMeta: input.ccMeta,
-    defaults,
-  });
+  const resolved = resolveModelCapabilities(
+    assembleCapabilityLayers({
+      modelId: input.modelId,
+      api: input.api,
+      baseUrl: input.baseUrl,
+      user: input.userMeta,
+      modelsDev: input.modelsDev,
+      ccMeta: input.ccMeta,
+    }),
+  );
 
   const maxTokensUnresolved = !isMaxTokensResolved(resolved.maxTokens);
   const reasoningConservative = resolved.reasoning.source === "conservative-default";
@@ -149,7 +105,7 @@ export function resolveRegistrationCapability(input: {
     contextWindow:
       typeof resolved.contextWindow.value === "number"
         ? resolved.contextWindow.value
-        : defaults.contextWindow,
+        : protocolCapabilityDefaults(input.api).contextWindow,
     maxTokens: resolved.maxTokens.value as number,
     reasoning: resolved.reasoning.value === true,
   };

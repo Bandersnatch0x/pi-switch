@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Runtime, type NodeIo } from "../extensions/runtime.ts";
 import { isModelsDevMiss, makeMiss, MODELS_DEV_API_URL } from "../src/capabilities/models-dev.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import { piSwitchCachePath } from "../src/settings.ts";
+import type { CcProvider } from "../src/types.ts";
 
 const SAMPLE_CATALOG = {
   vivgrid: {
@@ -74,6 +76,37 @@ function makeIo(opts?: {
 }
 
 describe("Runtime capabilities cache (issue #39)", () => {
+  test("diagnostics and registration share the protocol vision floor", () => {
+    const { rt } = makeIo();
+    const provider: CcProvider = {
+      id: "anthropic-relay",
+      piName: "anthropic-relay",
+      displayName: "Anthropic Relay",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+      apiKey: "",
+      authHeader: true,
+      configModels: [],
+      meta: {},
+      isCurrentInCc: false,
+    };
+    const modelId = "unknown-anthropic-model";
+
+    const diagnostics = rt.capabilitiesFor(provider, modelId);
+    const registration = resolveRegistrationCapability({
+      modelId,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+    });
+
+    expect(diagnostics.vision).toMatchObject({
+      value: true,
+      source: "protocol-default",
+    });
+    expect(registration.resolved.vision).toEqual(diagnostics.vision);
+  });
+
   test("hit writes positive entry; miss writes negative; modelsDevFor filters miss", async () => {
     const { rt, fs } = makeIo();
     await rt.refreshCapabilities(["gpt-5.6-sol", "private-proxy-id"]);

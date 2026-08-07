@@ -4,7 +4,6 @@
  */
 
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
-import { API_MODEL_META } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { providerHeadersPath, type FsLike } from "../src/settings.ts";
@@ -31,10 +30,11 @@ import {
   type ModelsDevCacheEntry,
   type ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
+import {
+  assembleCapabilityLayers,
+  ccMetaFrom,
+} from "../src/capabilities/layers.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
-import { ccMetaFrom } from "../src/capabilities/registration.ts";
-import { bracketContextWindow } from "../src/parse/common.ts";
-import { applyAnyrouterModelMeta } from "../src/headers/anyrouter.ts";
 import { piSettingsPath, piSwitchConfigPath, piSwitchCachePath } from "../src/settings.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
@@ -424,31 +424,18 @@ export class Runtime {
 
   /** Resolve capability facts for a provider/model (full #36/#63 priority chain). */
   capabilitiesFor(provider: CcProvider, modelId: string) {
-    const cache = this.modelsDevFor(modelId);
     // User-config layers only — built-in compat is not a capability source.
     const user = resolveEffectiveModelMeta(this.config, provider, modelId);
-    const api = provider.api;
-    const tier = api ? API_MODEL_META[api] : undefined;
-    // Issue #63: protocol defaults supply contextWindow/vision only — never
-    // invent maxTokens or reasoning for unknown models.
-    const defaults = tier
-      ? {
-          contextWindow: tier.contextWindow,
-          vision: tier.input?.includes("image"),
-        }
-      : { contextWindow: 200_000 };
-    const ccMeta = ccMetaFrom(provider.meta);
-    const cw = bracketContextWindow(modelId);
-    const idTag = cw !== undefined ? { contextWindow: cw } : undefined;
-    const hostAdaptation = applyAnyrouterModelMeta(api, provider.baseUrl);
-    return resolveModelCapabilities({
-      user,
-      idTag,
-      hostAdaptation,
-      modelsDev: cache,
-      ccMeta,
-      defaults,
-    });
+    return resolveModelCapabilities(
+      assembleCapabilityLayers({
+        modelId,
+        api: provider.api,
+        baseUrl: provider.baseUrl,
+        user,
+        modelsDev: this.modelsDevFor(modelId),
+        ccMeta: ccMetaFrom(provider.meta),
+      }),
+    );
   }
 
   get varsSummary(): VarsSummary | undefined {
