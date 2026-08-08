@@ -28,6 +28,14 @@ export type ConfigEditResultWith<T> =
   | { ok: true; result: T }
   | { ok: false; error: string };
 
+/** Map a thrown value to the failure arm of ConfigEditResult. */
+export function configEditError(err: unknown): { ok: false; error: string } {
+  return {
+    ok: false,
+    error: err instanceof Error ? err.message : String(err),
+  };
+}
+
 /** Mutate the config document under CAS; map failures to {ok,error}. */
 export function editConfig(
   target: ConfigWriteTarget,
@@ -40,10 +48,7 @@ export function editConfig(
     }));
     return { ok: true };
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return configEditError(err);
   }
 }
 
@@ -61,9 +66,6 @@ export function editConfigWithResult<T>(
     );
     return { ok: true, result };
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return configEditError(err);
   }
 }

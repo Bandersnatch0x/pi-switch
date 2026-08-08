@@ -39,16 +39,22 @@ import {
   type FsLike,
 } from "./json-file.ts";
 import {
+  configEditError,
   editConfig,
   editConfigWithResult,
+  type ConfigEditResult,
   type ConfigWriteTarget,
 } from "./config-edit.ts";
 
 export { providerOverrideKeys, resolveProviderOverride };
 export type { ProviderOverrideEntry };
 export type { FsLike };
-export type { ConfigWriteTarget };
-export { editConfig, editConfigWithResult } from "./config-edit.ts";
+export type { ConfigEditResult, ConfigWriteTarget };
+export {
+  configEditError,
+  editConfig,
+  editConfigWithResult,
+} from "./config-edit.ts";
 
 /**
  * Minimum supported Pi runtime (issue #11 D1, compat-window-policy).
@@ -416,7 +422,7 @@ export type MutableOverrideEntry = {
 
 function validateModelMetaWrite(
   modelMeta: ModelMetaOverride,
-): { ok: true } | { ok: false; error: string } {
+): ConfigEditResult {
   if (typeof modelMeta.thinkingFormat === "string" && modelMeta.thinkingFormat.trim()) {
     const fmt = modelMeta.thinkingFormat.trim();
     if (!isThinkingFormat(fmt)) {
@@ -567,7 +573,7 @@ export function writeModelMetaOverride(
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   if (modelMeta) {
     const valid = validateModelMetaWrite(modelMeta);
     if (!valid.ok) return valid;
@@ -605,17 +611,14 @@ export function writeProviderWireCompat(
     appType?: string;
   },
   compat: ProviderWireCompat | null,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   let parsed: ProviderWireCompat | undefined;
   try {
     parsed = compat
       ? parseProviderWireCompat(compat, "provider compat")
       : undefined;
   } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return configEditError(error);
   }
   if (parsed && parsed.api !== provider.api) {
     return {
@@ -641,7 +644,7 @@ export function writeProviderWireCompat(
 export function clearAllModelMetaOverrides(
   target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   return editConfig(target, (raw) =>
     updateOverrideEntry(raw, provider, (entry) => {
       const prev = { ...entry };
@@ -657,7 +660,7 @@ export function writeProviderModelMeta(
   target: ConfigWriteTarget,
   provider: Pick<CcProvider, "id" | "displayName">,
   modelMeta: ModelMetaOverride | null,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   return writeModelMetaOverride(target, provider, { kind: "provider" }, modelMeta);
 }
 
@@ -666,7 +669,7 @@ export function writeModelTupleCompat(
   provider: Pick<CcProvider, "id" | "displayName" | "api"> & { appType?: string },
   modelId: string,
   compat: ModelTupleCompat | null,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   const id = modelId.trim();
   if (!id) return { ok: false, error: "empty model id" };
   let parsed: ModelTupleCompat | undefined;
@@ -675,10 +678,7 @@ export function writeModelTupleCompat(
       ? parseModelTupleCompat(compat, "model tuple compat")
       : undefined;
   } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return configEditError(error);
   }
   if (parsed && provider.api && provider.api !== parsed.api) {
     return {
@@ -796,7 +796,7 @@ export function writePins(
   configPath: string,
   pins: PinEntry[],
   pid: number,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, pins }));
 }
 
@@ -806,16 +806,24 @@ export function writeRecent(
   configPath: string,
   recent: RecentEntry[],
   pid: number,
-): { ok: boolean; error?: string } {
+): ConfigEditResult {
   return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, recent }));
 }
+
+export type TogglePinWriteResult =
+  | { ok: true; pins: PinEntry[]; pinned: boolean }
+  | { ok: false; error: string; pins: PinEntry[]; pinned: boolean };
+
+export type RecordRecentWriteResult =
+  | { ok: true; recent: RecentEntry[] }
+  | { ok: false; error: string; recent: RecentEntry[] };
 
 export function togglePinAndWrite(
   fs: FsLike,
   configPath: string,
   entry: PinEntry,
   pid: number,
-): { ok: boolean; error?: string; pins: PinEntry[]; pinned: boolean } {
+): TogglePinWriteResult {
   const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
     const toggled = togglePinEntry(parsePins(raw.pins), entry);
     return {
@@ -834,7 +842,7 @@ export function recordRecentAndWrite(
   configPath: string,
   entry: Omit<RecentEntry, "at"> & { at?: number },
   pid: number,
-): { ok: boolean; error?: string; recent: RecentEntry[] } {
+): RecordRecentWriteResult {
   const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
     const config = readPiSwitchConfig(
       {
