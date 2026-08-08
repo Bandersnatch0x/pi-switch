@@ -118,12 +118,14 @@ describe("effective config summary", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
       scope: "provider",
       source: "conservative-default",
     });
     expect(text).toContain("store=false");
     expect(text).toContain("usageStream=false");
     expect(text).toContain("strict=false");
+    expect(text).toContain("longRetention=false");
     expect(text).toContain("scope=provider source=conservative-default");
   });
 

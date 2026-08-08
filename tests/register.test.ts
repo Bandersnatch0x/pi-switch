@@ -435,6 +435,7 @@ describe("buildProviderConfig", () => {
         supportsStrictMode: false,
         requiresToolResultName: true,
         requiresAssistantAfterToolResult: true,
+        supportsLongCacheRetention: false,
       });
     }
   });
@@ -561,6 +562,7 @@ describe("buildProviderConfig", () => {
     });
     expect(defaultsOnly?.models[0]?.compat).toMatchObject({
       supportsStore: false,
+      supportsLongCacheRetention: false,
     });
 
     const withOverride = buildProviderConfig(relay, ["relay-model"], {

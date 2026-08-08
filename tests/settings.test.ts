@@ -314,7 +314,11 @@ describe("provider wire compat persistence", () => {
         providerOverrides: {
           codex: {
             "provider-1": {
-              compat: { api: "openai-completions", supportsStore: false },
+              compat: {
+                api: "openai-completions",
+                supportsStore: false,
+                supportsLongCacheRetention: false,
+              },
             },
           },
         },
@@ -332,6 +336,7 @@ describe("provider wire compat persistence", () => {
     expect(entry?.compat).toEqual({
       api: "openai-completions",
       supportsStore: false,
+      supportsLongCacheRetention: false,
     });
   });
 
@@ -423,7 +428,11 @@ describe("provider wire compat persistence", () => {
       writeProviderWireCompat(
         { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
-        { api: "openai-completions", supportsStore: false },
+        {
+          api: "openai-completions",
+          supportsStore: false,
+          supportsLongCacheRetention: false,
+        },
       ),
     ).toEqual({ ok: true });
     const loadedFalse = resolveProviderOverride(
@@ -433,12 +442,21 @@ describe("provider wire compat persistence", () => {
     expect(
       loadedFalse && "supportsStore" in loadedFalse ? loadedFalse.supportsStore : undefined,
     ).toBe(false);
+    expect(
+      loadedFalse && "supportsLongCacheRetention" in loadedFalse
+        ? loadedFalse.supportsLongCacheRetention
+        : undefined,
+    ).toBe(false);
 
     expect(
       writeProviderWireCompat(
         { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
-        { api: "openai-completions", supportsStore: true },
+        {
+          api: "openai-completions",
+          supportsStore: true,
+          supportsLongCacheRetention: true,
+        },
       ),
     ).toEqual({ ok: true });
     const loadedTrue = resolveProviderOverride(
@@ -447,6 +465,11 @@ describe("provider wire compat persistence", () => {
     )?.compat;
     expect(
       loadedTrue && "supportsStore" in loadedTrue ? loadedTrue.supportsStore : undefined,
+    ).toBe(true);
+    expect(
+      loadedTrue && "supportsLongCacheRetention" in loadedTrue
+        ? loadedTrue.supportsLongCacheRetention
+        : undefined,
     ).toBe(true);
 
     expect(writeProviderWireCompat({ fs, configPath: "/c.json", pid: 1 }, chatProvider, null)).toEqual({

@@ -174,6 +174,45 @@ describe("runDoctor", () => {
     expect(check?.detail).not.toContain("gpt-5*");
   });
 
+  test("warns when unknown Chat relay uses conservative long-cache default under PI_CACHE_RETENTION=long", () => {
+    const p = mk({
+      id: "chat-relay",
+      displayName: "relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+    const providerWireCompat = resolveProviderWireCompat({ provider: p });
+    expect(providerWireCompat?.api).toBe("openai-completions");
+    expect(providerWireCompat?.source).toBe("conservative-default");
+
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3", providers: [p], selection: { dbId: p.id, model: "m1" }, config: {}, headerRuleCount: 1, providerWireCompat, cacheRetentionEnv: "long" });
+
+    const check = report.checks.find((candidate) => candidate.id === "provider-wire-compat");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("supportsLongCacheRetention=false(conservative-default)");
+    expect(check?.fix).toContain("supportsLongCacheRetention");
+    expect(check?.fix).toContain("providerOverrides");
+  });
+
+  test("passes when unknown Chat relay uses conservative long-cache default but PI_CACHE_RETENTION is not long", () => {
+    const p = mk({
+      id: "chat-relay",
+      displayName: "relay",
+      appType: "codex",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1",
+    });
+    const providerWireCompat = resolveProviderWireCompat({ provider: p });
+
+    const report = runDoctor({
+      home: "/h", dbPath: "/db", dbExists: true, sqlite3Path: "sqlite3", providers: [p], selection: { dbId: p.id, model: "m1" }, config: {}, headerRuleCount: 1, providerWireCompat, cacheRetentionEnv: undefined });
+
+    const check = report.checks.find((candidate) => candidate.id === "provider-wire-compat");
+    expect(check?.status).toBe("pass");
+  });
+
   test("warns when an explicit Provider wire override conflicts with official adapter facts", () => {
     const p = mk({
       id: "openai",

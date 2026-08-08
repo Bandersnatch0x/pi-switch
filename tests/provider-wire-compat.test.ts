@@ -32,8 +32,13 @@ describe("parseProviderWireCompat", () => {
       parseProviderWireCompat({
         api: "openai-completions",
         supportsStore: true,
+        supportsLongCacheRetention: false,
       }),
-    ).toEqual({ api: "openai-completions", supportsStore: true });
+    ).toEqual({
+      api: "openai-completions",
+      supportsStore: true,
+      supportsLongCacheRetention: false,
+    });
     expect(
       parseProviderWireCompat({
         api: "openai-completions",
@@ -63,6 +68,7 @@ describe("parseProviderWireCompat", () => {
       { api: "openai-responses", supportsStore: true },
       { api: "openai-completions", supportsStore: null },
       { api: "openai-completions", supportsStore: "yes" },
+      { api: "openai-completions", supportsLongCacheRetention: "yes" },
       { api: "openai-completions", supportsStore: true, extra: false },
       { supportsStore: true },
       { api: "anthropic-messages", supportsEagerToolInputStreaming: null },
@@ -105,6 +111,7 @@ describe("resolveProviderWireCompat", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
     });
     // Explicit true on store only; other fields stay conservative for unknown relay.
     expect(providerWireCompatForRegistration(trueResult)).toEqual({
@@ -113,6 +120,7 @@ describe("resolveProviderWireCompat", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
     });
   });
 
@@ -145,6 +153,7 @@ describe("resolveProviderWireCompat", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
     });
   });
 
@@ -309,7 +318,7 @@ describe("Anthropic Provider wire compat (#65)", () => {
 });
 
 describe("Chat Provider wire remaining fields (#66)", () => {
-  test("parses four additional Chat wire fields without truthy cleanup", () => {
+  test("parses additional Chat wire fields without truthy cleanup", () => {
     expect(
       parseProviderWireCompat({
         api: "openai-completions",
@@ -318,6 +327,7 @@ describe("Chat Provider wire remaining fields (#66)", () => {
         supportsStrictMode: false,
         requiresToolResultName: true,
         requiresAssistantAfterToolResult: true,
+        supportsLongCacheRetention: false,
       }),
     ).toEqual({
       api: "openai-completions",
@@ -326,10 +336,11 @@ describe("Chat Provider wire remaining fields (#66)", () => {
       supportsStrictMode: false,
       requiresToolResultName: true,
       requiresAssistantAfterToolResult: true,
+      supportsLongCacheRetention: false,
     });
   });
 
-  test("unknown Chat relay defaults all five fields conservatively", () => {
+  test("unknown Chat relay defaults all fields conservatively", () => {
     const result = resolveProviderWireCompat({
       provider: provider("openai-completions", "https://relay.example/v1"),
     });
@@ -341,6 +352,10 @@ describe("Chat Provider wire remaining fields (#66)", () => {
       supportsStrictMode: { value: false, source: "conservative-default" },
       requiresToolResultName: { value: false, source: "conservative-default" },
       requiresAssistantAfterToolResult: {
+        value: false,
+        source: "conservative-default",
+      },
+      supportsLongCacheRetention: {
         value: false,
         source: "conservative-default",
       },
@@ -386,6 +401,7 @@ describe("Chat Provider wire remaining fields (#66)", () => {
       supportsStrictMode: true,
       requiresToolResultName: true,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
     });
   });
 
@@ -405,6 +421,10 @@ describe("Chat Provider wire remaining fields (#66)", () => {
     });
     // Official facts for unset fields remain official-adapter.
     expect(result.fields.supportsUsageInStreaming.source).toBe("official-adapter");
+    expect(result.fields.supportsLongCacheRetention).toEqual({
+      value: true,
+      source: "official-adapter",
+    });
     expect(result.conflicts).toContainEqual(
       expect.objectContaining({
         field: "supportsStrictMode",

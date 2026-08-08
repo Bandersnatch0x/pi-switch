@@ -27,6 +27,7 @@ export const CHAT_WIRE_FIELDS = [
   "supportsStrictMode",
   "requiresToolResultName",
   "requiresAssistantAfterToolResult",
+  "supportsLongCacheRetention",
 ] as const;
 
 export type ChatWireField = (typeof CHAT_WIRE_FIELDS)[number];
@@ -49,6 +50,7 @@ export interface ChatProviderWireCompat {
   supportsStrictMode?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
+  supportsLongCacheRetention?: boolean;
 }
 
 export interface AnthropicProviderWireCompat {
@@ -97,6 +99,7 @@ export interface ResolvedChatProviderWireCompat {
     supportsStrictMode: ResolvedWireField;
     requiresToolResultName: ResolvedWireField;
     requiresAssistantAfterToolResult: ResolvedWireField;
+    supportsLongCacheRetention: ResolvedWireField;
   };
 }
 
@@ -123,6 +126,7 @@ export type RegistrationChatWireCompat = {
   supportsStrictMode?: boolean;
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
+  supportsLongCacheRetention?: boolean;
 };
 
 export type RegistrationAnthropicWireCompat = {
@@ -193,6 +197,7 @@ const OFFICIAL_CHAT_FACTS: Record<ChatWireField, boolean> = {
   // Official OpenAI does not require these quirks.
   requiresToolResultName: false,
   requiresAssistantAfterToolResult: false,
+  supportsLongCacheRetention: true,
 };
 
 const CONSERVATIVE_CHAT_FACTS: Record<ChatWireField, boolean> = {
@@ -201,6 +206,7 @@ const CONSERVATIVE_CHAT_FACTS: Record<ChatWireField, boolean> = {
   supportsStrictMode: false,
   requiresToolResultName: false,
   requiresAssistantAfterToolResult: false,
+  supportsLongCacheRetention: false,
 };
 
 function resolveMultiFieldWire<F extends string>(input: {

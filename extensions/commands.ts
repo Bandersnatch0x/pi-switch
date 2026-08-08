@@ -316,6 +316,7 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     migrationSummary: rt.migrationSummary,
     schemaCapabilities,
     providerWireCompat: selMatch ? rt.providerWireCompatFor?.(selMatch) : undefined,
+    cacheRetentionEnv: process.env.PI_CACHE_RETENTION,
   });
 
   const text = formatDoctorReport(report);

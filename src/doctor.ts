@@ -97,6 +97,8 @@ export interface DoctorInput {
   schemaCapabilities?: DbCapabilities;
   /** Resolved Provider Chat wire fact for the current selection (issue #62). */
   providerWireCompat?: ResolvedProviderWireCompat;
+  /** PI_CACHE_RETENTION env value ("long" | undefined). Doctor warns when an unknown Chat relay conservatively disables long cache retention while this is "long". */
+  cacheRetentionEnv?: string;
 }
 
 export interface DoctorReport {
@@ -583,17 +585,29 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       ([name, entry]) => `${name}=${entry.value}(${entry.source})`,
     );
     const facts = `api=${wire.api} scope=${wire.scope} · ${fieldParts.join(" · ")}`;
+
+    // Cache-retention risk: unknown Chat relay conservatively disables
+    // supportsLongCacheRetention, but PI_CACHE_RETENTION=long still sends
+    // prompt_cache_key. Warn so the user can opt into an explicit override
+    // before hitting a 400 from relays that reject the field.
+    const cacheRisk =
+      wire.api === "openai-completions" &&
+      input.cacheRetentionEnv === "long" &&
+      wire.fields.supportsLongCacheRetention.source === "conservative-default";
+
     const detail = conflictRows.length
       ? `${facts}; ${conflictRows.join("; ")}`
       : facts;
     checks.push({
       id: "provider-wire-compat",
       title: t("docTitleWireCompat"),
-      status: conflictRows.length ? "warn" : "pass",
+      status: conflictRows.length || cacheRisk ? "warn" : "pass",
       detail,
       fix: conflictRows.length
         ? t("docFixWireCompat")
-        : undefined,
+        : cacheRisk
+          ? t("docFixCacheRetention")
+          : undefined,
     });
   }
 

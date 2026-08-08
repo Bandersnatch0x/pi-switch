@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import { createProbeTransport } from "../extensions/probe-commands.ts";
 import type { ProbeRequest } from "../src/probe/index.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
@@ -298,7 +299,11 @@ function makeRequest(
 
 function transport(geminiMode?: "AUTO") {
   return createProbeTransport({
-    resolveAuth: async () => ({ ok: true, apiKey: "test-key" }),
+    resolveAuth: async () => ({
+      ok: true,
+      apiKey: "test-key",
+      env: { PI_CACHE_RETENTION: "short" },
+    }),
     ...(geminiMode
       ? { geminiCompat: { forceToolConfigMode: geminiMode } }
       : {}),
@@ -834,6 +839,40 @@ describe("Anthropic Provider wire compat request characterization (#65)", () => 
 });
 
 describe("Chat Provider wire remaining fields request characterization (#66)", () => {
+  test("unknown relay omits OpenAI cache fields even when long retention is requested", async () => {
+    const relay = createStrictRelay(
+      "openai-completions",
+      OFFICIAL_PROFILES["openai-completions"],
+    );
+    const model = registeredChatModel(relay.baseUrl, undefined, {
+      resolveDefault: true,
+    });
+    const request = makeRequest(model);
+
+    try {
+      const stream = streamOpenAICompletions(
+        model as Model<"openai-completions">,
+        request.context,
+        {
+          ...request.options,
+          apiKey: "test-key",
+          cacheRetention: "long",
+          sessionId: "42w-regression-session",
+        },
+      );
+      const message = await stream.result();
+
+      expect(message.stopReason).toBe("stop");
+      expect(relay.requests).toHaveLength(1);
+      const body = relay.requests[0]?.body as Record<string, unknown>;
+      expect(body).not.toHaveProperty("prompt_cache_key");
+      expect(body).not.toHaveProperty("prompt_cache_retention");
+      expect(relay.rejections).toEqual([]);
+    } finally {
+      relay.close();
+    }
+  });
+
   test("supportsUsageInStreaming=false omits stream_options; true includes usage", async () => {
     for (const supportsUsageInStreaming of [false, true] as const) {
       const relay = createStrictRelay(
