@@ -1,23 +1,26 @@
 /**
  * Mutable extension runtime: IO, config, header rules, provider snapshot, vars.
  * Populated after dynamic node:* imports in the extension factory.
+ *
+ * Heavy seams live in dedicated modules; Runtime wires IO + config and
+ * exposes stable facades for commands / lifecycle / doctor.
  */
 
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
 import { defaultDbPath, readProviders } from "../src/db.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { providerHeadersPath, type FsLike } from "../src/settings.ts";
-import { resolveProviderOverride } from "../src/provider-override.ts";
-import {
-  resolveProviderWireCompat,
-  type ResolvedProviderWireCompat,
-} from "../src/provider-wire-compat.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
-import { buildHeaderVars, type ProbeDeps } from "../src/headers/vars.ts";
-import { resolveOverrideHeaders, isFingerprintPreset } from "../src/headers/fingerprints.ts";
-import { resolveEffectiveModelMeta, resolveModelMetaLayers, cleanModelMeta } from "../src/model-meta.ts";
-import { withBuiltInCompatUnderUser } from "../src/compat/built-in-compat-profile.ts";
-import { resolveRoutingProbeUrl, ROUTING_PROBE_TIMEOUT_MS } from "../src/routing.ts";
+import type { ProbeDeps } from "../src/headers/vars.ts";
+import {
+  loadFingerprintSnapshot,
+  type FingerprintSnapshot,
+} from "../src/headers/fingerprint-snapshot.ts";
+import {
+  HeaderVarsSession,
+  type VarsSummary,
+} from "../src/headers/header-vars-session.ts";
+import { probeRouting } from "../src/routing.ts";
 import {
   ModelsDevCache,
   type CapabilitiesCache,
@@ -29,6 +32,8 @@ import {
   ccMetaFrom,
 } from "../src/capabilities/layers.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
+import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
+import { ProviderConfigViews } from "../src/provider-config-views.ts";
 import { piSettingsPath, piSwitchConfigPath } from "../src/settings.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
@@ -53,24 +58,7 @@ export type NodeIo = {
   home: string;
 };
 
-/** W5 fingerprint snapshot facts (subset of defaults/fingerprint-snapshot.json). */
-export interface FingerprintSnapshot {
-  snapshotVersion: number;
-  baselines: { codex?: string; claudeCode?: string; gemini?: string };
-}
-
-export type { CapabilitiesCache };
-
-export type VarsSummary = {
-  codexVersion: string;
-  codexVersionSource: string;
-  claudeCodeVersion: string;
-  claudeCodeVersionSource: string;
-  geminiVersion: string;
-  geminiVersionSource: string;
-  anthropicBeta: string;
-  codexOriginator: string;
-};
+export type { FingerprintSnapshot, CapabilitiesCache, VarsSummary };
 
 export class Runtime {
   readonly io: NodeIo;
@@ -83,8 +71,6 @@ export class Runtime {
   sqlite3Path = "sqlite3";
   sqlite3Tried: string[] = [];
 
-  private cachedVars: Record<string, string> | undefined;
-  private cachedVarsSummary: VarsSummary | undefined;
   private selectionCache: { at: number; value: PiSwitchSelection | undefined } | undefined;
   private readonly codexWindowId: string;
   private cachedPiVersion: string | undefined;
@@ -92,6 +78,8 @@ export class Runtime {
   private cachedSnapshot: FingerprintSnapshot | undefined;
   private snapshotProbed = false;
   private readonly modelsDevCache: ModelsDevCache;
+  private readonly headerVarsSession: HeaderVarsSession;
+  private readonly providerViews: ProviderConfigViews;
   private identityMigration: IdentityMigrationSummary | undefined;
   private lastSchemaCapabilities: import("../src/db.ts").DbCapabilities | undefined;
 
@@ -108,6 +96,13 @@ export class Runtime {
     this.modelsDevCache = new ModelsDevCache(cacheIo, {
       isRefreshEnabled: () => this.capabilitiesRefreshEnabled(),
     });
+    this.headerVarsSession = new HeaderVarsSession({
+      probeDeps: () => this.probeHeaderVarsDeps(),
+      configVars: () => this.config.vars,
+      debug: () => Boolean(this.config.debug),
+      codexWindowId: this.codexWindowId,
+    });
+    this.providerViews = new ProviderConfigViews(() => this.config);
   }
 
   get home(): string {
@@ -187,7 +182,8 @@ export class Runtime {
     error?: string;
     capabilities?: import("../src/db.ts").DbCapabilities;
   } {
-    const result = readProviders({      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
+    const result = readProviders({
+      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
       existsSync: this.io.existsSync,
       sqlite3Path: this.sqlite3Path,
       dbPath: defaultDbPath(this.home),
@@ -234,8 +230,7 @@ export class Runtime {
 
   /** Drop cached fingerprint probe (used by doctor). */
   invalidateVarsCache(): void {
-    this.cachedVars = undefined;
-    this.cachedVarsSummary = undefined;
+    this.headerVarsSession.invalidate();
   }
 
   /**
@@ -258,33 +253,10 @@ export class Runtime {
   fingerprintSnapshot(): FingerprintSnapshot | undefined {
     if (this.snapshotProbed) return this.cachedSnapshot;
     this.snapshotProbed = true;
-    try {
-      const raw = JSON.parse(this.io.readFileSync(this.io.snapshotPath, "utf8")) as {
-        snapshotVersion?: unknown;
-        upstream?: {
-          codex?: { version?: unknown };
-          claudeCode?: { version?: unknown };
-          gemini?: { version?: unknown };
-        };
-      };
-      const v = raw.snapshotVersion;
-      const up = raw.upstream;
-      if (typeof v !== "number" || !up) {
-        this.cachedSnapshot = undefined;
-        return undefined;
-      }
-      this.cachedSnapshot = {
-        snapshotVersion: v,
-        baselines: {
-          codex: typeof up.codex?.version === "string" ? up.codex.version : undefined,
-          claudeCode:
-            typeof up.claudeCode?.version === "string" ? up.claudeCode.version : undefined,
-          gemini: typeof up.gemini?.version === "string" ? up.gemini.version : undefined,
-        },
-      };
-    } catch {
-      this.cachedSnapshot = undefined;
-    }
+    this.cachedSnapshot = loadFingerprintSnapshot(
+      { readFileSync: this.io.readFileSync as (p: string, e: "utf8") => string },
+      this.io.snapshotPath,
+    );
     return this.cachedSnapshot;
   }
 
@@ -295,12 +267,10 @@ export class Runtime {
   async routingProbe(): Promise<{ url: string; reachable: boolean } | undefined> {
     // routingProbeUrl lives outside PiSwitchConfig to keep this work off the
     // in-flight capability-probe edits to src/types.ts; read it structurally.
-    const url = resolveRoutingProbeUrl(
+    return probeRouting(
       this.config as { routingProbeUrl?: string } | undefined,
+      this.io.probeHttp,
     );
-    if (!url) return undefined;
-    const reachable = await this.io.probeHttp(url, ROUTING_PROBE_TIMEOUT_MS);
-    return { url, reachable };
   }
 
   // -----------------------------------------------------------------------
@@ -370,92 +340,37 @@ export class Runtime {
   }
 
   get varsSummary(): VarsSummary | undefined {
-    return this.cachedVarsSummary;
+    return this.headerVarsSession.summary;
   }
 
-  private probeHeaderVars() {
-    return buildHeaderVars(
-      {
-        execFileSync: this.io.execFileSync as ProbeDeps["execFileSync"],
-        existsSync: this.io.existsSync,
-        readFileSync: this.io.readFileSync,
-        platform: process.platform,
-        arch: process.arch,
-        release: this.io.release,
-        homedir: this.home,
-      },
-      this.config.vars,
-    );
+  private probeHeaderVarsDeps(): ProbeDeps {
+    return {
+      execFileSync: this.io.execFileSync as ProbeDeps["execFileSync"],
+      existsSync: this.io.existsSync,
+      readFileSync: this.io.readFileSync as ProbeDeps["readFileSync"],
+      platform: process.platform,
+      arch: process.arch,
+      release: this.io.release,
+      homedir: this.home,
+    };
   }
 
   headerVars(): Record<string, string> {
-    if (this.cachedVars) return this.cachedVars;
-    const vars = this.probeHeaderVars();
-    if (this.config.debug) {
-      console.log(
-        `[pi-switch] codexVersion=${vars.codexVersion} (source=${vars.codexVersionSource})`,
-      );
-      console.log(
-        `[pi-switch] claudeCodeVersion=${vars.claudeCodeVersion} (source=${vars.claudeCodeVersionSource})`,
-      );
-      console.log(
-        `[pi-switch] geminiVersion=${vars.geminiVersion} (source=${vars.geminiVersionSource})`,
-      );
-      console.log(`[pi-switch] osInfo=${vars.osInfo}`);
-      console.log(
-        `[pi-switch] originator=${vars.codexOriginator} anthropic-beta=${vars.anthropicBeta}`,
-      );
-    }
-    this.cachedVarsSummary = {
-      codexVersion: vars.codexVersion,
-      codexVersionSource: vars.codexVersionSource,
-      claudeCodeVersion: vars.claudeCodeVersion,
-      claudeCodeVersionSource: vars.claudeCodeVersionSource,
-      geminiVersion: vars.geminiVersion,
-      geminiVersionSource: vars.geminiVersionSource,
-      anthropicBeta: vars.anthropicBeta,
-      codexOriginator: vars.codexOriginator,
-    };
-    this.cachedVars = {
-      codexVersion: vars.codexVersion,
-      claudeCodeVersion: vars.claudeCodeVersion,
-      geminiVersion: vars.geminiVersion,
-      osInfo: vars.osInfo,
-      anthropicVersion: vars.anthropicVersion,
-      anthropicBeta: vars.anthropicBeta,
-      codexOriginator: vars.codexOriginator,
-      codexWindowId: this.codexWindowId,
-    };
-    return this.cachedVars;
+    return this.headerVarsSession.vars();
   }
 
   /** Reject log sink for mergeHeaders allowlist — only active under config.debug. */
   rejectSink(): ((name: string, reason: string) => void) | undefined {
-    if (!this.config.debug) return undefined;
-    return (name, reason) => console.warn(`[pi-switch] header rejected: ${name} (${reason})`);
+    return this.headerVarsSession.rejectSink();
   }
 
   overridesFor(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
-    const ov = resolveProviderOverride(this.config.providerOverrides, provider);
-    if (!ov) return undefined;
-    const fingerprint =
-      typeof ov.fingerprint === "string" && isFingerprintPreset(ov.fingerprint)
-        ? ov.fingerprint
-        : undefined;
-    // May set skipRules when fingerprint is "none" (clear default CLI disguise).
-    const resolved = resolveOverrideHeaders({ fingerprint, headers: ov.headers });
-    if (!resolved.headers && !resolved.skipRules) return undefined;
-    return resolved;
+    return this.providerViews.overridesFor(provider);
   }
 
   /** Spread into lifecycle provider registration options. */
   headerOverrideOpts(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
-    const resolved = this.overridesFor(provider);
-    if (!resolved) return {};
-    return {
-      overrideHeaders: resolved.headers,
-      skipRules: resolved.skipRules,
-    };
+    return this.providerViews.headerOverrideOpts(provider);
   }
 
   /**
@@ -468,10 +383,7 @@ export class Runtime {
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
   ) {
-    return withBuiltInCompatUnderUser(
-      modelId,
-      resolveEffectiveModelMeta(this.config, provider, modelId),
-    );
+    return this.providerViews.modelMetaFor(provider, modelId);
   }
 
   /**
@@ -482,14 +394,9 @@ export class Runtime {
     provider: Pick<CcProvider, "id" | "piName" | "displayName" | "api" | "baseUrl"> & {
       appType?: string;
     },
-  ): ResolvedProviderWireCompat | undefined {
-    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
-    return resolveProviderWireCompat({
-      provider,
-      override: entry?.compat,
-    });
+  ) {
+    return this.providerViews.providerWireCompatFor(provider);
   }
-
 
   /**
    * Exact-model Chat tuple wire dialect (issue #64).
@@ -501,26 +408,15 @@ export class Runtime {
     },
     modelId: string,
   ) {
-    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
-    const modelOverride = entry?.modelOverrides?.[modelId];
-    if (!modelOverride) return undefined;
-    const tuple = modelOverride.compat;
-    const legacyFlat = {
-      thinkingFormat: modelOverride.thinkingFormat,
-      requiresReasoningContentOnAssistantMessages:
-        modelOverride.requiresReasoningContentOnAssistantMessages,
-      supportsDeveloperRole: modelOverride.supportsDeveloperRole,
-    };
-    return { tuple, legacyFlat };
+    return this.providerViews.tupleCompatFor(provider, modelId);
   }
-
 
   /** Full layer breakdown (base / provider / model) for dialog + doctor. */
   modelMetaLayers(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
   ) {
-    return resolveModelMetaLayers(this.config, provider, modelId);
+    return this.providerViews.modelMetaLayers(provider, modelId);
   }
 
   /**
@@ -532,9 +428,6 @@ export class Runtime {
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
   ): boolean {
-    if (modelId) return Boolean(this.modelMetaLayers(provider, modelId).model);
-    const entry = resolveProviderOverride(this.config.providerOverrides, provider);
-    if (cleanModelMeta(entry?.modelMeta)) return true;
-    return Object.keys(entry?.modelOverrides ?? {}).length > 0;
+    return this.providerViews.hasModelMetaOverride(provider, modelId);
   }
 }
