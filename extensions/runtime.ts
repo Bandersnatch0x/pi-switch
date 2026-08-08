@@ -29,13 +29,22 @@ import {
   type CapabilitiesCache,
   type ModelsDevCacheIo,
 } from "../src/capabilities/models-dev-cache.ts";
-import type { ModelsDevCacheEntry } from "../src/capabilities/models-dev.ts";
+import type {
+  ModelsDevCacheEntry,
+  ModelsDevCapabilities,
+} from "../src/capabilities/models-dev.ts";
 import {
   assembleCapabilityLayers,
   ccMetaFrom,
 } from "../src/capabilities/layers.ts";
-import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
+import {
+  resolveModelCapabilities,
+  type ResolvedCapabilities,
+} from "../src/capabilities/resolve.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
+import type { ModelMetaOverride } from "../src/types.ts";
+import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
+import type { ResolvedProviderWireCompat } from "../src/provider-wire-compat.ts";
 import { ProviderConfigViews } from "../src/provider-config-views.ts";
 import { ProviderSnapshot } from "../src/provider-snapshot.ts";
 import { SelectionCache } from "../src/selection-cache.ts";
@@ -299,7 +308,7 @@ export class Runtime {
    * Read-only models.dev cache lookup by exact model id (no network, no await).
    * Negative entries are filtered to undefined so resolve treats the layer as absent.
    */
-  modelsDevFor(modelId: string) {
+  modelsDevFor(modelId: string): ModelsDevCapabilities | undefined {
     return this.modelsDevCache.modelsDevFor(modelId);
   }
 
@@ -309,7 +318,7 @@ export class Runtime {
   }
 
   /** Resolve capability facts for a provider/model (full #36/#63 priority chain). */
-  capabilitiesFor(provider: CcProvider, modelId: string) {
+  capabilitiesFor(provider: CcProvider, modelId: string): ResolvedCapabilities {
     // User-config layers only — built-in compat is not a capability source.
     const user = resolveEffectiveModelMeta(this.config, provider, modelId);
     return resolveModelCapabilities(
@@ -346,15 +355,21 @@ export class Runtime {
 
   /** Reject log sink for mergeHeaders allowlist — only active under config.debug. */
   rejectSink(): ((name: string, reason: string) => void) | undefined {
-    return this.headerVarsSession.rejectSink();
+    if (!this.config.debug) return undefined;
+    return (name, reason) =>
+      console.warn(`[pi-switch] header rejected: ${name} (${reason})`);
   }
 
-  overridesFor(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
+  overridesFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+  ): ResolvedOverrideHeaders | undefined {
     return this.providerViews.overridesFor(provider);
   }
 
   /** Spread into lifecycle provider registration options. */
-  headerOverrideOpts(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
+  headerOverrideOpts(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+  ): { overrideHeaders?: Record<string, string>; skipRules?: boolean } {
     return this.providerViews.headerOverrideOpts(provider);
   }
 
@@ -367,7 +382,7 @@ export class Runtime {
   modelMetaFor(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
-  ) {
+  ): ModelMetaOverride | undefined {
     return this.providerViews.modelMetaFor(provider, modelId);
   }
 
@@ -379,7 +394,7 @@ export class Runtime {
     provider: Pick<CcProvider, "id" | "piName" | "displayName" | "api" | "baseUrl"> & {
       appType?: string;
     },
-  ) {
+  ): ResolvedProviderWireCompat | undefined {
     return this.providerViews.providerWireCompatFor(provider);
   }
 
@@ -392,7 +407,7 @@ export class Runtime {
       appType?: string;
     },
     modelId: string,
-  ) {
+  ): ReturnType<ProviderConfigViews["tupleCompatFor"]> {
     return this.providerViews.tupleCompatFor(provider, modelId);
   }
 
@@ -400,7 +415,7 @@ export class Runtime {
   modelMetaLayers(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
-  ) {
+  ): ReturnType<ProviderConfigViews["modelMetaLayers"]> {
     return this.providerViews.modelMetaLayers(provider, modelId);
   }
 

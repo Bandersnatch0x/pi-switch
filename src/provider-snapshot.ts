@@ -29,7 +29,6 @@ export class ProviderSnapshot {
   lastGoodProviders: CcProvider[] = [];
   sqlite3Path = "sqlite3";
   sqlite3Tried: string[] = [];
-  lastSchemaCapabilities: DbCapabilities | undefined;
 
   constructor(private readonly io: ProviderSnapshotIo) {}
 
@@ -40,7 +39,6 @@ export class ProviderSnapshot {
       sqlite3Path: this.sqlite3Path,
       dbPath: defaultDbPath(this.io.home),
     });
-    this.lastSchemaCapabilities = result.capabilities;
     if (result.ok) {
       this.lastGoodProviders = result.providers;
       return { providers: result.providers, capabilities: result.capabilities };

@@ -79,11 +79,4 @@ export class HeaderVarsSession {
     };
     return this.cachedVars;
   }
-
-  /** Reject log sink for mergeHeaders allowlist — only when debug is on. */
-  rejectSink(): ((name: string, reason: string) => void) | undefined {
-    if (!this.deps.debug()) return undefined;
-    return (name, reason) =>
-      console.warn(`[pi-switch] header rejected: ${name} (${reason})`);
-  }
 }

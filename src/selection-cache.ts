@@ -16,8 +16,4 @@ export class SelectionCache<T> {
     this.entry = { at: now, value };
     return value;
   }
-
-  invalidate(): void {
-    this.entry = undefined;
-  }
 }
