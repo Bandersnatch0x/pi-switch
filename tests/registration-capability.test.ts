@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { assembleCapabilityLayers } from "../src/capabilities/layers.ts";
 import {
   formatCapabilityDecision,
   resolveRegistrationCapability,
 } from "../src/capabilities/registration.ts";
+import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
 
 describe("resolveRegistrationCapability (#63)", () => {
   test("unknown model: maxTokens unresolved, reasoning conservative false", () => {
@@ -76,6 +78,22 @@ describe("resolveRegistrationCapability (#63)", () => {
       expect(decision.maxTokensUnresolved).toBe(true);
       expect(decision.resolved.maxTokens.source).toBe("unresolved");
     }
+  });
+
+  test("protocol image support supplies the registration vision floor", () => {
+    const input = {
+      modelId: "unknown-anthropic-model",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://relay.example",
+    };
+    const assembled = resolveModelCapabilities(assembleCapabilityLayers(input));
+    const decision = resolveRegistrationCapability(input);
+
+    expect(assembled.vision).toMatchObject({
+      value: true,
+      source: "protocol-default",
+    });
+    expect(decision.resolved.vision).toEqual(assembled.vision);
   });
 
   test("formatCapabilityDecision is redacted and actionable", () => {

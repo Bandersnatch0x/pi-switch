@@ -177,6 +177,7 @@ describe("provider modelMeta overrides", () => {
       { thinkingFormat: "not-a-real-format" },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toContain("invalid thinkingFormat");
   });
 
@@ -226,6 +227,7 @@ describe("provider modelMeta overrides", () => {
       { thinkingLevelMap: { nope: "high" } as any },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toContain("invalid thinkingLevelMap key");
   });
 
@@ -237,6 +239,7 @@ describe("provider modelMeta overrides", () => {
       { thinkingLevelMap: { minimal: "  " } },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toContain("invalid thinkingLevelMap value");
   });
 
@@ -466,6 +469,7 @@ describe("provider wire compat persistence", () => {
     );
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
     expect(result.error).toMatch(/does not match provider api/i);
   });
 });
@@ -771,6 +775,7 @@ describe("per-model modelMeta overrides", () => {
       { thinkingFormat: "nope" },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toContain("invalid thinkingFormat");
   });
 
@@ -783,6 +788,7 @@ describe("per-model modelMeta overrides", () => {
       { supportsDeveloperRole: "yes" as any },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toContain("invalid supportsDeveloperRole");
     expect(fs.store["/c.json"]).toBeUndefined();
   });
@@ -796,6 +802,7 @@ describe("per-model modelMeta overrides", () => {
       { reasoning: false },
     );
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
     expect(r.error).toBe("empty model id");
   });
 });

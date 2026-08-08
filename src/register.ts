@@ -6,10 +6,8 @@ import { mergeHeaders } from "./headers/merge.ts";
 import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
-import {
-  ccMetaFrom,
-  resolveRegistrationCapability,
-} from "./capabilities/registration.ts";
+import { ccMetaFrom } from "./capabilities/layers.ts";
+import { resolveRegistrationCapability } from "./capabilities/registration.ts";
 import {
   resolveModelTupleCompat,
   tupleCompatForRegistration,

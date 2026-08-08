@@ -15,9 +15,15 @@
 
 import type { ModelMetaOverride, ThinkingFormat } from "./types.ts";
 import { isThinkingFormat } from "./types.ts";
+import {
+  ANTHROPIC_MESSAGES_API,
+  CHAT_COMPLETIONS_API,
+  hasOwn,
+  isPlainObject,
+  requireBoolean,
+} from "./compat/wire-shared.ts";
 
-export const CHAT_COMPLETIONS_API = "openai-completions" as const;
-export const ANTHROPIC_MESSAGES_API = "anthropic-messages" as const;
+export { ANTHROPIC_MESSAGES_API, CHAT_COMPLETIONS_API } from "./compat/wire-shared.ts";
 
 export const MAX_TOKENS_FIELDS = ["max_tokens", "max_completion_tokens"] as const;
 export type MaxTokensField = (typeof MAX_TOKENS_FIELDS)[number];
@@ -123,26 +129,6 @@ export interface RegistrationTupleCompat {
   supportsTemperature?: boolean;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function requireBooleanField(
-  raw: Record<string, unknown>,
-  key: string,
-  path: string,
-): boolean | undefined {
-  if (!hasOwn(raw, key)) return undefined;
-  if (typeof raw[key] !== "boolean") {
-    throw new Error(`invalid ${path}.${key}: expected boolean`);
-  }
-  return raw[key] as boolean;
-}
-
 /** Parse exact-model tuple compat (Chat or Anthropic discriminator). */
 export function parseModelTupleCompat(
   raw: unknown,
@@ -161,9 +147,9 @@ export function parseModelTupleCompat(
       );
     }
     const out: ChatTupleCompat = { api: CHAT_COMPLETIONS_API };
-    const sd = requireBooleanField(raw, "supportsDeveloperRole", path);
+    const sd = requireBoolean(raw, "supportsDeveloperRole", path);
     if (typeof sd === "boolean") out.supportsDeveloperRole = sd;
-    const sre = requireBooleanField(raw, "supportsReasoningEffort", path);
+    const sre = requireBoolean(raw, "supportsReasoningEffort", path);
     if (typeof sre === "boolean") out.supportsReasoningEffort = sre;
     if (hasOwn(raw, "maxTokensField")) {
       if (typeof raw.maxTokensField !== "string" || !isMaxTokensField(raw.maxTokensField)) {
@@ -179,7 +165,7 @@ export function parseModelTupleCompat(
       }
       out.thinkingFormat = raw.thinkingFormat;
     }
-    const rr = requireBooleanField(raw, "requiresReasoningContentOnAssistantMessages", path);
+    const rr = requireBoolean(raw, "requiresReasoningContentOnAssistantMessages", path);
     if (typeof rr === "boolean") out.requiresReasoningContentOnAssistantMessages = rr;
     return out;
   }
@@ -194,9 +180,9 @@ export function parseModelTupleCompat(
       );
     }
     const out: AnthropicTupleCompat = { api: ANTHROPIC_MESSAGES_API };
-    const fat = requireBooleanField(raw, "forceAdaptiveThinking", path);
+    const fat = requireBoolean(raw, "forceAdaptiveThinking", path);
     if (typeof fat === "boolean") out.forceAdaptiveThinking = fat;
-    const st = requireBooleanField(raw, "supportsTemperature", path);
+    const st = requireBoolean(raw, "supportsTemperature", path);
     if (typeof st === "boolean") out.supportsTemperature = st;
     return out;
   }

@@ -30,3 +30,18 @@ export function resolveRoutingProbeUrl(
   if (v === "") return undefined;
   return v || DEFAULT_ROUTING_PROBE_URL;
 }
+
+/**
+ * On-demand routing reachability probe (fresh each call).
+ * Undefined when probing is explicitly disabled via routingProbeUrl: "".
+ */
+export async function probeRouting(
+  config: { routingProbeUrl?: string } | undefined,
+  probeHttp: (url: string, timeoutMs: number) => Promise<boolean>,
+  timeoutMs = ROUTING_PROBE_TIMEOUT_MS,
+): Promise<RoutingProbeResult | undefined> {
+  const url = resolveRoutingProbeUrl(config);
+  if (!url) return undefined;
+  const reachable = await probeHttp(url, timeoutMs);
+  return { url, reachable };
+}
