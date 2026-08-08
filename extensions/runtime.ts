@@ -7,9 +7,8 @@
  */
 
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
-import { defaultDbPath, readProviders } from "../src/db.ts";
-import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
-import { providerHeadersPath, type FsLike } from "../src/settings.ts";
+import type { DbReaderDeps } from "../src/db.ts";
+import { type FsLike } from "../src/settings.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import type { ProbeDeps } from "../src/headers/vars.ts";
 import {
@@ -20,6 +19,10 @@ import {
   HeaderVarsSession,
   type VarsSummary,
 } from "../src/headers/header-vars-session.ts";
+import {
+  fileUrlPath,
+  loadHeaderRules,
+} from "../src/headers/header-rules-load.ts";
 import { probeRouting } from "../src/routing.ts";
 import {
   ModelsDevCache,
@@ -34,6 +37,8 @@ import {
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
 import { ProviderConfigViews } from "../src/provider-config-views.ts";
+import { ProviderSnapshot } from "../src/provider-snapshot.ts";
+import { SelectionCache } from "../src/selection-cache.ts";
 import { piSettingsPath, piSwitchConfigPath } from "../src/settings.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
@@ -63,15 +68,12 @@ export type { FingerprintSnapshot, CapabilitiesCache, VarsSummary };
 export class Runtime {
   readonly io: NodeIo;
   readonly state: LocalState;
-  lastGoodProviders: CcProvider[] = [];
   registeredPsNames: string[] = [];
   warnedMissingDbId = false;
   headerRules: HeaderRule[] = [];
   config: PiSwitchConfig = {};
-  sqlite3Path = "sqlite3";
-  sqlite3Tried: string[] = [];
 
-  private selectionCache: { at: number; value: PiSwitchSelection | undefined } | undefined;
+  private readonly selectionCache = new SelectionCache<PiSwitchSelection | undefined>();
   private readonly codexWindowId: string;
   private cachedPiVersion: string | undefined;
   private piVersionProbed = false;
@@ -80,8 +82,8 @@ export class Runtime {
   private readonly modelsDevCache: ModelsDevCache;
   private readonly headerVarsSession: HeaderVarsSession;
   private readonly providerViews: ProviderConfigViews;
+  private readonly providerSnapshot: ProviderSnapshot;
   private identityMigration: IdentityMigrationSummary | undefined;
-  private lastSchemaCapabilities: import("../src/db.ts").DbCapabilities | undefined;
 
   constructor(io: NodeIo) {
     this.io = io;
@@ -103,6 +105,33 @@ export class Runtime {
       codexWindowId: this.codexWindowId,
     });
     this.providerViews = new ProviderConfigViews(() => this.config);
+    this.providerSnapshot = new ProviderSnapshot({
+      home: io.home,
+      execFileSync: io.execFileSync as DbReaderDeps["execFileSync"],
+      existsSync: io.existsSync,
+    });
+  }
+
+  /** Last-good providers list (public for lifecycle / compat hooks). */
+  get lastGoodProviders(): CcProvider[] {
+    return this.providerSnapshot.lastGoodProviders;
+  }
+  set lastGoodProviders(value: CcProvider[]) {
+    this.providerSnapshot.lastGoodProviders = value;
+  }
+
+  get sqlite3Path(): string {
+    return this.providerSnapshot.sqlite3Path;
+  }
+  set sqlite3Path(value: string) {
+    this.providerSnapshot.sqlite3Path = value;
+  }
+
+  get sqlite3Tried(): string[] {
+    return this.providerSnapshot.sqlite3Tried;
+  }
+  set sqlite3Tried(value: string[]) {
+    this.providerSnapshot.sqlite3Tried = value;
   }
 
   get home(): string {
@@ -126,13 +155,7 @@ export class Runtime {
    * 1s window is the staleness bound after an external switch.
    */
   readSelectionCached(ttlMs = 1000): PiSwitchSelection | undefined {
-    const now = Date.now();
-    if (this.selectionCache && now - this.selectionCache.at < ttlMs) {
-      return this.selectionCache.value;
-    }
-    const value = this.state.readSelection();
-    this.selectionCache = { at: now, value };
-    return value;
+    return this.selectionCache.get(ttlMs, () => this.state.readSelection());
   }
 
   loadConfig(): PiSwitchConfig {
@@ -145,31 +168,15 @@ export class Runtime {
   }
 
   loadHeaderRules(): HeaderRule[] {
-    const defaultsPath = new URL("../defaults/headers.json", import.meta.url);
-    let defaults: HeaderRule[] = [];
-    try {
-      // fileURL path for bun/node
-      const p =
-        defaultsPath.pathname.startsWith("/") && process.platform === "win32"
-          ? decodeURIComponent(defaultsPath.pathname.slice(1))
-          : decodeURIComponent(defaultsPath.pathname);
-      if (this.io.existsSync(p)) {
-        defaults = parseHeaderRulesFile(JSON.parse(this.io.readFileSync(p, "utf8")));
-      }
-    } catch {
-      // package defaults optional at runtime
-    }
-
-    let shared: HeaderRule[] = [];
-    try {
-      const sp = providerHeadersPath(this.home);
-      if (this.io.existsSync(sp)) {
-        shared = parseHeaderRulesFile(JSON.parse(this.io.readFileSync(sp, "utf8")));
-      }
-    } catch {
-      // ignore
-    }
-    return combineRules(defaults, shared);
+    const defaultsPath = fileUrlPath(
+      new URL("../defaults/headers.json", import.meta.url),
+    );
+    return loadHeaderRules({
+      home: this.home,
+      existsSync: this.io.existsSync,
+      readFileSync: this.io.readFileSync as (p: string, e: "utf8") => string,
+      defaultsPath,
+    });
   }
 
   reloadHeaderRules(): HeaderRule[] {
@@ -182,29 +189,7 @@ export class Runtime {
     error?: string;
     capabilities?: import("../src/db.ts").DbCapabilities;
   } {
-    const result = readProviders({
-      execFileSync: this.io.execFileSync as import("../src/db.ts").DbReaderDeps["execFileSync"],
-      existsSync: this.io.existsSync,
-      sqlite3Path: this.sqlite3Path,
-      dbPath: defaultDbPath(this.home),
-    });
-    this.lastSchemaCapabilities = result.capabilities;
-    if (result.ok) {
-      this.lastGoodProviders = result.providers;
-      return { providers: result.providers, capabilities: result.capabilities };
-    }
-    if (this.lastGoodProviders.length) {
-      return {
-        providers: this.lastGoodProviders,
-        error: result.error ?? "read failed; using last good snapshot",
-        capabilities: result.capabilities,
-      };
-    }
-    return {
-      providers: [],
-      error: result.error ?? "failed to read database",
-      capabilities: result.capabilities,
-    };
+    return this.providerSnapshot.refresh();
   }
 
   /**
