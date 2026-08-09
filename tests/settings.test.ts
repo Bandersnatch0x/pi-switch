@@ -1,20 +1,22 @@
 import { test, expect, describe } from "bun:test";
 import {
   clearAllModelMetaOverrides,
-  isPinned,
-  togglePinAndWrite,
   migrateLegacySelection,
-  pushRecentEntry,
   readPiSwitchConfig,
   readSelection,
   resolveProviderOverride,
-  togglePinEntry,
   writeModelMetaOverride,
   writeProviderModelMeta,
   writeProviderWireCompat,
   writeSelection,
   type FsLike,
 } from "../src/settings.ts";
+import {
+  isPinned,
+  pushRecentEntry,
+  togglePinAndWrite,
+  togglePinEntry,
+} from "../src/pins-recent.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function memFs(initial: Record<string, string> = {}): FsLike & { store: Record<string, string> } {

@@ -39,10 +39,10 @@ import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
-  piSwitchConfigPath,
   updateOverrideEntry,
   type MutableOverrideEntry,
 } from "../src/settings.ts";
+import { piSwitchConfigPath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import { tf } from "../src/ui/tui-locale.ts";

@@ -17,7 +17,7 @@
  */
 
 import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
-import { isPinned } from "../settings.ts";
+import { isPinned } from "../pins-recent.ts";
 import { buildQuickEntries, type QuickEntry } from "./quick-pick.ts";
 import { formatKeyHint } from "./three-level-pick.ts";
 import { t } from "./tui-locale.ts";

@@ -53,7 +53,7 @@ import type { ResolvedProviderWireCompat } from "../src/provider-wire-compat.ts"
 import { ProviderConfigViews } from "../src/provider-config-views.ts";
 import { ProviderSnapshot } from "../src/provider-snapshot.ts";
 import { SelectionCache } from "../src/selection-cache.ts";
-import { piSettingsPath, piSwitchConfigPath } from "../src/settings.ts";
+import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
 export type NodeIo = {

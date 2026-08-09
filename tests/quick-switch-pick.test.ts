@@ -4,7 +4,7 @@ import {
   quickPickerFooter,
   quickSwitchPick,
 } from "../src/ui/quick-switch-pick.ts";
-import { togglePinEntry } from "../src/settings.ts";
+import { togglePinEntry } from "../src/pins-recent.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PinEntry, RecentEntry } from "../src/types.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";

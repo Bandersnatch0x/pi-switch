@@ -9,17 +9,15 @@ import type {
 import {
   clearAllModelMetaOverrides,
   migrateLegacySelection,
-  piSettingsPath,
-  piSwitchConfigPath,
-  recordRecentAndWrite,
   readPiSwitchConfig,
   readSelection,
-  togglePinAndWrite,
   writeModelMetaOverride,
   writeSelection,
   type FsLike,
   type ModelMetaScope,
 } from "./settings.ts";
+import { piSettingsPath, piSwitchConfigPath } from "./paths.ts";
+import { recordRecentAndWrite, togglePinAndWrite } from "./pins-recent.ts";
 
 export type StateWriteResult = { ok: boolean; error?: string };
 
