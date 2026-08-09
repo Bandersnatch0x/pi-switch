@@ -4,7 +4,7 @@
  */
 
 import type { HeaderRule } from "../types.ts";
-import { providerHeadersPath } from "../settings.ts";
+import { providerHeadersPath } from "../paths.ts";
 import { combineRules, parseHeaderRulesFile } from "./rules.ts";
 
 export type HeaderRulesLoadIo = {

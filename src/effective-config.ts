@@ -128,6 +128,8 @@ export function createEffectiveConfigSummary(input: {
         requiresToolResultName: wire.fields.requiresToolResultName.value,
         requiresAssistantAfterToolResult:
           wire.fields.requiresAssistantAfterToolResult.value,
+        supportsLongCacheRetention:
+          wire.fields.supportsLongCacheRetention.value,
       };
     } else {
       providerWireCompat = {
@@ -216,7 +218,7 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
     const wire = summary.providerWireCompat;
     if (wire.api === "openai-completions") {
       lines.push(
-        `providerWireCompat: store=${wire.supportsStore} usageStream=${wire.supportsUsageInStreaming} strict=${wire.supportsStrictMode} toolResultName=${wire.requiresToolResultName} assistantAfterTool=${wire.requiresAssistantAfterToolResult} scope=${wire.scope} source=${wire.source}`,
+        `providerWireCompat: store=${wire.supportsStore} usageStream=${wire.supportsUsageInStreaming} strict=${wire.supportsStrictMode} toolResultName=${wire.requiresToolResultName} assistantAfterTool=${wire.requiresAssistantAfterToolResult} longRetention=${wire.supportsLongCacheRetention} scope=${wire.scope} source=${wire.source}`,
       );
     } else {
       lines.push(

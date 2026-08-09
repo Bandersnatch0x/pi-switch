@@ -19,6 +19,7 @@ import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
+import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
   ProbeRunPrecheckSnapshot,
@@ -127,7 +128,10 @@ function makeRt(
   providers: CcProvider[],
   opts: { reasoning?: boolean } = {},
 ): Runtime {
-  return {
+  // completeFakeRuntime derives registrationDecisionFor/registrationOptsFor
+  // from these views through the real chain, so per-test overrides of
+  // modelMetaFor / modelsDevFor behave exactly like production.
+  return completeFakeRuntime({
     reloadConfig: () => undefined,
     refreshSnapshot: () => ({ providers, error: undefined }),
     readSelectionCached: () => undefined,
@@ -142,28 +146,17 @@ function makeRt(
     headerOverrideOpts: () => ({}),
     rejectSink: () => undefined,
     modelsDevFor: () => undefined,
+    providerWireCompatFor: () => undefined,
     headerVars: () => ({}),
-    capabilitiesFor: (provider: { api?: string | null; baseUrl: string }, modelId: string) => {
-      // Satisfies precheck capability soft-check when present.
-      void provider;
-      void modelId;
-      return {
-        contextWindow: { value: 128_000, source: "user-override" },
-        maxTokens: { value: 8_192, source: "user-override" },
-        reasoning: { value: Boolean(opts.reasoning), source: "user-override" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      };
-    },
     home: "/home/user",
     fsLike: (): FsLike =>
       ({
         existsSync: () => false,
         readFileSync: () => "",
       }) as unknown as FsLike,
-    io: { existsSync: () => false } as unknown as Runtime["io"],
+    io: { existsSync: () => false },
     routingProbe: async () => undefined,
-  } as unknown as Runtime;
+  }) as unknown as Runtime;
 }
 
 function makeCtx(
@@ -343,6 +336,65 @@ describe("runProbeCommand (command flow)", () => {
     // Case recorded: summary sent + detail entry appended.
     expect(entries).toHaveLength(1);
     expect(entries[0]!.type).toBe("ps-repair-case-detail");
+  });
+
+  test("models.dev reasoning reaches the target even without a user override (#83)", async () => {
+    // User config carries no reasoning here. Before the decision seam, a
+    // relay's reasoning model looked non-reasoning to the probe: the reasoning
+    // contract was skipped and the run used the 32-token budget, so thinking
+    // models failed as false negatives.
+    const rt = makeRt(providers);
+    rt.modelsDevFor = () => ({
+      maxTokens: 8_192,
+      reasoning: true,
+      observedAt: "2026-08-01",
+      source: "models-dev",
+    });
+
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx();
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.map((c) => c.contract)).toContain("reasoning");
+    expect(calls.every((c) => c.target.reasoning === true)).toBe(true);
+    expect(calls.every((c) => c.options.maxTokens === 2048)).toBe(true);
+  });
+
+  test("an explicit user reasoning=false still wins over the resolved chain", async () => {
+    const rt = makeRt(providers);
+    rt.modelMetaFor = (() => ({ maxTokens: 8_192, reasoning: false })) as never;
+    rt.modelsDevFor = () => ({
+      maxTokens: 8_192,
+      reasoning: true,
+      observedAt: "2026-08-01",
+      source: "models-dev",
+    });
+
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx();
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.map((c) => c.contract)).not.toContain("reasoning");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.target.reasoning === false)).toBe(true);
   });
 
   test("RPC picker can probe a non-session target without switching the session model", async () => {

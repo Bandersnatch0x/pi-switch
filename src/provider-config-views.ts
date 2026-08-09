@@ -21,6 +21,14 @@ import {
   cleanModelMeta,
 } from "./model-meta.ts";
 import { withBuiltInCompatUnderUser } from "./compat/built-in-compat-profile.ts";
+import type { ModelTupleCompat } from "./model-tuple-compat.ts";
+import type { ModelMetaOverride } from "./types.ts";
+
+/** Exact-model tuple pick: the tuple plus legacy flat dialect fields (#64/#67). */
+export interface TupleCompatSelection {
+  tuple?: ModelTupleCompat;
+  legacyFlat?: ModelMetaOverride;
+}
 
 export class ProviderConfigViews {
   constructor(private readonly getConfig: () => PiSwitchConfig) {}
@@ -101,7 +109,7 @@ export class ProviderConfigViews {
       "id" | "piName" | "displayName" | "api" | "baseUrl"
     > & { appType?: string },
     modelId: string,
-  ) {
+  ): TupleCompatSelection | undefined {
     const entry = resolveProviderOverride(
       this.getConfig().providerOverrides,
       provider,

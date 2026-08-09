@@ -5,8 +5,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, ModelMetaOverride, PinEntry } from "../src/types.ts";
 import { API_MODEL_META } from "../src/types.ts";
-import { defaultDbPath } from "../src/db.ts";
-import { PI_MIN_VERSION } from "../src/settings.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
@@ -23,8 +21,11 @@ import { pickOverrideProvider } from "../src/ui/provider-override-pick.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
-import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
-import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
+import {
+  ccMetaFrom,
+  trustedMaxTokensHint,
+  type TrustedMaxTokensHint,
+} from "../src/capabilities/registration.ts";
 import {
   createEffectiveConfigSummary,
   formatEffectiveConfigSummary,
@@ -58,15 +59,60 @@ function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
   };
 }
 
-/** Protocol-tier fallback shown as 默认 in the dialog. */
+/**
+ * Protocol-tier fallback shown as 默认 in the dialog.
+ * Issue #63: maxTokens and reasoning have no protocol floor — showing one would
+ * promise a default that registration then refuses (maxTokens) or contradicts
+ * (reasoning resolves to a conservative false), so only contextWindow, which
+ * does have a structural default, is offered here.
+ */
 function tierMeta(provider: CcProvider): ModelMetaOverride | undefined {
   if (!provider.api) return undefined;
   const tier = API_MODEL_META[provider.api];
   return {
-    reasoning: tier.reasoning,
     contextWindow: tier.contextWindow,
-    maxTokens: tier.maxTokens,
   };
+}
+
+/**
+ * Exact-model maxTokens values backed by a trusted authority (#63 override prefill).
+ *
+ * Reads the trusted layers directly rather than the resolved winner: once the
+ * user pins a value it wins the chain, and the sync row has to stay visible so
+ * they can re-pin after models.dev moves.
+ */
+function maxTokensHintsFor(
+  rt: Runtime,
+  provider: CcProvider,
+  modelIds: string[],
+): Record<string, TrustedMaxTokensHint> | undefined {
+  const ccMeta = ccMetaFrom(provider.meta);
+  const out: Record<string, TrustedMaxTokensHint> = {};
+  for (const modelId of modelIds) {
+    const hint =
+      trustedMaxTokensHint({
+        value: rt.modelsDevFor(modelId)?.maxTokens,
+        source: "models-dev",
+      }) ??
+      trustedMaxTokensHint({ value: ccMeta?.maxTokens, source: "cc-meta" });
+    if (hint) out[modelId] = hint;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Actionable next step when the #63 maxTokens gate is what blocked the model.
+ * Undefined when maxTokens resolved, so unrelated failures stay unannotated.
+ */
+export function maxTokensUnresolvedFix(
+  rt: Runtime,
+  provider: CcProvider,
+  modelId: string,
+): string | undefined {
+  if (!rt.registrationDecisionFor(provider, modelId).maxTokensUnresolved) {
+    return undefined;
+  }
+  return tf("maxTokensUnresolvedFix", { model: modelId });
 }
 
 function scopeText(scope: ModelMetaScope): string {
@@ -147,7 +193,9 @@ async function reapplyIfActive(
     ctx,
   );
   if (result.kind === "failed") {
-    ctx.ui?.notify?.(tf("overrideReapplyFailed", { error: result.error }), "warning");
+    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const message = tf("overrideReapplyFailed", { error: result.error });
+    ctx.ui?.notify?.(fix ? `${message}\n${fix}` : message, "warning");
   }
 }
 
@@ -185,6 +233,7 @@ async function openProviderOverride(
     modelOverrides: entry?.modelOverrides,
     base: rt.config.defaultModelMeta,
     tier: tierMeta(provider),
+    maxTokensHints: maxTokensHintsFor(rt, provider, models),
     models,
   };
 
@@ -256,67 +305,7 @@ export async function runOverrideCommand(
 }
 
 export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<void> {
-  rt.reloadConfig();
-  rt.reloadHeaderRules();
-  // Force re-probe so doctor shows current fingerprint sources.
-  rt.invalidateVarsCache();
-  rt.headerVars();
-
-  const { providers, error, capabilities: schemaCapabilities } = rt.refreshSnapshot();
-  const sel = rt.state.readSelection();
-  const dbPath = defaultDbPath(rt.home);
-  const routingProbe = await rt.routingProbe();
-
-  // W4: refresh the selected model's capability fact when missing/stale, then resolve.
-  let capabilities: { modelId: string; resolved: ResolvedCapabilities } | undefined;
-  let modelsDevCache: { state: "hit" | "miss" | "cold"; observedAt?: string } | undefined;
-  const selMatch = sel
-    ? providers.find(
-        (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
-      )
-    : undefined;
-  if (sel && selMatch && isSwitchable(selMatch)) {
-    const cached = rt.rawCacheEntry(sel.model);
-    if (!cached || rt.isCapabilitiesStale(cached)) {
-      await rt.refreshCapabilities([sel.model]);
-    }
-    capabilities = { modelId: sel.model, resolved: rt.capabilitiesFor(selMatch, sel.model) };
-    // Issue #39: surface cache state after on-demand refresh.
-    const entry = rt.rawCacheEntry(sel.model);
-    if (!entry) {
-      modelsDevCache = { state: "cold" };
-    } else if (isModelsDevMiss(entry)) {
-      modelsDevCache = { state: "miss", observedAt: entry.observedAt };
-    } else {
-      modelsDevCache = { state: "hit", observedAt: entry.observedAt };
-    }
-  }
-
-  const report = runDoctor({
-    home: rt.home,
-    dbPath,
-    dbExists: rt.io.existsSync(dbPath),
-    sqlite3Path: rt.sqlite3Path || null,
-    sqlite3Tried: rt.sqlite3Tried,
-    providers,
-    providersError: error,
-    selection: sel,
-    config: rt.config,
-    headerRuleCount: rt.headerRules.length,
-    varsSummary: rt.varsSummary,
-    pins: rt.config.pins,
-    recent: rt.config.recent,
-    piVersion: rt.piVersion(),
-    piMinVersion: PI_MIN_VERSION,
-    fingerprintSnapshot: rt.fingerprintSnapshot(),
-    routingProbe,
-    capabilities,
-    modelsDevCache,
-    refreshFailure: rt.lastRefreshFailure(),
-    migrationSummary: rt.migrationSummary,
-    schemaCapabilities,
-    providerWireCompat: selMatch ? rt.providerWireCompatFor?.(selMatch) : undefined,
-  });
+  const report = runDoctor(await rt.doctorFacts());
 
   const text = formatDoctorReport(report);
   // Prefer multi-line notify when available; fall back to console.log so the
@@ -369,29 +358,20 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
 
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
-  const providerWireCompat = rt.providerWireCompatFor?.(provider);
-  const caps = rt.capabilitiesFor(provider, resolvedModelId);
-  const config = buildProviderConfig(provider, [resolvedModelId], {
-    rules: rt.headerRules,
-    ...rt.headerOverrideOpts(provider),
-    vars: rt.headerVars(),
-    debug: rt.config.debug,
-    onReject: rt.rejectSink(),
-    modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-    modelsDevFor: (id) => rt.modelsDevFor?.(id),
-    providerWireCompat,
-    tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-  });
+  const providerWireCompat = rt.providerWireCompatFor(provider);
+  const decision = rt.registrationDecisionFor(provider, resolvedModelId);
+  const config = buildProviderConfig(
+    provider,
+    [resolvedModelId],
+    rt.registrationOptsFor(provider),
+  );
   if (!config) {
-    const maxUnresolved =
-      caps.maxTokens.source === "unresolved" ||
-      typeof caps.maxTokens.value !== "number";
     ctx.ui?.notify?.(
-      maxUnresolved
-        ? tf("effectiveConfigMaxUnresolved", {
+      decision.maxTokensUnresolved
+        ? `${tf("effectiveConfigMaxUnresolved", {
             provider: provider.displayName,
             model: resolvedModelId,
-          })
+          })}\n${tf("maxTokensUnresolvedFix", { model: resolvedModelId })}`
         : tf("effectiveConfigBuildFailed", {
             reason: provider.parseError ?? provider.displayName,
           }),
@@ -412,7 +392,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     config,
     fingerprint,
     providerWireCompat,
-    reasoningConservative: caps.reasoning.source === "conservative-default",
+    reasoningConservative: decision.reasoningConservative,
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {
@@ -471,15 +451,7 @@ export async function runCommand(
       },
       fetchRemote: async (provider) => {
         const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
-        const r = await fetchRemoteModels({
-          api: provider.api,
-          authHeader: provider.authHeader,
-          baseUrl: provider.baseUrl,
-          apiKey: provider.apiKey,
-          modelsUrl: provider.modelsUrl,
-          isFullUrl: provider.isFullUrl,
-          userAgent: ua,
-        });
+        const r = await fetchRemoteModels(provider, { userAgent: ua });
         if (r.error) throw new Error(r.error);
         return r.models;
       },
@@ -520,7 +492,11 @@ function notifyActivation(
       result.failedStage === "providerRegistration"
         ? t("stageProviderRegistration")
         : t("stageModelSwitch");
-    ctx.ui.notify(tf("activationFailed", { stage: label, error: result.error }), "error");
+    // #63: "cannot register provider" is opaque when the real cause is the
+    // maxTokens gate — name the fix instead of leaving the user guessing.
+    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const message = tf("activationFailed", { stage: label, error: result.error });
+    ctx.ui.notify(fix ? `${message}\n${fix}` : message, "error");
     return;
   }
 
@@ -528,7 +504,9 @@ function notifyActivation(
   if (warnings.length) {
     ctx.ui.notify(tf("activationPartial", { warnings: warnings.join("\n- ") }), "warning");
   } else {
-    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
+    const metaHint = summarizeModelMeta(
+      rt.registrationDecisionFor(provider, modelId).meta,
+    );
     ctx.ui.notify(
       tf("activationSuccess", {
         provider: provider.displayName,

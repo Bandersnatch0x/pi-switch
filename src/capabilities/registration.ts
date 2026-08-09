@@ -20,10 +20,12 @@ import {
   type CapabilitySource,
   type ResolvedCapabilities,
 } from "./resolve.ts";
+import { tf } from "../ui/tui-locale.ts";
 
 // Deep-import compat: helpers live in layers.ts; keep prior registration
 // surface so existing `from "./registration.ts"` importers still resolve.
 export { ccMetaFrom, protocolCapabilityDefaults } from "./layers.ts";
+export { trustedMaxTokensHint, type TrustedMaxTokensHint } from "./resolve.ts";
 
 export type RegistrationCapabilityDecision = {
   /** Full resolved chain (for doctor / effective config / precheck). */
@@ -39,15 +41,11 @@ export type RegistrationCapabilityDecision = {
   reasoningConservative: boolean;
 };
 
-/** Human-readable message explaining how to resolve an unresolved maxTokens gate. */
-export function formatMaxTokensUnresolvedMessage(modelId: string): string {
-  return (
-    `在 providerOverrides 为 model "${modelId}" 写 exact-model maxTokens ` +
-    `(modelOverrides.<id>.maxTokens)，或等待 models.dev / CC Switch meta 提供权威值`
-  );
-}
-
-/** Redacted one-line decision for doctor/precheck (no secrets, no full URLs). */
+/**
+ * Redacted one-line decision for doctor/precheck (no secrets, no full URLs).
+ * Appends the stale last-good suffix when models.dev is expired, so every
+ * diagnostic site formats through this single exit instead of hand-rolling.
+ */
 export function formatCapabilityDecision(
   modelId: string,
   decision: RegistrationCapabilityDecision,
@@ -63,7 +61,11 @@ export function formatCapabilityDecision(
     decision.reasoningConservative
       ? "reasoning=unknown→conservative false"
       : `reasoning=${rs.value}(${rs.source})`;
-  return `${prefix}: ${maxPart} · ${reasonPart}`;
+  const staleSuffix =
+    mt.source === "models-dev" && mt.stale
+      ? tf("precheckStaleSuffix", { at: mt.fetchedAt ?? "?" })
+      : "";
+  return `${prefix}: ${maxPart} · ${reasonPart}${staleSuffix}`;
 }
 
 /**
@@ -127,44 +129,6 @@ export function resolveRegistrationCapability(input: {
     maxTokensUnresolved: false,
     reasoningConservative,
   };
-}
-
-/**
- * Back-compat wrapper: returns registration meta, or a partial shell when
- * maxTokens is unresolved (callers that still need a number should use
- * resolveRegistrationCapability and gate on maxTokensUnresolved).
- *
- * Prefer resolveRegistrationCapability for new code.
- */
-export function resolveRegistrationMeta(input: {
-  modelId: string;
-  api: PiApi | null;
-  baseUrl: string;
-  userMeta?: ModelMetaOverride;
-  modelsDev?: ModelsDevCapabilities;
-  ccMeta?: CapabilityMeta;
-}): ModelMetaOverride {
-  const decision = resolveRegistrationCapability(input);
-  if (decision.meta) return decision.meta;
-  // Unresolved path: expose conservative reasoning + context only; omit maxTokens
-  // so register can detect absence and skip the model.
-  const defaults = protocolCapabilityDefaults(input.api);
-  const out: ModelMetaOverride = {
-    contextWindow:
-      typeof decision.resolved.contextWindow.value === "number"
-        ? decision.resolved.contextWindow.value
-        : defaults.contextWindow,
-    reasoning: decision.resolved.reasoning.value === true,
-  };
-  // Same compat merge as the resolved path (user > built-in).
-  const compat = mergeBuiltInCompatUnderUser(input.modelId, input.userMeta);
-  if (compat?.thinkingFormat) out.thinkingFormat = compat.thinkingFormat;
-  if (compat?.thinkingLevelMap) out.thinkingLevelMap = compat.thinkingLevelMap;
-  if (typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean") {
-    out.requiresReasoningContentOnAssistantMessages =
-      compat.requiresReasoningContentOnAssistantMessages;
-  }
-  return out;
 }
 
 export type { CapabilitySource, ResolvedCapabilities };

@@ -31,6 +31,7 @@ import {
   type ModelMetaField,
   type ModelMetaPreset,
 } from "../model-meta.ts";
+import type { TrustedMaxTokensHint } from "../capabilities/resolve.ts";
 import {
   builtInCompatForModelId,
   hasBuiltInCompatProfile,
@@ -228,6 +229,23 @@ function fieldStateText(
   return display ? `${tag} ${display}` : tag;
 }
 
+/** Label for a sync row, e.g. "使用同步值 384k（models.dev）". Shared by both UI paths. */
+export function syncValueLabel(hint: TrustedMaxTokensHint): string {
+  const source = hint.source === "models-dev" ? "models.dev" : "CC Switch meta";
+  // #63 keeps stale last-good usable but visibly stale — say so before the user
+  // freezes an expired snapshot into their own config.
+  return `使用同步值 ${formatCount(hint.value)}（${source}${hint.stale ? " · 已过期" : ""}）`;
+}
+
+/** Trusted maxTokens for the model being edited; provider scope has no single model to pin. */
+export function maxTokensHintForScope(
+  input: ModelMetaDialogInput,
+  scope: ModelMetaScope,
+): TrustedMaxTokensHint | undefined {
+  if (scope.kind !== "model") return undefined;
+  return input.maxTokensHints?.[scope.modelId];
+}
+
 /* ---------------------------------------------------- count submenu items */
 
 export function countSubmenuOptions(
@@ -235,16 +253,28 @@ export function countSubmenuOptions(
   _draft: ModelMetaOverride,
   inherited: ModelMetaOverride | undefined,
   tier: ModelMetaOverride | undefined,
+  hint?: TrustedMaxTokensHint,
 ): SelectItemLike[] {
   const presets = field === "contextWindow" ? CONTEXT_PRESETS : MAX_TOKENS_PRESETS;
   const inheritedValue = inherited?.[field] ?? tier?.[field];
-  const items: SelectItemLike[] = presets.map((n) => {
-    const compact = formatCount(n);
-    return {
-      value: String(n),
-      label: compact === String(n) ? compact : `${compact} · ${n}`,
-    };
-  });
+  const items: SelectItemLike[] = [];
+  if (field === "maxTokens" && hint) {
+    // Plain numeric value, same as a preset: picking either just writes it.
+    items.push({
+      value: String(hint.value),
+      label: syncValueLabel(hint),
+      description: "写入 exact-model maxTokens 覆写",
+    });
+  }
+  items.push(
+    ...presets.map((n) => {
+      const compact = formatCount(n);
+      return {
+        value: String(n),
+        label: compact === String(n) ? compact : `${compact} · ${n}`,
+      };
+    }),
+  );
   items.push({ value: CUSTOM_VALUE, label: "✎ 自定义…", description: "输入数字（可带 k/M）" });
   items.push({
     value: INHERIT_VALUE,
@@ -380,6 +410,7 @@ export function buildFormItems(
   const builtIn = builtInFor(scope, gate);
   const tier = input.tier;
   const stored = storedFor(input, scope);
+  const maxTokensHint = maxTokensHintForScope(input, scope);
   const hasAnyOverride =
     Boolean(cleanModelMeta(input.providerMeta)) ||
     Object.keys(input.modelOverrides ?? {}).length > 0;
@@ -419,7 +450,9 @@ export function buildFormItems(
     id: FORM_ITEM_ID.maxTokens,
     label: "maxTokens",
     currentValue: fieldStateText("maxTokens", draft, inherited, tier, builtIn),
-    description: "单次输出最大 tokens",
+    description: maxTokensHint
+      ? `单次输出最大 tokens（${syncValueLabel(maxTokensHint)}）`
+      : "单次输出最大 tokens",
   });
 
   items.push({
@@ -651,7 +684,13 @@ export async function runModelMetaForm(
 
     function openCountSubmenu(field: "contextWindow" | "maxTokens"): void {
       const inherited = inheritedFor(input, scope);
-      const opts = countSubmenuOptions(field, draft, inherited, input.tier).map((o) => ({
+      const opts = countSubmenuOptions(
+        field,
+        draft,
+        inherited,
+        input.tier,
+        field === "maxTokens" ? maxTokensHintForScope(input, scope) : undefined,
+      ).map((o) => ({
         value: o.value,
         label: o.label,
         description: o.description,

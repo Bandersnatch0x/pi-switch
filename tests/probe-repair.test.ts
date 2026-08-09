@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildRepairPlan,
   matchRepairRecipes,
+  PROBE_REASONING_MAX_TOKENS,
   runRepair,
   type NormalizedProbeRunEvidence,
   type ProbeRequest,
@@ -556,6 +557,35 @@ describe("runRepair pipeline (ticket 4)", () => {
     expect(patch.scope).toBe("model");
     expect(patch.modelMeta.reasoning).toBe(false);
     expect(seenTargets.length).toBeGreaterThan(0);
+  });
+
+  test("verification budget follows the original target, not the patched one (#83)", async () => {
+    // Recipe1 flips target.reasoning to false — the very flag the budget keys
+    // off. If the budget followed the candidate, a model that still thinks
+    // would be truncated into a false verification failure.
+    const plan = buildRepairPlan(reasoningRejectedEvidence());
+    const { transport, calls } = recordingTransport((req) => {
+      if (req.contract === "basic") return okText();
+      if (req.contract === "tool") return okTool();
+      throw new Error(`unexpected ${req.contract}`);
+    });
+    const { store } = memoryConfigStore();
+
+    const outcome = await runRepair({
+      mode: "interactive",
+      confirmed: true,
+      plan,
+      model: {},
+      transport,
+      configStore: store,
+    });
+
+    expect(outcome.status).toBe("committed");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.target.reasoning === false)).toBe(true);
+    expect(calls.every((c) => c.options.maxTokens === PROBE_REASONING_MAX_TOKENS)).toBe(
+      true,
+    );
   });
 
   test("at most one recipe is committed even if plan lists more (first only)", async () => {

@@ -35,21 +35,23 @@ import {
   fingerprintHeaderTemplates,
   isFingerprintPreset,
 } from "../src/headers/fingerprints.ts";
-import { JsonFileConflictError, writeJsonObjectAtomic } from "../src/json-file.ts";
+import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
-  piSwitchConfigPath,
   updateOverrideEntry,
   type MutableOverrideEntry,
 } from "../src/settings.ts";
+import { piSwitchConfigPath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
+import { tf } from "../src/ui/tui-locale.ts";
 import {
   REPAIR_CASE_DETAIL_CUSTOM_TYPE,
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
   buildRepairCaseLayers,
   buildRepairPlan,
+  capabilitySoftCheck,
   defaultProbeTargetHighlight,
   executeRepairSwitchAction,
   findProviderForProbeTarget,
@@ -365,7 +367,8 @@ function contentHash(source: string): string {
 /**
  * Production RepairConfigStore with CAS against pi-switch.json.
  * version = content hash; commit re-checks the hash, then applies the patch
- * through the same atomic write path as manual edits.
+ * through editConfigStrict — the envelope's exact-source adapter (editConfig
+ * merge-retries; Repair must abort on concurrent edits instead).
  */
 export function createRepairConfigStore(deps: {
   /** pi-switch.json directory (production: rt.home). */
@@ -381,15 +384,6 @@ export function createRepairConfigStore(deps: {
   const readSource = (): string | undefined => {
     if (!fs.existsSync(path)) return undefined;
     return fs.readFileSync(path, "utf8");
-  };
-
-  const parseSource = (source: string | undefined): Record<string, unknown> => {
-    if (source === undefined) return {};
-    const value: unknown = JSON.parse(source);
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`invalid JSON object in ${path}`);
-    }
-    return value as Record<string, unknown>;
   };
 
   return {
@@ -423,49 +417,37 @@ export function createRepairConfigStore(deps: {
         };
       }
 
-      try {
-        const doc = parseSource(source);
-        const document = updateOverrideEntry(
-          doc,
-          provider,
-          (entry: MutableOverrideEntry) => {
-            if (patch.kind === "modelMeta") {
-              const map = entry.modelOverrides
-                ? { ...entry.modelOverrides }
-                : {};
-              map[patch.modelId] = { ...patch.modelMeta };
-              entry.modelOverrides = map;
-              entry.label = entry.label ?? provider.displayName;
-            } else if (patch.kind === "fingerprint") {
-              entry.fingerprint = patch.fingerprint;
-              if (patch.claudeCodeCompat) entry.claudeCodeCompat = true;
-            } else if (patch.kind === "geminiToolCompat") {
-              entry.geminiToolCompat = true;
+      const edited = editConfigStrict({ fs, configPath: path, pid }, source, (doc) =>
+        updateOverrideEntry(doc, provider, (entry: MutableOverrideEntry) => {
+          if (patch.kind === "modelMeta") {
+            const map = entry.modelOverrides
+              ? { ...entry.modelOverrides }
+              : {};
+            map[patch.modelId] = { ...patch.modelMeta };
+            entry.modelOverrides = map;
+            entry.label = entry.label ?? provider.displayName;
+          } else if (patch.kind === "fingerprint") {
+            entry.fingerprint = patch.fingerprint;
+            if (patch.claudeCodeCompat) entry.claudeCodeCompat = true;
+          } else if (patch.kind === "geminiToolCompat") {
+            entry.geminiToolCompat = true;
+          }
+          return entry;
+        }),
+      );
+      if (!edited.ok) {
+        return edited.reason === "conflict"
+          ? {
+              ok: false,
+              reason: "conflict",
+              message: "pi-switch.json changed concurrently; aborting",
             }
-            return entry;
-          },
-        );
-        // Strict CAS: write exactly against the source checked above. Unlike
-        // updateJsonObjectAtomic, this path never retries by merging a newer file.
-        writeJsonObjectAtomic(fs, path, document, pid, source);
-        return {
-          ok: true,
-          version: contentHash(JSON.stringify(document, null, 2)),
-        };
-      } catch (err) {
-        if (err instanceof JsonFileConflictError) {
-          return {
-            ok: false,
-            reason: "conflict",
-            message: "pi-switch.json changed concurrently; aborting",
-          };
-        }
-        return {
-          ok: false,
-          reason: "error",
-          message: err instanceof Error ? err.message : String(err),
-        };
+          : { ok: false, reason: "error", message: edited.message };
       }
+      return {
+        ok: true,
+        version: contentHash(JSON.stringify(edited.document, null, 2)),
+      };
     },
   };
 }
@@ -478,9 +460,14 @@ function enrichTarget(
   modelId: string,
 ): ProbeTargetEnrichment | undefined {
   const entry = resolveProviderOverride(rt.config.providerOverrides, provider);
-  const meta = rt.modelMetaFor(provider, modelId);
   const out: ProbeTargetEnrichment = {};
-  if (meta?.reasoning !== undefined) out.reasoning = meta.reasoning;
+  // Registration's truth: user layer included, conservative-default excluded.
+  // A relay's reasoning model must reach the probe as reasoning (#83).
+  const decision = rt.registrationDecisionFor(provider, modelId);
+  const reasoning = decision.resolved.reasoning;
+  if (!decision.reasoningConservative && reasoning.value !== undefined) {
+    out.reasoning = reasoning.value;
+  }
 
   const claudeForce =
     typeof entry?.claudeCodeCompat === "boolean"
@@ -561,15 +548,7 @@ async function chooseProbeTarget(
     remoteCache: new Map<string, string[]>(),
     fetchRemote: async (provider) => {
       const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
-      const result = await fetchRemoteModels({
-        api: provider.api,
-        authHeader: provider.authHeader,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        modelsUrl: provider.modelsUrl,
-        isFullUrl: provider.isFullUrl,
-        userAgent: ua,
-      });
+      const result = await fetchRemoteModels(provider, { userAgent: ua });
       if (result.error) throw new Error(result.error);
       return result.models;
     },
@@ -606,17 +585,7 @@ function findOrRegisterProbeModel(
       api,
       provider,
       [modelId],
-      {
-        rules: rt.headerRules,
-        ...rt.headerOverrideOpts(provider),
-        vars: rt.headerVars(),
-        debug: rt.config.debug,
-        onReject: rt.rejectSink(),
-        modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-        modelsDevFor: (id) => rt.modelsDevFor?.(id),
-        providerWireCompat: rt.providerWireCompatFor?.(provider),
-        tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-      },
+      rt.registrationOptsFor(provider),
     );
   } catch {
     return undefined;
@@ -647,48 +616,15 @@ async function buildPrecheck(
         }
       : undefined;
 
-  // Issue #63: surface unresolved maxTokens / conservative reasoning before network.
-  let capabilities: { status: "pass" | "warn" | "fail"; detail: string; fix?: string } | undefined;
-  if (provider) {
-    const resolved = rt.capabilitiesFor(provider, target.modelId);
-    const maxUnresolved =
-      resolved.maxTokens.source === "unresolved" ||
-      typeof resolved.maxTokens.value !== "number";
-    const reasonConservative = resolved.reasoning.source === "conservative-default";
-    const staleWarn =
-      resolved.maxTokens.source === "models-dev" && resolved.maxTokens.stale
-        ? `；models.dev@${resolved.maxTokens.fetchedAt ?? "?"} 过期（保留 last-good）`
-        : "";
-    const label = `${provider.appType}/${provider.displayName}`;
-    if (maxUnresolved) {
-      capabilities = {
-        status: "fail",
-        detail:
-          `${label} · ${target.modelId}: maxTokens=unresolved` +
-          (reasonConservative ? " · reasoning=unknown→conservative false" : "") +
-          staleWarn,
-        fix:
-          `在 providerOverrides 为 model "${target.modelId}" 写 exact-model ` +
-          `maxTokens（modelOverrides.<id>.maxTokens）；不切换 Session Model`,
-      };
-    } else {
-      const parts = [
-        `maxTokens=${resolved.maxTokens.value}(${resolved.maxTokens.source})`,
-        reasonConservative
-          ? "reasoning=unknown→conservative false"
-          : `reasoning=${resolved.reasoning.value}(${resolved.reasoning.source})`,
-      ];
-      capabilities = {
-        status: reasonConservative || Boolean(staleWarn) ? "warn" : "pass",
-        detail: `${label} · ${target.modelId}: ${parts.join(" · ")}${staleWarn}`,
-        fix: reasonConservative
-          ? `可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置`
-          : staleWarn
-            ? "过期：清缓存重拉（pi-switch-cache.json）或显式 override"
-            : undefined,
-      };
-    }
-  }
+  // Issue #63: surface unresolved maxTokens / conservative reasoning before
+  // network — judged with registration's decision, formatted in one place.
+  const capabilities = provider
+    ? capabilitySoftCheck({
+        decision: rt.registrationDecisionFor(provider, target.modelId),
+        providerLabel: `${provider.appType}/${provider.displayName}`,
+        modelId: target.modelId,
+      })
+    : undefined;
 
   return runTargetDoctorPrecheck({
     target,
@@ -774,8 +710,8 @@ export async function runProbeCommand(
   const model = findOrRegisterProbeModel(pi, rt, ctx, provider, modelId);
   if (!model) {
     ctx.ui.notify(
-      `model not found in pi registry: ${provider.piName}/${modelId}` +
-        `（若 maxTokens 未解析，请先写 exact-model maxTokens override）`,
+      `model not found in pi registry: ${provider.piName}/${modelId}\n` +
+        tf("maxTokensUnresolvedFix", { model: modelId }),
       "error",
     );
     return;

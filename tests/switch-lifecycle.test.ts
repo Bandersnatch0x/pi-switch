@@ -9,6 +9,7 @@ import { readPiSwitchConfig, readSelection, type FsLike } from "../src/settings.
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PiSwitchConfig, RecentEntry } from "../src/types.ts";
 import type { Runtime } from "../extensions/runtime.ts";
+import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 import { createLocalState } from "../src/local-state.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 
@@ -152,7 +153,7 @@ function setup(options?: {
     recent: options?.recent,
   };
   const scheduleCalls: string[] = [];
-  const runtime = {
+  const runtime = completeFakeRuntime({
     home,
     state: createLocalState({ fs, home, pid: 1 }),
     config,
@@ -178,7 +179,7 @@ function setup(options?: {
       scheduleCalls.push(modelId);
     },
     scheduleCalls,
-  } as unknown as Runtime & { scheduleCalls: string[] };
+  }) as unknown as Runtime & { scheduleCalls: string[] };
 
   const ctx = {
     modelRegistry: {

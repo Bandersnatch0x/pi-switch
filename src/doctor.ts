@@ -22,7 +22,8 @@ import {
   KNOWN_PROVIDERS_COLUMNS,
   type DbCapabilities,
 } from "./db.ts";
-import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
+import type { CapabilitySource } from "./capabilities/resolve.ts";
+import type { RegistrationCapabilityDecision } from "./capabilities/registration.ts";
 import type { IdentityMigrationSummary } from "./migration.ts";
 import { summarizeTiers } from "./tier.ts";
 import {
@@ -83,7 +84,7 @@ export interface DoctorInput {
   /** Routing probe result (W3). Undefined when probing disabled. */
   routingProbe?: { url: string; reachable: boolean };
   /** Resolved capability facts for the current model (W4). */
-  capabilities?: { modelId: string; resolved: ResolvedCapabilities };
+  capabilities?: { modelId: string; decision: RegistrationCapabilityDecision };
   /**
    * models.dev cache state for the selected model (issue #39).
    * miss/cold are informational only and never upgrade the check to warn.
@@ -97,6 +98,8 @@ export interface DoctorInput {
   schemaCapabilities?: DbCapabilities;
   /** Resolved Provider Chat wire fact for the current selection (issue #62). */
   providerWireCompat?: ResolvedProviderWireCompat;
+  /** PI_CACHE_RETENTION env value ("long" | undefined). Doctor warns when an unknown Chat relay conservatively disables long cache retention while this is "long". */
+  cacheRetentionEnv?: string;
 }
 
 export interface DoctorReport {
@@ -484,7 +487,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   // 11. capabilities (W4 + #63): provenance, conflicts, staleness, unresolved maxTokens
   if (input.capabilities) {
-    const cap = input.capabilities.resolved;
+    // Judged with registration's decision booleans; fieldLine below is the
+    // doctor-only provenance view, not a second judgement.
+    const decision = input.capabilities.decision;
+    const cap = decision.resolved;
     const fieldLine = (
       label: string,
       e: {
@@ -514,13 +520,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     };
     const failRows: string[] = [];
     const warnRows: string[] = [];
-    if (
-      cap.maxTokens.source === "unresolved" ||
-      typeof cap.maxTokens.value !== "number"
-    ) {
+    if (decision.maxTokensUnresolved) {
       failRows.push(`maxTokens=unresolved${t("docCapUnresolved")}`);
     }
-    if (cap.reasoning.source === "conservative-default") {
+    if (decision.reasoningConservative) {
       warnRows.push(`reasoning=unknown→conservative false${t("docCapReasoningUnknown")}`);
     }
     for (const c of cap.conflicts) {
@@ -565,7 +568,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       status,
       detail,
       fix: failRows.length
-        ? tf("docFixCapabilitiesFail", { id: input.capabilities.modelId })
+        ? tf("maxTokensUnresolvedFix", { model: input.capabilities.modelId })
         : warnRows.length
           ? t("docFixCapabilitiesWarn")
           : undefined,
@@ -583,17 +586,29 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       ([name, entry]) => `${name}=${entry.value}(${entry.source})`,
     );
     const facts = `api=${wire.api} scope=${wire.scope} · ${fieldParts.join(" · ")}`;
+
+    // Cache-retention risk: unknown Chat relay conservatively disables
+    // supportsLongCacheRetention, but PI_CACHE_RETENTION=long still sends
+    // prompt_cache_key. Warn so the user can opt into an explicit override
+    // before hitting a 400 from relays that reject the field.
+    const cacheRisk =
+      wire.api === "openai-completions" &&
+      input.cacheRetentionEnv === "long" &&
+      wire.fields.supportsLongCacheRetention.source === "conservative-default";
+
     const detail = conflictRows.length
       ? `${facts}; ${conflictRows.join("; ")}`
       : facts;
     checks.push({
       id: "provider-wire-compat",
       title: t("docTitleWireCompat"),
-      status: conflictRows.length ? "warn" : "pass",
+      status: conflictRows.length || cacheRisk ? "warn" : "pass",
       detail,
       fix: conflictRows.length
         ? t("docFixWireCompat")
-        : undefined,
+        : cacheRisk
+          ? t("docFixCacheRetention")
+          : undefined,
     });
   }
 

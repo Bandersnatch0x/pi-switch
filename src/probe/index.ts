@@ -13,7 +13,9 @@ export {
   DEFAULT_PROBE_CONTRACTS,
   PROBE_MAX_REQUESTS,
   PROBE_MAX_TOKENS,
+  PROBE_REASONING_MAX_TOKENS,
   PROBE_TIMEOUT_MS,
+  probeMaxTokensFor,
 } from "./types.ts";
 export type {
   ProbeAssistantMessage,
@@ -93,6 +95,7 @@ export type {
 } from "./repair-case.ts";
 export {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
+  capabilitySoftCheck,
   runTargetDoctorPrecheck,
 } from "./precheck.ts";
 export type {

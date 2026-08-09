@@ -13,6 +13,7 @@
 import type { CcProvider } from "../types.ts";
 import { THINKING_FORMATS } from "../types.ts";
 import type { ModelMetaOverride } from "../types.ts";
+import type { TrustedMaxTokensHint } from "../capabilities/resolve.ts";
 import {
   cleanModelMeta,
   inheritedModelMetaBelowExact,
@@ -25,7 +26,9 @@ import {
 } from "../model-meta.ts";
 import { builtInCompatForModelId } from "../compat/built-in-compat-profile.ts";
 import {
+  maxTokensHintForScope,
   shouldShowBuiltInCompatRow,
+  syncValueLabel,
   useBuiltInCompatStateText,
   userMetaForBuiltInGate,
 } from "./model-meta-form.ts";
@@ -54,6 +57,8 @@ export interface ModelMetaDialogInput {
   base?: ModelMetaOverride;
   /** Protocol-tier fallback, shown as 默认 when no layer sets a field. */
   tier?: ModelMetaOverride;
+  /** Exact-model maxTokens sync hints (trusted only: models.dev / CC Switch meta). */
+  maxTokensHints?: Record<string, TrustedMaxTokensHint>;
   /** Model ids offered when switching scope. */
   models?: string[];
 }
@@ -254,17 +259,20 @@ export async function runModelMetaDialog(
         ? "不覆写（继承默认）"
         : `不覆写（继承 ${formatCount(inheritedValue as number)}）`;
     const CUSTOM = "✎ 自定义…";
+    // Trusted sync value offered as a one-key pin at exact-model scope only.
+    const hint =
+      field === "maxTokens" ? maxTokensHintForScope(input, scope) : undefined;
     // Avoid "4096 · 4096": show exact value only when compact form differs.
     const presetLabel = (n: number): string => {
       const compact = formatCount(n);
       return compact === String(n) ? compact : `${compact} · ${n}`;
     };
-    const labels = [
-      ...presets.map(presetLabel),
-      CUSTOM,
-      inheritLabel,
-      BACK,
-    ];
+    // Label → value, so adding a row can never shift a preset's meaning.
+    const byLabel = new Map<string, number>();
+    if (hint) byLabel.set(syncValueLabel(hint), hint.value);
+    for (const n of presets) byLabel.set(presetLabel(n), n);
+    const labels = [...byLabel.keys(), CUSTOM, inheritLabel, BACK];
+
     const pick = await ui.select(field, labels);
     if (!pick || pick === BACK) return;
     if (pick === inheritLabel) {
@@ -286,8 +294,7 @@ export async function runModelMetaDialog(
       draft[field] = n as number;
       return;
     }
-    const idx = labels.indexOf(pick);
-    const value = presets[idx];
+    const value = byLabel.get(pick);
     if (typeof value === "number") draft[field] = value;
   }
 

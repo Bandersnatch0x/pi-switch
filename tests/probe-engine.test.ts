@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import {
   PROBE_MAX_REQUESTS,
   PROBE_MAX_TOKENS,
+  PROBE_REASONING_MAX_TOKENS,
   PROBE_TIMEOUT_MS,
   formatProbeResultJson,
   runProbe,
@@ -115,7 +116,7 @@ describe("runProbe (ticket 1)", () => {
     expect(parsed.budget).toEqual({
       maxRequests: PROBE_MAX_REQUESTS,
       used: 3,
-      maxTokens: PROBE_MAX_TOKENS,
+      maxTokens: PROBE_REASONING_MAX_TOKENS,
       timeoutMs: PROBE_TIMEOUT_MS,
     });
   });
@@ -187,7 +188,7 @@ describe("runProbe (ticket 1)", () => {
     expect(result.stages.find((s) => s.contract === "reasoning")?.status).toBe("skip");
   });
 
-  test("enforces budget: maxTokens ≤32, timeout signal 15s, max 9 requests", async () => {
+  test("enforces budget: timeout signal 15s, max 9 requests", async () => {
     const signals: AbortSignal[] = [];
     const { transport, calls } = recordingTransport((req) => {
       if (req.options.signal) signals.push(req.options.signal);
@@ -208,14 +209,62 @@ describe("runProbe (ticket 1)", () => {
 
     expect(result.ok).toBe(true);
     expect(result.budget.maxRequests).toBe(9);
-    expect(result.budget.maxTokens).toBe(32);
     expect(result.budget.timeoutMs).toBe(15_000);
     for (const c of calls) {
-      expect(c.options.maxTokens).toBe(PROBE_MAX_TOKENS);
-      expect(c.options.maxTokens).toBeLessThanOrEqual(32);
       expect(c.options.signal).toBeDefined();
     }
     expect(signals.length).toBe(3);
+  });
+
+  test("reasoning targets get thinking headroom; others keep the cheap cap (#83)", async () => {
+    const budgetFor = async (reasoning: boolean) => {
+      const { transport, calls } = recordingTransport((req) => {
+        if (req.contract === "tool") return okTool();
+        if (req.contract === "reasoning") return okThinking();
+        return okText();
+      });
+      const result = await runProbe({
+        target: { ...targetBase, reasoning },
+        model: {},
+        transport,
+      });
+      return { budget: result.budget.maxTokens, calls };
+    };
+
+    // A reasoning model burns budget thinking before it answers; 32 starved the
+    // visible reply and every contract failed as a false negative (#83).
+    const reasoningRun = await budgetFor(true);
+    expect(reasoningRun.budget).toBe(PROBE_REASONING_MAX_TOKENS);
+    expect(PROBE_REASONING_MAX_TOKENS).toBeGreaterThan(PROBE_MAX_TOKENS);
+    for (const c of reasoningRun.calls) {
+      expect(c.options.maxTokens).toBe(PROBE_REASONING_MAX_TOKENS);
+    }
+
+    const plainRun = await budgetFor(false);
+    expect(plainRun.budget).toBe(PROBE_MAX_TOKENS);
+    for (const c of plainRun.calls) {
+      expect(c.options.maxTokens).toBe(PROBE_MAX_TOKENS);
+    }
+  });
+
+  test("explicit maxTokens still overrides the per-target default", async () => {
+    const { transport, calls } = recordingTransport((req) => {
+      if (req.contract === "tool") return okTool();
+      if (req.contract === "reasoning") return okThinking();
+      return okText();
+    });
+
+    const result = await runProbe({
+      target: { ...targetBase, reasoning: true },
+      model: {},
+      transport,
+      maxTokens: 64,
+    });
+
+    expect(result.budget.maxTokens).toBe(64);
+    for (const c of calls) {
+      expect(c.options.maxTokens).toBe(64);
+    }
   });
 
   test("stops when request budget is exhausted", async () => {

@@ -231,6 +231,42 @@ describe("runModelMetaDialog · model scope", () => {
     });
   });
 
+  test("trusted sync value can be pinned in one pick", async () => {
+    const { ui } = scriptedUi([
+      find(/^maxTokens · /),
+      find(/^使用同步值/),
+      find(/^保存/),
+    ]);
+    const result = await runModelMetaDialog(
+      ui,
+      baseInput({
+        scope: { kind: "model", modelId: "glm-4.6" },
+        maxTokensHints: { "glm-4.6": { value: 384_000, source: "models-dev" } },
+      }),
+    );
+    expect(result).toEqual({
+      kind: "save",
+      scope: { kind: "model", modelId: "glm-4.6" },
+      modelMeta: { maxTokens: 384_000 },
+    });
+  });
+
+  test("preset pick stays correct when the sync row shifts the list", async () => {
+    const { ui } = scriptedUi([find(/^maxTokens · /), find(/^16k · /), find(/^保存/)]);
+    const result = await runModelMetaDialog(
+      ui,
+      baseInput({
+        scope: { kind: "model", modelId: "glm-4.6" },
+        maxTokensHints: { "glm-4.6": { value: 384_000, source: "models-dev" } },
+      }),
+    );
+    expect(result).toEqual({
+      kind: "save",
+      scope: { kind: "model", modelId: "glm-4.6" },
+      modelMeta: { maxTokens: 16_000 },
+    });
+  });
+
   test("rows show inherited provider value at model scope", async () => {
     const seen: string[][] = [];
     const { ui } = scriptedUi([() => null], {

@@ -11,8 +11,8 @@ import { classifyStageFailure, evaluateContract } from "./evidence.ts";
 import {
   DEFAULT_PROBE_CONTRACTS,
   PROBE_MAX_REQUESTS,
-  PROBE_MAX_TOKENS,
   PROBE_TIMEOUT_MS,
+  probeMaxTokensFor,
   type ProbeContractId,
   type ProbeEngineOptions,
   type ProbeRunPrecheckSnapshot,
@@ -72,7 +72,7 @@ function budgetSnapshot(
 export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult> {
   const maxRequests = opts.maxRequests ?? PROBE_MAX_REQUESTS;
   const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS;
-  const maxTokens = opts.maxTokens ?? PROBE_MAX_TOKENS;
+  const maxTokens = probeMaxTokensFor(opts.target, opts.maxTokens);
   const createSignal =
     opts.createSignal ?? ((ms: number) => AbortSignal.timeout(ms));
   const now = opts.now ?? (() => Date.now());

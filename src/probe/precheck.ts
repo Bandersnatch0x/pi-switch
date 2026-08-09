@@ -10,6 +10,11 @@
 import type { DoctorStatus } from "../doctor.ts";
 import { isSwitchable } from "../parse/index.ts";
 import type { CcProvider } from "../types.ts";
+import {
+  formatCapabilityDecision,
+  type RegistrationCapabilityDecision,
+} from "../capabilities/registration.ts";
+import { tf } from "../ui/tui-locale.ts";
 import type { ProbeTarget } from "./types.ts";
 
 /** Dimensions covered by the target precheck (not the full doctor suite). */
@@ -52,6 +57,42 @@ export interface ProbePrecheckSoftCheck {
   status: DoctorStatus;
   detail: string;
   fix?: string;
+}
+
+/**
+ * Capability soft check from the registration decision (issue #63/#83).
+ * Judges with the same booleans registration acts on — no re-derived
+ * "unresolved" spelling — and formats through formatCapabilityDecision.
+ */
+export function capabilitySoftCheck(input: {
+  decision: RegistrationCapabilityDecision;
+  /** e.g. `${appType}/${displayName}` - display only, never a URL/key. */
+  providerLabel: string;
+  modelId: string;
+}): ProbePrecheckSoftCheck {
+  const { decision, providerLabel, modelId } = input;
+  const mt = decision.resolved.maxTokens;
+  const stale = mt.source === "models-dev" && Boolean(mt.stale);
+  // detail goes through formatCapabilityDecision, which now appends the
+  // stale suffix itself - no hand-rolled string here.
+  const detail = formatCapabilityDecision(modelId, decision, providerLabel);
+
+  if (decision.maxTokensUnresolved) {
+    return {
+      status: "fail",
+      detail,
+      fix: `${tf("maxTokensUnresolvedFix", { model: modelId })}；${tf("precheckNoSwitch")}`,
+    };
+  }
+  return {
+    status: decision.reasoningConservative || stale ? "warn" : "pass",
+    detail,
+    fix: decision.reasoningConservative
+      ? tf("precheckReasoningFix")
+      : stale
+        ? tf("precheckStaleFix")
+        : undefined,
+  };
 }
 
 /**

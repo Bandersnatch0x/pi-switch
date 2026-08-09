@@ -2,13 +2,10 @@ import type {
   FingerprintPreset,
   ModelMetaOverride,
   ModelOverrideEntry,
-  PinEntry,
   PiSwitchConfig,
   PiSwitchSelection,
-  RecentEntry,
 } from "./types.ts";
 import {
-  DEFAULT_RECENT_LIMIT,
   isThinkingFormat,
   isThinkingLevel,
   LEGACY_SETTINGS_KEY,
@@ -17,6 +14,7 @@ import {
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
 import { cleanModelMeta, matchExactModelOverride } from "./model-meta.ts";
+import { parsePins, parseRecent } from "./pins-recent.ts";
 import {
   providerOverrideKeys,
   resolveProviderOverride,
@@ -35,7 +33,6 @@ import {
 import { hasOwn, isPlainObject } from "./compat/wire-shared.ts";
 import {
   readJsonObjectLenient,
-  updateJsonObjectAtomic,
   type FsLike,
 } from "./json-file.ts";
 import {
@@ -76,37 +73,8 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-export function piSettingsPath(home: string): string {
-  return `${home.replace(/[\\/]+$/, "")}/.pi/agent/settings.json`;
-}
-
-export function piSwitchConfigPath(home: string): string {
-  return `${home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch.json`;
-}
-
-/** W4 capability-facts cache (provenance + fetchedAt; drop to roll back). */
-export function piSwitchCachePath(home: string): string {
-  return `${home.replace(/[\\/]+$/, "")}/.pi/agent/pi-switch-cache.json`;
-}
-
-export function providerHeadersPath(home: string): string {
-  return `${home.replace(/[\\/]+$/, "")}/.pi/agent/provider-headers.json`;
-}
-
 export function readJsonFile(fs: FsLike, path: string): Record<string, unknown> {
   return readJsonObjectLenient(fs, path);
-}
-
-export function writeJsonAtomic(
-  fs: FsLike,
-  path: string,
-  data: Record<string, unknown>,
-  pid: number,
-): void {
-  updateJsonObjectAtomic(fs, path, pid, () => ({
-    document: data,
-    result: undefined,
-  }));
 }
 
 export function readSelection(fs: FsLike, settingsPath: string): PiSwitchSelection | undefined {
@@ -130,24 +98,18 @@ export function writeSelection(
   sel: PiSwitchSelection,
   pid: number,
 ): { ok: boolean; error?: string } {
-  try {
-    updateJsonObjectAtomic(fs, settingsPath, pid, (settings) => ({
-      document: {
-        ...settings,
-        [SETTINGS_KEY]: {
-          dbId: sel.dbId,
-          model: sel.model.trim(),
-          tab: sel.tab,
-          appType: sel.appType,
-          provider: sel.provider,
-        },
-      },
-      result: undefined,
-    }));
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  // Same atomic envelope as pi-switch.json writers; the target here is
+  // settings.json (ConfigWriteTarget.configPath = whichever config file).
+  return editConfig({ fs, configPath: settingsPath, pid }, (settings) => ({
+    ...settings,
+    [SETTINGS_KEY]: {
+      dbId: sel.dbId,
+      model: sel.model.trim(),
+      tab: sel.tab,
+      appType: sel.appType,
+      provider: sel.provider,
+    },
+  }));
 }
 
 /**
@@ -203,42 +165,6 @@ export function migrateLegacySelection(
 function parseModelMeta(raw: unknown): ModelMetaOverride | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   return cleanModelMeta(raw as ModelMetaOverride);
-}
-
-function parsePins(raw: unknown): PinEntry[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: PinEntry[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const dbId = typeof rec.dbId === "string" ? rec.dbId.trim() : "";
-    const model = typeof rec.model === "string" ? rec.model.trim() : "";
-    if (!dbId || !model) continue;
-    const label =
-      typeof rec.label === "string" && rec.label.trim() ? rec.label.trim() : undefined;
-    const appType =
-      typeof rec.appType === "string" && rec.appType.trim() ? rec.appType.trim() : undefined;
-    out.push({ dbId, model, appType, label });
-  }
-  return out;
-}
-
-function parseRecent(raw: unknown): RecentEntry[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: RecentEntry[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const dbId = typeof rec.dbId === "string" ? rec.dbId.trim() : "";
-    const model = typeof rec.model === "string" ? rec.model.trim() : "";
-    const at =
-      typeof rec.at === "number" && Number.isFinite(rec.at) ? Math.floor(rec.at) : 0;
-    if (!dbId || !model) continue;
-    const appType =
-      typeof rec.appType === "string" && rec.appType.trim() ? rec.appType.trim() : undefined;
-    out.push({ dbId, model, appType, at });
-  }
-  return out;
 }
 
 const PROVIDER_OVERRIDE_ENTRY_KEYS = new Set([
@@ -721,148 +647,3 @@ export function writeModelTupleCompat(
 /** @deprecated Use writeModelTupleCompat (Chat #64 / Anthropic #67). */
 export const writeChatTupleCompat = writeModelTupleCompat;
 
-/** Legacy pin key (pre-identity-migration); still used for back-compat matching. */
-export function pinKey(dbId: string, model: string): string {
-  return `${dbId}::${model.trim()}`;
-}
-
-/** Identity-aware pin key (issue #16): appType::dbId::model. */
-export function entryKey(p: { dbId: string; model: string; appType?: string }): string {
-  return p.appType ? `${p.appType}::${p.dbId}::${p.model.trim()}` : pinKey(p.dbId, p.model);
-}
-
-/**
- * Same provider+model identity. An appType-carrying probe also claims
- * appType-less legacy entries (pre-migration / appType-stripping bug); a
- * legacy probe never claims an appType-carrying entry (can't disambiguate).
- */
-function sameEntry(
-  stored: { dbId: string; model: string; appType?: string },
-  probe: { dbId: string; model: string; appType?: string },
-): boolean {
-  if (stored.dbId !== probe.dbId) return false;
-  if (stored.model.trim() !== probe.model.trim()) return false;
-  return stored.appType === probe.appType || (!stored.appType && Boolean(probe.appType));
-}
-
-export function isPinned(
-  pins: PinEntry[] | undefined,
-  dbId: string,
-  model: string,
-  appType?: string,
-): boolean {
-  return (pins ?? []).some((p) => sameEntry(p, { dbId, model, appType }));
-}
-
-/** Toggle a pin entry. Returns the new pins array. */
-export function togglePinEntry(
-  pins: PinEntry[] | undefined,
-  entry: PinEntry,
-): { pins: PinEntry[]; pinned: boolean } {
-  const list = [...(pins ?? [])];
-  // Unpin removes every match, healing duplicates accumulated by the old
-  // appType-stripping read path.
-  const kept = list.filter((p) => !sameEntry(p, entry));
-  if (kept.length !== list.length) {
-    return { pins: kept, pinned: false };
-  }
-  list.unshift({
-    dbId: entry.dbId,
-    model: entry.model.trim(),
-    appType: entry.appType,
-    label: entry.label,
-  });
-  return { pins: list, pinned: true };
-}
-
-export function pushRecentEntry(
-  recent: RecentEntry[] | undefined,
-  entry: Omit<RecentEntry, "at"> & { at?: number },
-  limit = DEFAULT_RECENT_LIMIT,
-): RecentEntry[] {
-  const next: RecentEntry = {
-    dbId: entry.dbId,
-    model: entry.model.trim(),
-    appType: entry.appType,
-    at: entry.at ?? Date.now(),
-  };
-  const filtered = (recent ?? []).filter((r) => !sameEntry(r, next));
-  return [next, ...filtered].slice(0, Math.max(1, limit));
-}
-
-/** Persist pins array (full replace). */
-export function writePins(
-  fs: FsLike,
-  configPath: string,
-  pins: PinEntry[],
-  pid: number,
-): ConfigEditResult {
-  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, pins }));
-}
-
-/** Persist recent array (full replace). */
-export function writeRecent(
-  fs: FsLike,
-  configPath: string,
-  recent: RecentEntry[],
-  pid: number,
-): ConfigEditResult {
-  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, recent }));
-}
-
-export type TogglePinWriteResult =
-  | { ok: true; pins: PinEntry[]; pinned: boolean }
-  | { ok: false; error: string; pins: PinEntry[]; pinned: boolean };
-
-export type RecordRecentWriteResult =
-  | { ok: true; recent: RecentEntry[] }
-  | { ok: false; error: string; recent: RecentEntry[] };
-
-export function togglePinAndWrite(
-  fs: FsLike,
-  configPath: string,
-  entry: PinEntry,
-  pid: number,
-): TogglePinWriteResult {
-  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
-    const toggled = togglePinEntry(parsePins(raw.pins), entry);
-    return {
-      document: { ...raw, pins: toggled.pins },
-      result: toggled,
-    };
-  });
-  if (!edited.ok) {
-    return { ok: false, error: edited.error, pins: [], pinned: false };
-  }
-  return { ok: true, ...edited.result };
-}
-
-export function recordRecentAndWrite(
-  fs: FsLike,
-  configPath: string,
-  entry: Omit<RecentEntry, "at"> & { at?: number },
-  pid: number,
-): RecordRecentWriteResult {
-  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
-    const config = readPiSwitchConfig(
-      {
-        ...fs,
-        existsSync: (path) => path === configPath || fs.existsSync(path),
-        readFileSync: (path, encoding) =>
-          path === configPath
-            ? JSON.stringify(raw)
-            : fs.readFileSync(path, encoding),
-      },
-      configPath,
-    );
-    const next = pushRecentEntry(config.recent, entry, config.recentLimit);
-    return {
-      document: { ...raw, recent: next },
-      result: next,
-    };
-  });
-  if (!edited.ok) {
-    return { ok: false, error: edited.error, recent: [] };
-  }
-  return { ok: true, recent: edited.result };
-}

@@ -8,7 +8,11 @@
 
 import type { CcProvider, HeaderRule, PiSwitchConfig, PiSwitchSelection } from "../src/types.ts";
 import type { DbReaderDeps } from "../src/db.ts";
+import { defaultDbPath } from "../src/db.ts";
+import { isSwitchable } from "../src/parse/index.ts";
+import type { DoctorInput } from "../src/doctor.ts";
 import { type FsLike } from "../src/settings.ts";
+import { PI_MIN_VERSION } from "../src/settings.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import type { ProbeDeps } from "../src/headers/vars.ts";
 import {
@@ -29,6 +33,7 @@ import {
   type CapabilitiesCache,
   type ModelsDevCacheIo,
 } from "../src/capabilities/models-dev-cache.ts";
+import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
 import type {
   ModelsDevCacheEntry,
   ModelsDevCapabilities,
@@ -41,14 +46,25 @@ import {
   resolveModelCapabilities,
   type ResolvedCapabilities,
 } from "../src/capabilities/resolve.ts";
-import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
+import {
+  resolveRegistrationCapability,
+  type RegistrationCapabilityDecision,
+} from "../src/capabilities/registration.ts";
+import type { ProviderRegistrationOpts } from "../src/register.ts";
+import { resolveEffectiveModelMeta, type ModelMetaLayers } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import type { ResolvedProviderWireCompat } from "../src/provider-wire-compat.ts";
-import { ProviderConfigViews } from "../src/provider-config-views.ts";
-import { ProviderSnapshot } from "../src/provider-snapshot.ts";
+import {
+  ProviderConfigViews,
+  type TupleCompatSelection,
+} from "../src/provider-config-views.ts";
+import {
+  ProviderSnapshot,
+  type ProviderSnapshotResult,
+} from "../src/provider-snapshot.ts";
 import { SelectionCache } from "../src/selection-cache.ts";
-import { piSettingsPath, piSwitchConfigPath } from "../src/settings.ts";
+import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 
 export type NodeIo = {
@@ -193,11 +209,7 @@ export class Runtime {
     return this.headerRules;
   }
 
-  refreshSnapshot(): {
-    providers: CcProvider[];
-    error?: string;
-    capabilities?: import("../src/db.ts").DbCapabilities;
-  } {
+  refreshSnapshot(): ProviderSnapshotResult {
     return this.providerSnapshot.refresh();
   }
 
@@ -333,6 +345,121 @@ export class Runtime {
     );
   }
 
+  /**
+   * The registration-facing capability decision — same inputs buildProviderConfig
+   * resolves when it registers this model, so doctor / precheck / ps-info /
+   * notifications judge and display with registration's truth instead of
+   * re-deriving it from lower-level facts (three hand-rolled respellings of
+   * "maxTokens unresolved" disagreed on value:0 before this existed).
+   */
+  registrationDecisionFor(
+    provider: CcProvider,
+    modelId: string,
+  ): RegistrationCapabilityDecision {
+    return resolveRegistrationCapability({
+      modelId,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+      userMeta: this.modelMetaFor(provider, modelId),
+      modelsDev: this.modelsDevFor(modelId),
+      ccMeta: ccMetaFrom(provider.meta),
+    });
+  }
+
+  /**
+   * The full option bundle buildProviderConfig/registerProvider need for this
+   * provider. Lives here because Runtime owns every ingredient; call sites
+   * used to hand-copy these nine fields (four verbatim copies, one drifted).
+   */
+  registrationOptsFor(provider: CcProvider): ProviderRegistrationOpts {
+    return {
+      rules: this.headerRules,
+      ...this.headerOverrideOpts(provider),
+      vars: this.headerVars(),
+      debug: this.config.debug,
+      onReject: this.rejectSink(),
+      modelMetaFor: (id) => this.modelMetaFor(provider, id),
+      modelsDevFor: (id) => this.modelsDevFor(id),
+      providerWireCompat: this.providerWireCompatFor(provider),
+      tupleCompatFor: (id) => this.tupleCompatFor(provider, id),
+    };
+  }
+
+  /**
+   * Collect the full DoctorInput fact set: reload config/rules, force a
+   * fingerprint re-probe, refresh the selected model's capability fact when
+   * missing/stale (W4), and read routing/cache/migration state. runDoctor
+   * stays a pure formatter; /ps-doctor stops hand-copying 24 fields.
+   */
+  async doctorFacts(): Promise<DoctorInput> {
+    this.reloadConfig();
+    this.reloadHeaderRules();
+    // Force re-probe so doctor shows current fingerprint sources.
+    this.invalidateVarsCache();
+    this.headerVars();
+
+    const { providers, error, capabilities: schemaCapabilities } = this.refreshSnapshot();
+    const sel = this.state.readSelection();
+    const dbPath = defaultDbPath(this.home);
+    const routingProbe = await this.routingProbe();
+
+    let capabilities: DoctorInput["capabilities"];
+    let modelsDevCache: DoctorInput["modelsDevCache"];
+    const selMatch = sel
+      ? providers.find(
+          (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
+        )
+      : undefined;
+    if (sel && selMatch && isSwitchable(selMatch)) {
+      const cached = this.rawCacheEntry(sel.model);
+      if (!cached || this.isCapabilitiesStale(cached)) {
+        await this.refreshCapabilities([sel.model]);
+      }
+      capabilities = {
+        modelId: sel.model,
+        decision: this.registrationDecisionFor(selMatch, sel.model),
+      };
+      // Issue #39: surface cache state after on-demand refresh.
+      const entry = this.rawCacheEntry(sel.model);
+      if (!entry) {
+        modelsDevCache = { state: "cold" };
+      } else if (isModelsDevMiss(entry)) {
+        modelsDevCache = { state: "miss", observedAt: entry.observedAt };
+      } else {
+        modelsDevCache = { state: "hit", observedAt: entry.observedAt };
+      }
+    }
+
+    return {
+      home: this.home,
+      dbPath,
+      dbExists: this.io.existsSync(dbPath),
+      sqlite3Path: this.sqlite3Path || null,
+      sqlite3Tried: this.sqlite3Tried,
+      providers,
+      providersError: error,
+      selection: sel,
+      config: this.config,
+      headerRuleCount: this.headerRules.length,
+      varsSummary: this.varsSummary,
+      pins: this.config.pins,
+      recent: this.config.recent,
+      piVersion: this.piVersion(),
+      piMinVersion: PI_MIN_VERSION,
+      fingerprintSnapshot: this.fingerprintSnapshot(),
+      routingProbe,
+      capabilities,
+      modelsDevCache,
+      refreshFailure: this.lastRefreshFailure(),
+      migrationSummary: this.migrationSummary,
+      schemaCapabilities,
+      providerWireCompat: selMatch
+        ? this.providerWireCompatFor(selMatch)
+        : undefined,
+      cacheRetentionEnv: process.env.PI_CACHE_RETENTION,
+    };
+  }
+
   get varsSummary(): VarsSummary | undefined {
     return this.headerVarsSession.summary;
   }
@@ -407,7 +534,7 @@ export class Runtime {
       appType?: string;
     },
     modelId: string,
-  ): ReturnType<ProviderConfigViews["tupleCompatFor"]> {
+  ): TupleCompatSelection | undefined {
     return this.providerViews.tupleCompatFor(provider, modelId);
   }
 
@@ -415,7 +542,7 @@ export class Runtime {
   modelMetaLayers(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
     modelId?: string,
-  ): ReturnType<ProviderConfigViews["modelMetaLayers"]> {
+  ): ModelMetaLayers {
     return this.providerViews.modelMetaLayers(provider, modelId);
   }
 

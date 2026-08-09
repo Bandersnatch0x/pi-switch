@@ -174,13 +174,15 @@ describe("fetchRemoteModels protocol requests", () => {
   test("native Anthropic API key uses x-api-key instead of Bearer", async () => {
     const { calls, fetchImpl } = recordingFetch({ data: [{ id: "claude-sonnet-4" }] });
 
-    const result = await fetchRemoteModels({
-      api: "anthropic-messages",
-      authHeader: false,
-      baseUrl: "https://api.anthropic.com",
-      apiKey: "secret",
-      fetchImpl,
-    });
+    const result = await fetchRemoteModels(
+      {
+        api: "anthropic-messages",
+        authHeader: false,
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "secret",
+      },
+      { fetchImpl },
+    );
 
     expect(result.models).toEqual(["claude-sonnet-4"]);
     expect(calls).toHaveLength(1);
@@ -195,13 +197,15 @@ describe("fetchRemoteModels protocol requests", () => {
       models: [{ name: "models/gemini-2.5-pro" }],
     });
 
-    const result = await fetchRemoteModels({
-      api: "google-generative-ai",
-      authHeader: false,
-      baseUrl: "https://generativelanguage.googleapis.com",
-      apiKey: "secret",
-      fetchImpl,
-    });
+    const result = await fetchRemoteModels(
+      {
+        api: "google-generative-ai",
+        authHeader: false,
+        baseUrl: "https://generativelanguage.googleapis.com",
+        apiKey: "secret",
+      },
+      { fetchImpl },
+    );
 
     expect(result.models).toEqual(["gemini-2.5-pro"]);
     expect(calls).toHaveLength(1);
@@ -213,13 +217,15 @@ describe("fetchRemoteModels protocol requests", () => {
   test("Gemini-compatible gateway keeps OpenAI model discovery", async () => {
     const { calls, fetchImpl } = recordingFetch({ data: [{ id: "gemini-2.5-pro" }] });
 
-    const result = await fetchRemoteModels({
-      api: "google-generative-ai",
-      authHeader: true,
-      baseUrl: "https://gateway.example.com",
-      apiKey: "secret",
-      fetchImpl,
-    });
+    const result = await fetchRemoteModels(
+      {
+        api: "google-generative-ai",
+        authHeader: true,
+        baseUrl: "https://gateway.example.com",
+        apiKey: "secret",
+      },
+      { fetchImpl },
+    );
 
     expect(result.models).toEqual(["gemini-2.5-pro"]);
     expect(calls).toHaveLength(1);

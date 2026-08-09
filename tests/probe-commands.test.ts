@@ -9,7 +9,7 @@ import {
   createRepairConfigStore,
 } from "../extensions/probe-commands.ts";
 import type { FsLike } from "../src/json-file.ts";
-import { piSwitchConfigPath } from "../src/settings.ts";
+import { piSwitchConfigPath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 import type {
   ProbeRequest,

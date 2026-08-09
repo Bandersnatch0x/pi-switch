@@ -23,7 +23,7 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, PinEntry, RecentEntry } from "../types.ts";
 import { isSwitchable } from "../parse/index.ts";
-import { isPinned } from "../settings.ts";
+import { isPinned } from "../pins-recent.ts";
 import { buildTabs, type TabInfo } from "./tabs.ts";
 import {
   filterProviders,

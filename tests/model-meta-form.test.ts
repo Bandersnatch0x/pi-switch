@@ -194,6 +194,47 @@ describe("count submenu", () => {
     expect(resolveCountPick(INHERIT_VALUE)).toEqual({ kind: "inherit" });
     expect(resolveCountPick(CUSTOM_VALUE)).toEqual({ kind: "custom" });
   });
+
+  test("maxTokens offers the trusted sync value at exact-model scope only", () => {
+    const input = baseInput({
+      models: ["glm-4.6"],
+      maxTokensHints: { "glm-4.6": { value: 384_000, source: "models-dev" } },
+    });
+    const scope = { kind: "model" as const, modelId: "glm-4.6" };
+    const hint = input.maxTokensHints!["glm-4.6"];
+
+    const withHint = countSubmenuOptions("maxTokens", {}, undefined, input.tier, hint);
+    const sync = withHint[0]!;
+    expect(sync.label).toBe("使用同步值 384k（models.dev）");
+    expect(resolveCountPick(sync.value)).toEqual({ kind: "value", n: 384_000 });
+    // Presets still resolve to their own value, not shifted by the sync row.
+    expect(resolveCountPick(withHint[1]!.value)).toEqual({ kind: "value", n: 4_096 });
+
+    // Provider scope has no single model to pin, so no sync row is offered.
+    const noHint = countSubmenuOptions("maxTokens", {}, undefined, input.tier);
+    expect(noHint.some((o) => o.label.startsWith("使用同步值"))).toBe(false);
+    // contextWindow never gets a maxTokens hint.
+    expect(
+      countSubmenuOptions("contextWindow", {}, undefined, input.tier, hint).some((o) =>
+        o.label.startsWith("使用同步值"),
+      ),
+    ).toBe(false);
+
+    const items = buildFormItems(input, scope, {});
+    expect(byId(items, FORM_ITEM_ID.maxTokens)?.description).toContain("384k");
+    expect(
+      byId(buildFormItems(input, { kind: "provider" }, {}), FORM_ITEM_ID.maxTokens)
+        ?.description,
+    ).not.toContain("384k");
+  });
+
+  test("cc-meta hint is labeled as CC Switch meta", () => {
+    const items = countSubmenuOptions("maxTokens", {}, undefined, undefined, {
+      value: 8_192,
+      source: "cc-meta",
+    });
+    expect(items[0]!.label).toBe("使用同步值 8192（CC Switch meta）");
+  });
 });
 
 describe("thinking submenu", () => {

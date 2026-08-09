@@ -1,22 +1,22 @@
 import { test, expect, describe } from "bun:test";
 import {
   clearAllModelMetaOverrides,
-  isPinned,
-  togglePinAndWrite,
   migrateLegacySelection,
-  pushRecentEntry,
   readPiSwitchConfig,
   readSelection,
   resolveProviderOverride,
-  togglePinEntry,
-  writePins,
   writeModelMetaOverride,
   writeProviderModelMeta,
   writeProviderWireCompat,
-  writeRecent,
   writeSelection,
   type FsLike,
 } from "../src/settings.ts";
+import {
+  isPinned,
+  pushRecentEntry,
+  togglePinAndWrite,
+  togglePinEntry,
+} from "../src/pins-recent.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function memFs(initial: Record<string, string> = {}): FsLike & { store: Record<string, string> } {
@@ -314,7 +314,11 @@ describe("provider wire compat persistence", () => {
         providerOverrides: {
           codex: {
             "provider-1": {
-              compat: { api: "openai-completions", supportsStore: false },
+              compat: {
+                api: "openai-completions",
+                supportsStore: false,
+                supportsLongCacheRetention: false,
+              },
             },
           },
         },
@@ -332,6 +336,7 @@ describe("provider wire compat persistence", () => {
     expect(entry?.compat).toEqual({
       api: "openai-completions",
       supportsStore: false,
+      supportsLongCacheRetention: false,
     });
   });
 
@@ -423,7 +428,11 @@ describe("provider wire compat persistence", () => {
       writeProviderWireCompat(
         { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
-        { api: "openai-completions", supportsStore: false },
+        {
+          api: "openai-completions",
+          supportsStore: false,
+          supportsLongCacheRetention: false,
+        },
       ),
     ).toEqual({ ok: true });
     const loadedFalse = resolveProviderOverride(
@@ -433,12 +442,21 @@ describe("provider wire compat persistence", () => {
     expect(
       loadedFalse && "supportsStore" in loadedFalse ? loadedFalse.supportsStore : undefined,
     ).toBe(false);
+    expect(
+      loadedFalse && "supportsLongCacheRetention" in loadedFalse
+        ? loadedFalse.supportsLongCacheRetention
+        : undefined,
+    ).toBe(false);
 
     expect(
       writeProviderWireCompat(
         { fs, configPath: "/c.json", pid: 1 },
         chatProvider,
-        { api: "openai-completions", supportsStore: true },
+        {
+          api: "openai-completions",
+          supportsStore: true,
+          supportsLongCacheRetention: true,
+        },
       ),
     ).toEqual({ ok: true });
     const loadedTrue = resolveProviderOverride(
@@ -447,6 +465,11 @@ describe("provider wire compat persistence", () => {
     )?.compat;
     expect(
       loadedTrue && "supportsStore" in loadedTrue ? loadedTrue.supportsStore : undefined,
+    ).toBe(true);
+    expect(
+      loadedTrue && "supportsLongCacheRetention" in loadedTrue
+        ? loadedTrue.supportsLongCacheRetention
+        : undefined,
     ).toBe(true);
 
     expect(writeProviderWireCompat({ fs, configPath: "/c.json", pid: 1 }, chatProvider, null)).toEqual({
@@ -514,15 +537,6 @@ describe("pins and recent", () => {
     expect(recent[1]).toEqual({ dbId: "2", model: "b", at: 2 });
   });
 
-  test("writePins / writeRecent persist", () => {
-    const fs = memFs({ "/c.json": "{}" });
-    expect(writePins(fs, "/c.json", [{ dbId: "1", model: "m" }], 1).ok).toBe(true);
-    expect(writeRecent(fs, "/c.json", [{ dbId: "1", model: "m", at: 9 }], 1).ok).toBe(true);
-    const raw = JSON.parse(fs.store["/c.json"]);
-    expect(raw.pins).toEqual([{ dbId: "1", model: "m" }]);
-    expect(raw.recent).toEqual([{ dbId: "1", model: "m", at: 9 }]);
-  });
-
   test("readPiSwitchConfig parses pins/recent/defaultModelMeta", () => {
     const fs = memFs({
       "/c.json": JSON.stringify({
@@ -556,10 +570,10 @@ describe("pin appType round-trip (/ps p duplicate bug)", () => {
   test("togglePinAndWrite second toggle unpins instead of duplicating", () => {
     const fs = memFs({ "/c.json": "{}" });
     const entry = { dbId: "1", model: "m1", appType: "claude", label: "p · m1" };
-    const first = togglePinAndWrite(fs, "/c.json", entry, 1);
+    const first = togglePinAndWrite({ fs, configPath: "/c.json", pid: 1 }, entry);
     expect(first.ok).toBe(true);
     expect(first.pinned).toBe(true);
-    const second = togglePinAndWrite(fs, "/c.json", entry, 1);
+    const second = togglePinAndWrite({ fs, configPath: "/c.json", pid: 1 }, entry);
     expect(second.ok).toBe(true);
     expect(second.pinned).toBe(false);
     expect(second.pins).toEqual([]);
@@ -579,7 +593,10 @@ describe("pin appType round-trip (/ps p duplicate bug)", () => {
         ],
       }),
     });
-    const r = togglePinAndWrite(fs, "/c.json", { dbId: "1", model: "m1", appType: "claude" }, 1);
+    const r = togglePinAndWrite(
+      { fs, configPath: "/c.json", pid: 1 },
+      { dbId: "1", model: "m1", appType: "claude" },
+    );
     expect(r.pinned).toBe(false);
     expect(r.pins).toEqual([{ dbId: "2", model: "other" }]);
   });

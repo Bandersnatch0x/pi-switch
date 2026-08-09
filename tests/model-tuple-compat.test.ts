@@ -304,6 +304,7 @@ describe("settings + registration for Chat tuple compat", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
     };
     expect(models[0]?.compat).toEqual({
       supportsDeveloperRole: false,

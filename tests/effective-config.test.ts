@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
+  maxTokensUnresolvedFix,
   registerCommands,
   runEffectiveConfigCommand,
 } from "../extensions/commands.ts";
@@ -9,7 +10,9 @@ import {
 } from "../src/effective-config.ts";
 import type { BuiltProviderConfig } from "../src/register.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import type { CcProvider } from "../src/types.ts";
+import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 
 function provider(): CcProvider {
   return {
@@ -118,12 +121,14 @@ describe("effective config summary", () => {
       supportsStrictMode: false,
       requiresToolResultName: false,
       requiresAssistantAfterToolResult: false,
+      supportsLongCacheRetention: false,
       scope: "provider",
       source: "conservative-default",
     });
     expect(text).toContain("store=false");
     expect(text).toContain("usageStream=false");
     expect(text).toContain("strict=false");
+    expect(text).toContain("longRetention=false");
     expect(text).toContain("scope=provider source=conservative-default");
   });
 
@@ -178,7 +183,7 @@ describe("effective config summary", () => {
     const notifications: string[] = [];
     const logs = spyOn(console, "log").mockImplementation(() => undefined);
     const currentProvider = provider();
-    const rt = {
+    const rt = completeFakeRuntime({
       config: { aliasCcs: false },
       headerRules: [],
       state: { readSelection: () => undefined },
@@ -195,18 +200,15 @@ describe("effective config summary", () => {
       headerVars: () => ({}),
       rejectSink: () => undefined,
       // Trusted maxTokens so registration is eligible under issue #63.
-      modelMetaFor: () => ({ contextWindow: 400_000, maxTokens: 32_000 }),
+      modelMetaFor: () => ({
+        contextWindow: 400_000,
+        maxTokens: 32_000,
+        reasoning: true,
+      }),
       providerWireCompatFor: () => undefined,
       modelsDevFor: () => undefined,
-      capabilitiesFor: () => ({
-        contextWindow: { value: 400_000, source: "user-override" },
-        maxTokens: { value: 32_000, source: "user-override" },
-        reasoning: { value: true, source: "user-override" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      }),
       tupleCompatFor: () => undefined,
-    };
+    });
     const ctx = {
       model: { provider: currentProvider.piName, id: "gpt-5" },
       ui: {
@@ -230,5 +232,41 @@ describe("effective config summary", () => {
       { install() {}, activate: async () => ({}) } as never,
     );
     expect(registered).toContain("ps-info");
+  });
+});
+
+describe("maxTokensUnresolvedFix (#63 guidance gate)", () => {
+  // Real decision chain over an injected user layer: the gate under test is
+  // resolveRegistrationCapability's own, not a fake's re-spelling of it.
+  const rtWith = (userMaxTokens?: number) =>
+    ({
+      registrationDecisionFor: (p: CcProvider, modelId: string) =>
+        resolveRegistrationCapability({
+          modelId,
+          api: p.api,
+          baseUrl: p.baseUrl,
+          userMeta:
+            userMaxTokens !== undefined ? { maxTokens: userMaxTokens } : undefined,
+        }),
+    }) as never;
+
+  test("names the model and the command when the gate blocks registration", () => {
+    const fix = maxTokensUnresolvedFix(rtWith(), provider(), "relay-unknown");
+    expect(fix).toContain("relay-unknown");
+    expect(fix).toContain("/ps-override");
+  });
+
+  test("stays silent when maxTokens resolved, so unrelated failures are not annotated", () => {
+    expect(
+      maxTokensUnresolvedFix(rtWith(32_000), provider(), "gpt-5"),
+    ).toBeUndefined();
+  });
+
+  test("a non-positive trusted value is still a blocked gate, not a resolved one", () => {
+    // registration refuses maxTokens <= 0, so the user must still be told how
+    // to fix it rather than left with a bare "cannot register provider".
+    expect(maxTokensUnresolvedFix(rtWith(0), provider(), "m")).toContain(
+      "/ps-override",
+    );
   });
 });

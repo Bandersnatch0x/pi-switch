@@ -7,7 +7,7 @@ import {
   mergeBuiltInCompatUnderUser,
   withBuiltInCompatUnderUser,
 } from "../src/compat/built-in-compat-profile.ts";
-import { resolveRegistrationMeta } from "../src/capabilities/registration.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import { resolveEffectiveModelMeta, summarizeModelMeta } from "../src/model-meta.ts";
 import { buildProviderConfig } from "../src/register.ts";
 import type { CcProvider, PiSwitchConfig } from "../src/types.ts";
@@ -96,17 +96,18 @@ describe("built-in compat profile (PR1/PR2)", () => {
     expect(withBuiltInCompatUnderUser("deepseek-v4-flash", off)).toEqual(off);
     expect(builtInCompatForModelId("deepseek-v4-flash", off)).toBeUndefined();
 
-    const meta = resolveRegistrationMeta({
+    const decision = resolveRegistrationCapability({
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://example.com",
-      userMeta: { useBuiltInCompat: false },
+      // maxTokens keeps the decision registrable so compat suppression is visible.
+      userMeta: { useBuiltInCompat: false, maxTokens: 32_000 },
     });
-    expect(meta.thinkingFormat).toBeUndefined();
-    expect(meta.thinkingLevelMap).toBeUndefined();
-    expect(meta.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+    expect(decision.meta?.thinkingFormat).toBeUndefined();
+    expect(decision.meta?.thinkingLevelMap).toBeUndefined();
+    expect(decision.meta?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
     // protocol tier still applies for scalars
-    expect(meta.contextWindow).toBe(128_000);
+    expect(decision.meta?.contextWindow).toBe(128_000);
   });
 
   test("useBuiltInCompat: true re-enables under a parent false (via merged userMeta)", () => {
@@ -157,62 +158,64 @@ describe("built-in compat profile (PR1/PR2)", () => {
   });
 });
 
-describe("resolveRegistrationMeta + built-in", () => {
-  test("deepseek gets built-in compat without user override", () => {
-    // Issue #63: without a trusted maxTokens authority, registration meta omits
-    // maxTokens (unresolved). Built-in only fills compat fields.
-    const meta = resolveRegistrationMeta({
+describe("resolveRegistrationCapability + built-in", () => {
+  test("deepseek without trusted maxTokens carries no registration meta", () => {
+    // Issue #63: without a trusted maxTokens authority the model must not
+    // register — the decision has no meta (no partial shell).
+    const decision = resolveRegistrationCapability({
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://api.deepseek.com",
     });
-    expect(meta.thinkingFormat).toBe("deepseek");
-    expect(meta.requiresReasoningContentOnAssistantMessages).toBe(true);
-    expect(meta.thinkingLevelMap?.xhigh).toBe("max");
-    expect(meta.contextWindow).toBe(128_000);
-    expect(meta.maxTokens).toBeUndefined();
-    expect(meta.reasoning).toBe(false);
+    expect(decision.maxTokensUnresolved).toBe(true);
+    expect(decision.meta).toBeUndefined();
 
     // With exact-model maxTokens, full registration meta is eligible.
-    const full = resolveRegistrationMeta({
+    const full = resolveRegistrationCapability({
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://api.deepseek.com",
       userMeta: { maxTokens: 32_000 },
     });
-    expect(full.maxTokens).toBe(32_000);
-    expect(full.thinkingFormat).toBe("deepseek");
+    expect(full.maxTokensUnresolved).toBe(false);
+    expect(full.meta?.maxTokens).toBe(32_000);
+    expect(full.meta?.thinkingFormat).toBe("deepseek");
+    expect(full.meta?.requiresReasoningContentOnAssistantMessages).toBe(true);
+    expect(full.meta?.thinkingLevelMap?.xhigh).toBe("max");
+    expect(full.meta?.contextWindow).toBe(128_000);
   });
 
   test("user thinkingFormat overrides built-in", () => {
-    const meta = resolveRegistrationMeta({
+    const decision = resolveRegistrationCapability({
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://example.com",
-      userMeta: { thinkingFormat: "openai" },
+      userMeta: { thinkingFormat: "openai", maxTokens: 32_000 },
     });
-    expect(meta.thinkingFormat).toBe("openai");
-    expect(meta.requiresReasoningContentOnAssistantMessages).toBe(true);
+    expect(decision.meta?.thinkingFormat).toBe("openai");
+    expect(decision.meta?.requiresReasoningContentOnAssistantMessages).toBe(true);
   });
 
   test("non-matching model has no compat from built-in", () => {
-    const meta = resolveRegistrationMeta({
+    const decision = resolveRegistrationCapability({
       modelId: "claude-sonnet-4",
       api: "anthropic-messages",
       baseUrl: "https://example.com",
+      userMeta: { maxTokens: 32_000 },
     });
-    expect(meta.thinkingFormat).toBeUndefined();
-    expect(meta.thinkingLevelMap).toBeUndefined();
+    expect(decision.meta?.thinkingFormat).toBeUndefined();
+    expect(decision.meta?.thinkingLevelMap).toBeUndefined();
   });
 
   test("qwen gets format-only built-in", () => {
-    const meta = resolveRegistrationMeta({
+    const decision = resolveRegistrationCapability({
       modelId: "qwen3-coder-plus",
       api: "openai-completions",
       baseUrl: "https://example.com",
+      userMeta: { maxTokens: 32_000 },
     });
-    expect(meta.thinkingFormat).toBe("qwen");
-    expect(meta.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+    expect(decision.meta?.thinkingFormat).toBe("qwen");
+    expect(decision.meta?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
   });
 });
 

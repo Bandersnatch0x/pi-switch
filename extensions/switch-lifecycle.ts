@@ -135,6 +135,42 @@ function initialStages(): ActivationStages {
   };
 }
 
+/**
+ * Stage recorder: every ActivationStages field is set exactly once on the
+ * success path. activate() used to rebuild the stages object with hand
+ * spreads at seven return points; adding a sixth stage and missing one spread
+ * silently reported skipped("not attempted"). Now activated() throws instead.
+ */
+function stageRecorder() {
+  const stages = initialStages();
+  const recorded = new Set<keyof ActivationStages>();
+  return {
+    set(stage: keyof ActivationStages, result: ActivationStageResult): void {
+      stages[stage] = result;
+      recorded.add(stage);
+    },
+    /** Early-exit failure: untouched stages keep their initial semantics. */
+    failure(
+      stage: "providerRegistration" | "modelSwitch",
+      message: string,
+    ): ActivationResult {
+      stages[stage] = failed(message);
+      return { kind: "failed", failedStage: stage, error: message, stages: { ...stages } };
+    },
+    activated(): ActivationResult {
+      const missing = (Object.keys(stages) as (keyof ActivationStages)[]).filter(
+        (stage) => !recorded.has(stage),
+      );
+      if (missing.length) {
+        throw new Error(
+          `activate() finished without recording stages: ${missing.join(", ")}`,
+        );
+      }
+      return { kind: "activated", stages: { ...stages } };
+    },
+  };
+}
+
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -144,19 +180,14 @@ export function createSwitchLifecycle(
   rt: Runtime,
 ): SwitchLifecycle {
   const register = (provider: CcProvider, modelId: string): boolean => {
-    const ok = registerProvider(asRegisterApi(pi), provider, [modelId], {
-      rules: rt.headerRules,
-      ...rt.headerOverrideOpts(provider),
-      vars: rt.headerVars(),
-      debug: rt.config.debug,
-      onReject: rt.rejectSink(),
-      modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-      modelsDevFor: (id) => rt.modelsDevFor?.(id),
-      providerWireCompat: rt.providerWireCompatFor?.(provider),
-      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-    });
+    const ok = registerProvider(
+      asRegisterApi(pi),
+      provider,
+      [modelId],
+      rt.registrationOptsFor(provider),
+    );
     // Fire-and-forget models.dev refresh after successful registration (issue #39).
-    if (ok) rt.scheduleModelsDevRefresh?.(modelId);
+    if (ok) rt.scheduleModelsDevRefresh(modelId);
     return ok;
   };
 
@@ -183,19 +214,14 @@ export function createSwitchLifecycle(
   const registerModels = (provider: CcProvider, modelIds: string[]): boolean => {
     const ids = [...new Set(modelIds.map((id) => id.trim()).filter(Boolean))];
     if (!ids.length) return false;
-    const ok = registerProvider(asRegisterApi(pi), provider, ids, {
-      rules: rt.headerRules,
-      ...rt.headerOverrideOpts(provider),
-      vars: rt.headerVars(),
-      debug: rt.config.debug,
-      onReject: rt.rejectSink(),
-      modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-      modelsDevFor: (id) => rt.modelsDevFor?.(id),
-      providerWireCompat: rt.providerWireCompatFor?.(provider),
-      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-    });
+    const ok = registerProvider(
+      asRegisterApi(pi),
+      provider,
+      ids,
+      rt.registrationOptsFor(provider),
+    );
     if (!ok) return false;
-    for (const id of ids) rt.scheduleModelsDevRefresh?.(id);
+    for (const id of ids) rt.scheduleModelsDevRefresh(id);
     if (!rt.registeredPsNames.includes(provider.piName)) {
       rt.registeredPsNames = [...rt.registeredPsNames, provider.piName];
     }
@@ -375,66 +401,41 @@ export function createSwitchLifecycle(
     ctx: PiSwitchCtx,
   ): Promise<ActivationResult> => {
     const { provider, modelId } = target;
-    const start = initialStages();
+    const stages = stageRecorder();
+
     let registered = false;
     try {
       registered = register(provider, modelId);
     } catch (error) {
-      const message = formatError(error);
-      return {
-        kind: "failed",
-        failedStage: "providerRegistration",
-        error: message,
-        stages: { ...start, providerRegistration: failed(message) },
-      };
+      return stages.failure("providerRegistration", formatError(error));
     }
     if (!registered) {
-      const message = provider.parseError ?? "cannot register provider";
-      return {
-        kind: "failed",
-        failedStage: "providerRegistration",
-        error: message,
-        stages: { ...start, providerRegistration: failed(message) },
-      };
+      return stages.failure(
+        "providerRegistration",
+        provider.parseError ?? "cannot register provider",
+      );
     }
-
-    const registeredStages: ActivationStages = {
-      ...start,
-      providerRegistration: SUCCEEDED,
-    };
+    stages.set("providerRegistration", SUCCEEDED);
 
     const model = findRegisteredModel(ctx, provider.piName, modelId);
     if (!model) {
-      const message = `model not found after register: ${provider.piName} / ${modelId}`;
-      return {
-        kind: "failed",
-        failedStage: "providerRegistration",
-        error: message,
-        stages: { ...registeredStages, providerRegistration: failed(message) },
-      };
+      // Registered but unfindable - surface as a providerRegistration failure.
+      return stages.failure(
+        "providerRegistration",
+        `model not found after register: ${provider.piName} / ${modelId}`,
+      );
     }
 
     let activated = false;
     try {
       activated = await pi.setModel(model as never);
     } catch (error) {
-      const message = formatError(error);
-      return {
-        kind: "failed",
-        failedStage: "modelSwitch",
-        error: message,
-        stages: { ...registeredStages, modelSwitch: failed(message) },
-      };
+      return stages.failure("modelSwitch", formatError(error));
     }
     if (!activated) {
-      const message = `setModel failed: ${provider.piName} / ${modelId}`;
-      return {
-        kind: "failed",
-        failedStage: "modelSwitch",
-        error: message,
-        stages: { ...registeredStages, modelSwitch: failed(message) },
-      };
+      return stages.failure("modelSwitch", `setModel failed: ${provider.piName} / ${modelId}`);
     }
+    stages.set("modelSwitch", SUCCEEDED);
 
     const previousNames = rt.registeredPsNames;
     const cleanupErrors: string[] = [];
@@ -454,26 +455,19 @@ export function createSwitchLifecycle(
     }
     rt.registeredPsNames = [...new Set([provider.piName, ...retainedNames])];
 
-    const providerCleanup: ActivationStageResult = cleanupErrors.length
-      ? failed(cleanupErrors.join("; "))
-      : retainedNames.length
-        ? skipped("unregisterProvider is unavailable; old registrations were retained")
-        : SUCCEEDED;
-    const activatedStages: ActivationStages = {
-      ...registeredStages,
-      modelSwitch: SUCCEEDED,
-      providerCleanup,
-    };
+    stages.set(
+      "providerCleanup",
+      cleanupErrors.length
+        ? failed(cleanupErrors.join("; "))
+        : retainedNames.length
+          ? skipped("unregisterProvider is unavailable; old registrations were retained")
+          : SUCCEEDED,
+    );
 
     if (target.commit === "runtime-only") {
-      return {
-        kind: "activated",
-        stages: {
-          ...activatedStages,
-          selectionPersistence: skipped("runtime-only activation"),
-          recentPersistence: skipped("runtime-only activation"),
-        },
-      };
+      stages.set("selectionPersistence", skipped("runtime-only activation"));
+      stages.set("recentPersistence", skipped("runtime-only activation"));
+      return stages.activated();
     }
 
     const selection: PiSwitchSelection = {
@@ -495,18 +489,19 @@ export function createSwitchLifecycle(
       console.warn("[pi-switch] write recent failed:", recentWritten.error);
     }
 
-    return {
-      kind: "activated",
-      stages: {
-        ...activatedStages,
-        selectionPersistence: persisted.ok
-          ? SUCCEEDED
-          : failed(persisted.error ?? "unknown selection persistence error"),
-        recentPersistence: recentWritten.ok
-          ? SUCCEEDED
-          : failed(recentWritten.error ?? "unknown recent persistence error"),
-      },
-    };
+    stages.set(
+      "selectionPersistence",
+      persisted.ok
+        ? SUCCEEDED
+        : failed(persisted.error ?? "unknown selection persistence error"),
+    );
+    stages.set(
+      "recentPersistence",
+      recentWritten.ok
+        ? SUCCEEDED
+        : failed(recentWritten.error ?? "unknown recent persistence error"),
+    );
+    return stages.activated();
   };
 
   return { install, activate };

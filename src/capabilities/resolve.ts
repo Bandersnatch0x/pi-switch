@@ -100,6 +100,37 @@ export function isMaxTokensResolved(
   return entry.source !== "unresolved" && typeof entry.value === "number" && entry.value > 0;
 }
 
+/** A maxTokens value an upstream catalog vouches for, offered as a one-key pin. */
+export type TrustedMaxTokensHint = {
+  value: number;
+  source: Extract<CapabilitySource, "models-dev" | "cc-meta">;
+  /**
+   * Carried through from the fact, not dropped: issue #63 requires stale
+   * last-good values to stay visibly stale. Pinning one is allowed, but the
+   * user has to see they are freezing an expired snapshot.
+   */
+  stale?: boolean;
+};
+
+/**
+ * Narrow a capability fact to a pinnable hint.
+ *
+ * Only upstream catalogs qualify. `user-override` is already the user's own
+ * value so there is nothing to sync from, and every other source is a guess or
+ * an absence that #63 refuses to present as authority.
+ */
+export function trustedMaxTokensHint(
+  entry: Pick<CapabilityEntry<number>, "value" | "source" | "stale">,
+): TrustedMaxTokensHint | undefined {
+  if (typeof entry.value !== "number" || entry.value <= 0) return undefined;
+  if (entry.source !== "models-dev" && entry.source !== "cc-meta") return undefined;
+  return {
+    value: entry.value,
+    source: entry.source,
+    ...(entry.stale ? { stale: true } : {}),
+  };
+}
+
 /** Resolve capability facts with deterministic priority + conflict/stale facts. */
 export function resolveModelCapabilities(input: LayerInputs): ResolvedCapabilities {
   const now = input.now ?? Date.now();

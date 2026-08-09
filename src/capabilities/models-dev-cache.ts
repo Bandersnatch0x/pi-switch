@@ -6,7 +6,7 @@
  * Runtime holds one instance and exposes thin facades for existing callers.
  */
 
-import { piSwitchCachePath } from "../settings.ts";
+import { piSwitchCachePath } from "../paths.ts";
 import {
   CAPABILITIES_FAILURE_COOLDOWN_MS,
   CAPABILITIES_TTL_MS,

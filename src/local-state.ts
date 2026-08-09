@@ -9,17 +9,15 @@ import type {
 import {
   clearAllModelMetaOverrides,
   migrateLegacySelection,
-  piSettingsPath,
-  piSwitchConfigPath,
-  recordRecentAndWrite,
   readPiSwitchConfig,
   readSelection,
-  togglePinAndWrite,
   writeModelMetaOverride,
   writeSelection,
   type FsLike,
   type ModelMetaScope,
 } from "./settings.ts";
+import { piSettingsPath, piSwitchConfigPath } from "./paths.ts";
+import { recordRecentAndWrite, togglePinAndWrite } from "./pins-recent.ts";
 
 export type StateWriteResult = { ok: boolean; error?: string };
 
@@ -74,7 +72,7 @@ export function createLocalState(options: {
       writeModelMetaOverride({ fs, configPath, pid }, provider, scope, modelMeta),
     clearModelMetaOverrides: (provider) =>
       clearAllModelMetaOverrides({ fs, configPath, pid }, provider),
-    togglePin: (entry) => togglePinAndWrite(fs, configPath, entry, pid),
-    recordRecent: (entry) => recordRecentAndWrite(fs, configPath, entry, pid),
+    togglePin: (entry) => togglePinAndWrite({ fs, configPath, pid }, entry),
+    recordRecent: (entry) => recordRecentAndWrite({ fs, configPath, pid }, entry),
   };
 }

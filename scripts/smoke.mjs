@@ -14,12 +14,11 @@ import { defaultDbPath, readProviders } from "../src/db.ts";
 import { resolveSqlitePath } from "../src/sqlite-path.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import {
-  piSettingsPath,
-  piSwitchConfigPath,
   readPiSwitchConfig,
   readSelection,
   resolveProviderOverride,
 } from "../src/settings.ts";
+import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { parseHeaderRulesFile, combineRules } from "../src/headers/rules.ts";
 import { buildHeaderVars } from "../src/headers/vars.ts";
 import { fetchRemoteModels } from "../src/models-fetch.ts";
@@ -175,13 +174,7 @@ async function main() {
       `upstream models probe: ${probeTarget.appType}/${probeTarget.displayName} (${probeTarget.baseUrl})`,
     );
     try {
-      const r = await fetchRemoteModels({
-        baseUrl: probeTarget.baseUrl,
-        apiKey: probeTarget.apiKey,
-        modelsUrl: probeTarget.modelsUrl,
-        isFullUrl: probeTarget.isFullUrl,
-        userAgent: ua,
-      });
+      const r = await fetchRemoteModels(probeTarget, { userAgent: ua });
       if (r.error) {
         console.log("models probe: FAIL", r.error);
       } else {

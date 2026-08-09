@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Runtime, type NodeIo } from "../extensions/runtime.ts";
 import { isModelsDevMiss, makeMiss, MODELS_DEV_API_URL } from "../src/capabilities/models-dev.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
-import { piSwitchCachePath } from "../src/settings.ts";
+import { piSwitchCachePath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 
 const SAMPLE_CATALOG = {

@@ -2,11 +2,14 @@
  * Target Doctor precheck subset (issue #45 / ticket 3).
  * Precheck is injectable; transport/doctor never hit network in unit tests.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { isSwitchable } from "../src/parse/index.ts";
 import type { CcProvider } from "../src/types.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
 import {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
+  capabilitySoftCheck,
   formatProbeResultJson,
   runProbe,
   runTargetDoctorPrecheck,
@@ -458,5 +461,89 @@ describe("runProbe precheck integration (ticket 3)", () => {
     expect(parsed.precheck.allowProbe).toBe(false);
     expect(parsed.stoppedReason).toBe("precheck");
     expect(parsed.requestCount).toBe(0);
+  });
+});
+
+describe("capabilitySoftCheck (registration decision -> precheck fact)", () => {
+  beforeAll(() => setLocale("en"));
+  afterAll(() => setLocale("en"));
+
+  const decide = (userMeta?: Record<string, unknown>) =>
+    resolveRegistrationCapability({
+      modelId: "m-probe",
+      api: "openai-completions",
+      baseUrl: "https://relay.example.com",
+      userMeta,
+    });
+
+  test("unresolved maxTokens fails closed with the exact-model fix", () => {
+    const check = capabilitySoftCheck({
+      decision: decide(),
+      providerLabel: "codex/relay",
+      modelId: "m-probe",
+    });
+    expect(check.status).toBe("fail");
+    expect(check.detail).toContain("codex/relay · m-probe");
+    expect(check.detail).toContain("maxTokens=unresolved");
+    expect(check.fix).toContain("/ps-override");
+    expect(check.fix).toContain("Session Model not switched");
+  });
+
+  test("a non-positive trusted value is still a blocked gate (value:0 parity)", () => {
+    // The doctor / precheck / ps-info paths used to re-spell this judgement
+    // and disagree with registration on value:0; the decision closes that.
+    const check = capabilitySoftCheck({
+      decision: decide({ maxTokens: 0 }),
+      providerLabel: "codex/relay",
+      modelId: "m-probe",
+    });
+    expect(check.status).toBe("fail");
+  });
+
+  test("conservative reasoning is a warn with a pin hint, not a fail", () => {
+    const check = capabilitySoftCheck({
+      decision: decide({ maxTokens: 8_192 }),
+      providerLabel: "codex/relay",
+      modelId: "m-probe",
+    });
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("reasoning=unknown→conservative false");
+    expect(check.fix).toContain("reasoning");
+  });
+
+  test("resolved reasoning and maxTokens pass with provenance in the detail", () => {
+    const check = capabilitySoftCheck({
+      decision: decide({ maxTokens: 8_192, reasoning: true }),
+      providerLabel: "codex/relay",
+      modelId: "m-probe",
+    });
+    expect(check.status).toBe("pass");
+    expect(check.detail).toContain("maxTokens=8192(user-override)");
+    expect(check.detail).toContain("reasoning=true(user-override)");
+    expect(check.fix).toBeUndefined();
+  });
+
+  test("stale models.dev last-good warns and names the cache file", () => {
+    const decision = decide({ reasoning: true });
+    const check = capabilitySoftCheck({
+      decision: {
+        ...decision,
+        maxTokensUnresolved: false,
+        resolved: {
+          ...decision.resolved,
+          maxTokens: {
+            value: 16_000,
+            source: "models-dev",
+            fetchedAt: "2020-01-01",
+            stale: true,
+          },
+        },
+      },
+      providerLabel: "codex/relay",
+      modelId: "m-probe",
+    });
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("models.dev@2020-01-01 stale");
+    expect(check.fix).toContain("pi-switch-cache.json");
   });
 });
