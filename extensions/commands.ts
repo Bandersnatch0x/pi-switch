@@ -5,8 +5,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CcProvider, ModelMetaOverride, PinEntry } from "../src/types.ts";
 import { API_MODEL_META } from "../src/types.ts";
-import { defaultDbPath } from "../src/db.ts";
-import { PI_MIN_VERSION } from "../src/settings.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
@@ -23,11 +21,9 @@ import { pickOverrideProvider } from "../src/ui/provider-override-pick.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
-import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
 import {
   ccMetaFrom,
   trustedMaxTokensHint,
-  type RegistrationCapabilityDecision,
   type TrustedMaxTokensHint,
 } from "../src/capabilities/registration.ts";
 import {
@@ -95,7 +91,7 @@ function maxTokensHintsFor(
   for (const modelId of modelIds) {
     const hint =
       trustedMaxTokensHint({
-        value: rt.modelsDevFor?.(modelId)?.maxTokens,
+        value: rt.modelsDevFor(modelId)?.maxTokens,
         source: "models-dev",
       }) ??
       trustedMaxTokensHint({ value: ccMeta?.maxTokens, source: "cc-meta" });
@@ -309,73 +305,7 @@ export async function runOverrideCommand(
 }
 
 export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<void> {
-  rt.reloadConfig();
-  rt.reloadHeaderRules();
-  // Force re-probe so doctor shows current fingerprint sources.
-  rt.invalidateVarsCache();
-  rt.headerVars();
-
-  const { providers, error, capabilities: schemaCapabilities } = rt.refreshSnapshot();
-  const sel = rt.state.readSelection();
-  const dbPath = defaultDbPath(rt.home);
-  const routingProbe = await rt.routingProbe();
-
-  // W4: refresh the selected model's capability fact when missing/stale, then resolve.
-  let capabilities:
-    | { modelId: string; decision: RegistrationCapabilityDecision }
-    | undefined;
-  let modelsDevCache: { state: "hit" | "miss" | "cold"; observedAt?: string } | undefined;
-  const selMatch = sel
-    ? providers.find(
-        (p) => p.id === sel.dbId && (!sel.appType || p.appType === sel.appType),
-      )
-    : undefined;
-  if (sel && selMatch && isSwitchable(selMatch)) {
-    const cached = rt.rawCacheEntry(sel.model);
-    if (!cached || rt.isCapabilitiesStale(cached)) {
-      await rt.refreshCapabilities([sel.model]);
-    }
-    capabilities = {
-      modelId: sel.model,
-      decision: rt.registrationDecisionFor(selMatch, sel.model),
-    };
-    // Issue #39: surface cache state after on-demand refresh.
-    const entry = rt.rawCacheEntry(sel.model);
-    if (!entry) {
-      modelsDevCache = { state: "cold" };
-    } else if (isModelsDevMiss(entry)) {
-      modelsDevCache = { state: "miss", observedAt: entry.observedAt };
-    } else {
-      modelsDevCache = { state: "hit", observedAt: entry.observedAt };
-    }
-  }
-
-  const report = runDoctor({
-    home: rt.home,
-    dbPath,
-    dbExists: rt.io.existsSync(dbPath),
-    sqlite3Path: rt.sqlite3Path || null,
-    sqlite3Tried: rt.sqlite3Tried,
-    providers,
-    providersError: error,
-    selection: sel,
-    config: rt.config,
-    headerRuleCount: rt.headerRules.length,
-    varsSummary: rt.varsSummary,
-    pins: rt.config.pins,
-    recent: rt.config.recent,
-    piVersion: rt.piVersion(),
-    piMinVersion: PI_MIN_VERSION,
-    fingerprintSnapshot: rt.fingerprintSnapshot(),
-    routingProbe,
-    capabilities,
-    modelsDevCache,
-    refreshFailure: rt.lastRefreshFailure(),
-    migrationSummary: rt.migrationSummary,
-    schemaCapabilities,
-    providerWireCompat: selMatch ? rt.providerWireCompatFor?.(selMatch) : undefined,
-    cacheRetentionEnv: process.env.PI_CACHE_RETENTION,
-  });
+  const report = runDoctor(await rt.doctorFacts());
 
   const text = formatDoctorReport(report);
   // Prefer multi-line notify when available; fall back to console.log so the
@@ -428,7 +358,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
 
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
-  const providerWireCompat = rt.providerWireCompatFor?.(provider);
+  const providerWireCompat = rt.providerWireCompatFor(provider);
   const decision = rt.registrationDecisionFor(provider, resolvedModelId);
   const config = buildProviderConfig(
     provider,

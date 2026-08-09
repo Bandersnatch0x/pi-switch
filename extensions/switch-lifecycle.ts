@@ -151,7 +151,7 @@ export function createSwitchLifecycle(
       rt.registrationOptsFor(provider),
     );
     // Fire-and-forget models.dev refresh after successful registration (issue #39).
-    if (ok) rt.scheduleModelsDevRefresh?.(modelId);
+    if (ok) rt.scheduleModelsDevRefresh(modelId);
     return ok;
   };
 
@@ -185,7 +185,7 @@ export function createSwitchLifecycle(
       rt.registrationOptsFor(provider),
     );
     if (!ok) return false;
-    for (const id of ids) rt.scheduleModelsDevRefresh?.(id);
+    for (const id of ids) rt.scheduleModelsDevRefresh(id);
     if (!rt.registeredPsNames.includes(provider.piName)) {
       rt.registeredPsNames = [...rt.registeredPsNames, provider.piName];
     }
