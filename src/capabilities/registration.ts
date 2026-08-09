@@ -20,6 +20,7 @@ import {
   type CapabilitySource,
   type ResolvedCapabilities,
 } from "./resolve.ts";
+import { tf } from "../ui/tui-locale.ts";
 
 // Deep-import compat: helpers live in layers.ts; keep prior registration
 // surface so existing `from "./registration.ts"` importers still resolve.
@@ -40,7 +41,11 @@ export type RegistrationCapabilityDecision = {
   reasoningConservative: boolean;
 };
 
-/** Redacted one-line decision for doctor/precheck (no secrets, no full URLs). */
+/**
+ * Redacted one-line decision for doctor/precheck (no secrets, no full URLs).
+ * Appends the stale last-good suffix when models.dev is expired, so every
+ * diagnostic site formats through this single exit instead of hand-rolling.
+ */
 export function formatCapabilityDecision(
   modelId: string,
   decision: RegistrationCapabilityDecision,
@@ -56,7 +61,11 @@ export function formatCapabilityDecision(
     decision.reasoningConservative
       ? "reasoning=unknown→conservative false"
       : `reasoning=${rs.value}(${rs.source})`;
-  return `${prefix}: ${maxPart} · ${reasonPart}`;
+  const staleSuffix =
+    mt.source === "models-dev" && mt.stale
+      ? tf("precheckStaleSuffix", { at: mt.fetchedAt ?? "?" })
+      : "";
+  return `${prefix}: ${maxPart} · ${reasonPart}${staleSuffix}`;
 }
 
 /**

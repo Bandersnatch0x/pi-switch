@@ -224,6 +224,11 @@ const zh = {
   docPinsBroken: "（{n} 条 dbId 失效）",
   docRoutingReach: "可达 {url}",
   docRoutingUnreach: "不可达 {url}（Direct 路径不受影响）",
+
+  precheckStaleSuffix: "；models.dev@{at} 过期（保留 last-good）",
+  precheckReasoningFix: "可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置",
+  precheckStaleFix: "过期：清缓存重拉（pi-switch-cache.json）或显式 override",
+  precheckNoSwitch: "不切换 Session Model",
 } as const;
 
 type Key = keyof typeof zh;
@@ -417,6 +422,11 @@ const en: Record<Key, string> = {
   docPinsBroken: " ({n} dbId stale)",
   docRoutingReach: "reachable {url}",
   docRoutingUnreach: "unreachable {url} (Direct path unaffected)",
+
+  precheckStaleSuffix: "; models.dev@{at} stale (keep last-good)",
+  precheckReasoningFix: "optional: pin reasoning via exact-model; runtime is conservatively false, not written back to config",
+  precheckStaleFix: "stale: clear cache and re-pull (pi-switch-cache.json) or set an explicit override",
+  precheckNoSwitch: "Session Model not switched",
 };
 
 export const STRINGS: Record<Locale, Record<Key, string>> = { zh, en };

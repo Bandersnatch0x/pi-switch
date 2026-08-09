@@ -2,10 +2,11 @@
  * Target Doctor precheck subset (issue #45 / ticket 3).
  * Precheck is injectable; transport/doctor never hit network in unit tests.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { isSwitchable } from "../src/parse/index.ts";
 import type { CcProvider } from "../src/types.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
+import { setLocale } from "../src/ui/tui-locale.ts";
 import {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
   capabilitySoftCheck,
@@ -464,6 +465,9 @@ describe("runProbe precheck integration (ticket 3)", () => {
 });
 
 describe("capabilitySoftCheck (registration decision -> precheck fact)", () => {
+  beforeAll(() => setLocale("en"));
+  afterAll(() => setLocale("en"));
+
   const decide = (userMeta?: Record<string, unknown>) =>
     resolveRegistrationCapability({
       modelId: "m-probe",
@@ -482,7 +486,7 @@ describe("capabilitySoftCheck (registration decision -> precheck fact)", () => {
     expect(check.detail).toContain("codex/relay · m-probe");
     expect(check.detail).toContain("maxTokens=unresolved");
     expect(check.fix).toContain("/ps-override");
-    expect(check.fix).toContain("不切换 Session Model");
+    expect(check.fix).toContain("Session Model not switched");
   });
 
   test("a non-positive trusted value is still a blocked gate (value:0 parity)", () => {
@@ -539,7 +543,7 @@ describe("capabilitySoftCheck (registration decision -> precheck fact)", () => {
       modelId: "m-probe",
     });
     expect(check.status).toBe("warn");
-    expect(check.detail).toContain("models.dev@2020-01-01 过期");
+    expect(check.detail).toContain("models.dev@2020-01-01 stale");
     expect(check.fix).toContain("pi-switch-cache.json");
   });
 });

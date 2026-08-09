@@ -66,34 +66,31 @@ export interface ProbePrecheckSoftCheck {
  */
 export function capabilitySoftCheck(input: {
   decision: RegistrationCapabilityDecision;
-  /** e.g. `${appType}/${displayName}` — display only, never a URL/key. */
+  /** e.g. `${appType}/${displayName}` - display only, never a URL/key. */
   providerLabel: string;
   modelId: string;
 }): ProbePrecheckSoftCheck {
   const { decision, providerLabel, modelId } = input;
   const mt = decision.resolved.maxTokens;
-  const staleWarn =
-    mt.source === "models-dev" && mt.stale
-      ? `；models.dev@${mt.fetchedAt ?? "?"} 过期（保留 last-good）`
-      : "";
-  const detail = formatCapabilityDecision(modelId, decision, providerLabel) + staleWarn;
+  const stale = mt.source === "models-dev" && Boolean(mt.stale);
+  // detail goes through formatCapabilityDecision, which now appends the
+  // stale suffix itself - no hand-rolled string here.
+  const detail = formatCapabilityDecision(modelId, decision, providerLabel);
 
   if (decision.maxTokensUnresolved) {
     return {
       status: "fail",
       detail,
-      fix:
-        `${tf("maxTokensUnresolvedFix", { model: modelId })}；` +
-        "不切换 Session Model",
+      fix: `${tf("maxTokensUnresolvedFix", { model: modelId })}；${tf("precheckNoSwitch")}`,
     };
   }
   return {
-    status: decision.reasoningConservative || staleWarn ? "warn" : "pass",
+    status: decision.reasoningConservative || stale ? "warn" : "pass",
     detail,
     fix: decision.reasoningConservative
-      ? `可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置`
-      : staleWarn
-        ? "过期：清缓存重拉（pi-switch-cache.json）或显式 override"
+      ? tf("precheckReasoningFix")
+      : stale
+        ? tf("precheckStaleFix")
         : undefined,
   };
 }
