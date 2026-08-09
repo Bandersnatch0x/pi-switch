@@ -17,12 +17,13 @@ import {
   type RepairRecipeMatch,
 } from "./recipes.ts";
 import { runProbe } from "./engine.ts";
-import type {
-  ProbeEngineOptions,
-  ProbeRunResult,
-  ProbeTarget,
-  ProbeTransport,
-  ProbePrecheckInput,
+import {
+  probeMaxTokensFor,
+  type ProbeEngineOptions,
+  type ProbeRunResult,
+  type ProbeTarget,
+  type ProbeTransport,
+  type ProbePrecheckInput,
 } from "./types.ts";
 
 // ── Plan ────────────────────────────────────────────────────────────────────
@@ -248,6 +249,10 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
   const expectedVersion = snapshot.version;
 
   const candidateTarget = applyPatchToTarget(plan.target, recipe.patch);
+  // Budget follows the ORIGINAL target: the reasoning-false recipe flips the
+  // very flag the budget keys off, and a model that still thinks would then be
+  // truncated into a false verification failure (#83).
+  const verifyMaxTokens = probeMaxTokensFor(plan.target, opts.maxTokens);
   const attempts: ProbeRunResult[] = [];
 
   for (let i = 0; i < CONSECUTIVE_PASSES_REQUIRED; i++) {
@@ -259,7 +264,7 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
       precheck: opts.precheck,
       maxRequests: opts.maxRequests,
       timeoutMs: opts.timeoutMs,
-      maxTokens: opts.maxTokens,
+      maxTokens: verifyMaxTokens,
       createSignal: opts.createSignal,
       now: opts.now,
     });

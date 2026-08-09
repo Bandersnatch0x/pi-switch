@@ -45,6 +45,7 @@ import {
 } from "../src/settings.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
+import { tf } from "../src/ui/tui-locale.ts";
 import {
   REPAIR_CASE_DETAIL_CUSTOM_TYPE,
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
@@ -480,7 +481,17 @@ function enrichTarget(
   const entry = resolveProviderOverride(rt.config.providerOverrides, provider);
   const meta = rt.modelMetaFor(provider, modelId);
   const out: ProbeTargetEnrichment = {};
-  if (meta?.reasoning !== undefined) out.reasoning = meta.reasoning;
+  if (meta?.reasoning !== undefined) {
+    out.reasoning = meta.reasoning;
+  } else {
+    // modelMetaFor is user-config only. Without this fallback a relay's
+    // reasoning model looks non-reasoning to the probe, which both skips the
+    // reasoning contract and starves the token budget (#83).
+    const resolved = rt.capabilitiesFor(provider, modelId).reasoning;
+    if (resolved.source !== "conservative-default" && resolved.value !== undefined) {
+      out.reasoning = resolved.value;
+    }
+  }
 
   const claudeForce =
     typeof entry?.claudeCodeCompat === "boolean"
@@ -668,8 +679,8 @@ async function buildPrecheck(
           (reasonConservative ? " · reasoning=unknown→conservative false" : "") +
           staleWarn,
         fix:
-          `在 providerOverrides 为 model "${target.modelId}" 写 exact-model ` +
-          `maxTokens（modelOverrides.<id>.maxTokens）；不切换 Session Model`,
+          `${tf("maxTokensUnresolvedFix", { model: target.modelId })}；` +
+          "不切换 Session Model",
       };
     } else {
       const parts = [
@@ -774,8 +785,8 @@ export async function runProbeCommand(
   const model = findOrRegisterProbeModel(pi, rt, ctx, provider, modelId);
   if (!model) {
     ctx.ui.notify(
-      `model not found in pi registry: ${provider.piName}/${modelId}` +
-        `（若 maxTokens 未解析，请先写 exact-model maxTokens override）`,
+      `model not found in pi registry: ${provider.piName}/${modelId}\n` +
+        tf("maxTokensUnresolvedFix", { model: modelId }),
       "error",
     );
     return;

@@ -567,7 +567,7 @@ export function runDoctor(input: DoctorInput): DoctorReport {
       status,
       detail,
       fix: failRows.length
-        ? tf("docFixCapabilitiesFail", { id: input.capabilities.modelId })
+        ? tf("maxTokensUnresolvedFix", { model: input.capabilities.modelId })
         : warnRows.length
           ? t("docFixCapabilitiesWarn")
           : undefined,

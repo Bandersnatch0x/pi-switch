@@ -13,7 +13,9 @@ export {
   DEFAULT_PROBE_CONTRACTS,
   PROBE_MAX_REQUESTS,
   PROBE_MAX_TOKENS,
+  PROBE_REASONING_MAX_TOKENS,
   PROBE_TIMEOUT_MS,
+  probeMaxTokensFor,
 } from "./types.ts";
 export type {
   ProbeAssistantMessage,

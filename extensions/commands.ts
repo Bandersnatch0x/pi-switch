@@ -26,6 +26,12 @@ import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
 import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
 import {
+  ccMetaFrom,
+  trustedMaxTokensHint,
+  type TrustedMaxTokensHint,
+} from "../src/capabilities/registration.ts";
+import { isMaxTokensResolved } from "../src/capabilities/resolve.ts";
+import {
   createEffectiveConfigSummary,
   formatEffectiveConfigSummary,
 } from "../src/effective-config.ts";
@@ -58,15 +64,60 @@ function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
   };
 }
 
-/** Protocol-tier fallback shown as 默认 in the dialog. */
+/**
+ * Protocol-tier fallback shown as 默认 in the dialog.
+ * Issue #63: maxTokens and reasoning have no protocol floor — showing one would
+ * promise a default that registration then refuses (maxTokens) or contradicts
+ * (reasoning resolves to a conservative false), so only contextWindow, which
+ * does have a structural default, is offered here.
+ */
 function tierMeta(provider: CcProvider): ModelMetaOverride | undefined {
   if (!provider.api) return undefined;
   const tier = API_MODEL_META[provider.api];
   return {
-    reasoning: tier.reasoning,
     contextWindow: tier.contextWindow,
-    maxTokens: tier.maxTokens,
   };
+}
+
+/**
+ * Exact-model maxTokens values backed by a trusted authority (#63 override prefill).
+ *
+ * Reads the trusted layers directly rather than the resolved winner: once the
+ * user pins a value it wins the chain, and the sync row has to stay visible so
+ * they can re-pin after models.dev moves.
+ */
+function maxTokensHintsFor(
+  rt: Runtime,
+  provider: CcProvider,
+  modelIds: string[],
+): Record<string, TrustedMaxTokensHint> | undefined {
+  const ccMeta = ccMetaFrom(provider.meta);
+  const out: Record<string, TrustedMaxTokensHint> = {};
+  for (const modelId of modelIds) {
+    const hint =
+      trustedMaxTokensHint({
+        value: rt.modelsDevFor?.(modelId)?.maxTokens,
+        source: "models-dev",
+      }) ??
+      trustedMaxTokensHint({ value: ccMeta?.maxTokens, source: "cc-meta" });
+    if (hint) out[modelId] = hint;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Actionable next step when the #63 maxTokens gate is what blocked the model.
+ * Undefined when maxTokens resolved, so unrelated failures stay unannotated.
+ */
+export function maxTokensUnresolvedFix(
+  rt: Runtime,
+  provider: CcProvider,
+  modelId: string,
+): string | undefined {
+  if (isMaxTokensResolved(rt.capabilitiesFor(provider, modelId).maxTokens)) {
+    return undefined;
+  }
+  return tf("maxTokensUnresolvedFix", { model: modelId });
 }
 
 function scopeText(scope: ModelMetaScope): string {
@@ -147,7 +198,9 @@ async function reapplyIfActive(
     ctx,
   );
   if (result.kind === "failed") {
-    ctx.ui?.notify?.(tf("overrideReapplyFailed", { error: result.error }), "warning");
+    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const message = tf("overrideReapplyFailed", { error: result.error });
+    ctx.ui?.notify?.(fix ? `${message}\n${fix}` : message, "warning");
   }
 }
 
@@ -185,6 +238,7 @@ async function openProviderOverride(
     modelOverrides: entry?.modelOverrides,
     base: rt.config.defaultModelMeta,
     tier: tierMeta(provider),
+    maxTokensHints: maxTokensHintsFor(rt, provider, models),
     models,
   };
 
@@ -389,10 +443,10 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
       typeof caps.maxTokens.value !== "number";
     ctx.ui?.notify?.(
       maxUnresolved
-        ? tf("effectiveConfigMaxUnresolved", {
+        ? `${tf("effectiveConfigMaxUnresolved", {
             provider: provider.displayName,
             model: resolvedModelId,
-          })
+          })}\n${tf("maxTokensUnresolvedFix", { model: resolvedModelId })}`
         : tf("effectiveConfigBuildFailed", {
             reason: provider.parseError ?? provider.displayName,
           }),
@@ -521,7 +575,11 @@ function notifyActivation(
       result.failedStage === "providerRegistration"
         ? t("stageProviderRegistration")
         : t("stageModelSwitch");
-    ctx.ui.notify(tf("activationFailed", { stage: label, error: result.error }), "error");
+    // #63: "cannot register provider" is opaque when the real cause is the
+    // maxTokens gate — name the fix instead of leaving the user guessing.
+    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const message = tf("activationFailed", { stage: label, error: result.error });
+    ctx.ui.notify(fix ? `${message}\n${fix}` : message, "error");
     return;
   }
 

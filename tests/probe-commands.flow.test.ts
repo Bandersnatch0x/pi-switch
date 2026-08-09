@@ -345,6 +345,69 @@ describe("runProbeCommand (command flow)", () => {
     expect(entries[0]!.type).toBe("ps-repair-case-detail");
   });
 
+  test("models.dev reasoning reaches the target even without a user override (#83)", async () => {
+    // modelMetaFor is user-config only. Before the fallback, a relay's reasoning
+    // model looked non-reasoning here: the reasoning contract was skipped and
+    // the run used the 32-token budget, so thinking models failed as false
+    // negatives.
+    const rt = makeRt(providers);
+    rt.capabilitiesFor = () =>
+      ({
+        contextWindow: { value: 128_000, source: "models-dev" },
+        maxTokens: { value: 8_192, source: "models-dev" },
+        reasoning: { value: true, source: "models-dev" },
+        vision: { value: false, source: "conservative-default" },
+        conflicts: [],
+      }) as never;
+
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx();
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.map((c) => c.contract)).toContain("reasoning");
+    expect(calls.every((c) => c.target.reasoning === true)).toBe(true);
+    expect(calls.every((c) => c.options.maxTokens === 2048)).toBe(true);
+  });
+
+  test("an explicit user reasoning=false still wins over the resolved chain", async () => {
+    const rt = makeRt(providers);
+    rt.modelMetaFor = (() => ({ maxTokens: 8_192, reasoning: false })) as never;
+    rt.capabilitiesFor = () =>
+      ({
+        contextWindow: { value: 128_000, source: "models-dev" },
+        maxTokens: { value: 8_192, source: "models-dev" },
+        reasoning: { value: true, source: "models-dev" },
+        vision: { value: false, source: "conservative-default" },
+        conflicts: [],
+      }) as never;
+
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx();
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.map((c) => c.contract)).not.toContain("reasoning");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.target.reasoning === false)).toBe(true);
+  });
+
   test("RPC picker can probe a non-session target without switching the session model", async () => {
     const providers = [provider("p1", "Relay One"), provider("p2", "Relay Two")];
     const calls: ProbeRequest[] = [];

@@ -8,7 +8,35 @@
 /** Hard budget for a single probe run. */
 export const PROBE_MAX_REQUESTS = 9;
 export const PROBE_TIMEOUT_MS = 15_000;
-export const PROBE_MAX_TOKENS = 32;
+/**
+ * Floor budget for every probe request (issue #83).
+ *
+ * The original 32 starved models that think before answering: they spent the
+ * whole budget on thinking and emitted no text or tool call, so the stage was
+ * scored as "relay does not support tools" — a false negative. The observed
+ * failures included a target that does NOT claim reasoning, so the floor has to
+ * cover the unannounced case on its own; the reasoning-claiming budget below is
+ * additional headroom, not the fix.
+ * ponytail: 256 is the issue's own calibration point, not a derived number —
+ * raise it if a quiet thinker still truncates.
+ */
+export const PROBE_MAX_TOKENS = 256;
+/** Extra headroom for targets that do claim reasoning (issue #83). */
+export const PROBE_REASONING_MAX_TOKENS = 2048;
+
+/**
+ * Output budget for one probe request.
+ * Single source of truth so the engine and repair verification cannot drift —
+ * verification must pass the ORIGINAL target, since the reasoning-false recipe
+ * flips the very flag this keys off.
+ */
+export function probeMaxTokensFor(
+  target: Pick<ProbeTarget, "reasoning">,
+  override?: number,
+): number {
+  if (override !== undefined) return override;
+  return target.reasoning ? PROBE_REASONING_MAX_TOKENS : PROBE_MAX_TOKENS;
+}
 
 /** Named, isolated, minimal interaction whose expected behavior determines evidence. */
 export type ProbeContractId = "basic" | "reasoning" | "tool";

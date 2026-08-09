@@ -24,6 +24,7 @@ import {
 // Deep-import compat: helpers live in layers.ts; keep prior registration
 // surface so existing `from "./registration.ts"` importers still resolve.
 export { ccMetaFrom, protocolCapabilityDefaults } from "./layers.ts";
+export { trustedMaxTokensHint, type TrustedMaxTokensHint } from "./resolve.ts";
 
 export type RegistrationCapabilityDecision = {
   /** Full resolved chain (for doctor / effective config / precheck). */
@@ -38,14 +39,6 @@ export type RegistrationCapabilityDecision = {
   /** True when reasoning came from the runtime conservative derivation. */
   reasoningConservative: boolean;
 };
-
-/** Human-readable message explaining how to resolve an unresolved maxTokens gate. */
-export function formatMaxTokensUnresolvedMessage(modelId: string): string {
-  return (
-    `在 providerOverrides 为 model "${modelId}" 写 exact-model maxTokens ` +
-    `(modelOverrides.<id>.maxTokens)，或等待 models.dev / CC Switch meta 提供权威值`
-  );
-}
 
 /** Redacted one-line decision for doctor/precheck (no secrets, no full URLs). */
 export function formatCapabilityDecision(

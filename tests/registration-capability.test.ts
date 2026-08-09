@@ -3,6 +3,7 @@ import { assembleCapabilityLayers } from "../src/capabilities/layers.ts";
 import {
   formatCapabilityDecision,
   resolveRegistrationCapability,
+  trustedMaxTokensHint,
 } from "../src/capabilities/registration.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
 
@@ -107,5 +108,48 @@ describe("resolveRegistrationCapability (#63)", () => {
     expect(line).toContain("conservative false");
     expect(line).not.toContain("secret");
     expect(line).not.toContain("key=");
+  });
+});
+
+describe("trustedMaxTokensHint (#63 override prefill)", () => {
+  test("only models.dev and CC Switch meta are offered as a pinnable value", () => {
+    expect(trustedMaxTokensHint({ value: 384_000, source: "models-dev" })).toEqual({
+      value: 384_000,
+      source: "models-dev",
+    });
+    expect(trustedMaxTokensHint({ value: 8_192, source: "cc-meta" })).toEqual({
+      value: 8_192,
+      source: "cc-meta",
+    });
+
+    // user-override is already the user's own value — nothing to sync from.
+    // The rest are guesses or absence, which #63 refuses to present as authority.
+    for (const source of [
+      "user-override",
+      "model-id-tag",
+      "host-adaptation",
+      "protocol-default",
+      "conservative-default",
+      "unresolved",
+    ] as const) {
+      expect(trustedMaxTokensHint({ value: 4_096, source })).toBeUndefined();
+    }
+  });
+
+  test("a trusted source without a usable number yields no hint", () => {
+    expect(
+      trustedMaxTokensHint({ value: undefined, source: "models-dev" }),
+    ).toBeUndefined();
+    expect(trustedMaxTokensHint({ value: 0, source: "cc-meta" })).toBeUndefined();
+  });
+
+  test("stale last-good models.dev is still pinnable (that is the point)", () => {
+    expect(
+      trustedMaxTokensHint({
+        value: 8_192,
+        source: "models-dev",
+        stale: true,
+      }),
+    ).toEqual({ value: 8_192, source: "models-dev", stale: true });
   });
 });
