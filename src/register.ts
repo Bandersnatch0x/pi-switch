@@ -94,43 +94,51 @@ export type BuiltProviderConfig = {
   models: BuiltModelConfig[];
 };
 
+/**
+ * Options for building/registering one provider's config.
+ * One shared type: buildProviderConfig and registerProvider used to declare
+ * two structurally-identical copies — a field added to one never reached the
+ * other until a call site broke.
+ */
+export interface ProviderRegistrationOpts {
+  rules: HeaderRule[];
+  overrideHeaders?: Record<string, string>;
+  /** fingerprint:"none" — skip defaults/provider-headers rules */
+  skipRules?: boolean;
+  vars?: Record<string, string>;
+  debug?: boolean;
+  onReject?: (name: string, reason: string) => void;
+  /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
+  modelMeta?: ModelMetaOverride;
+  /**
+   * Per-model resolver; wins over `modelMeta` when it returns a value.
+   * Lets one provider register models with different reasoning/ctx settings.
+   */
+  modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
+  /**
+   * Read-only models.dev cache lookup by exact model id (no network).
+   * Stale last-good entries are still used; missing key = layer absent.
+   */
+  modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
+  /**
+   * Pre-resolved Provider Chat wire fact (preferred).
+   */
+  providerWireCompat?: ResolvedProviderWireCompat;
+  /** Raw Provider-scoped wire override when providerWireCompat omitted. */
+  providerWireOverride?: ProviderWireCompat;
+  /**
+   * Exact-model tuple compat resolver (Chat #64 / Anthropic #67).
+   * Independent of model capability and Provider wire compat.
+   */
+  tupleCompatFor?: (modelId: string) =>
+    | { tuple?: ModelTupleCompat; legacyFlat?: ModelMetaOverride }
+    | undefined;
+}
+
 export function buildProviderConfig(
   provider: CcProvider,
   modelIds: string[],
-  opts: {
-    rules: HeaderRule[];
-    overrideHeaders?: Record<string, string>;
-    /** fingerprint:"none" — skip defaults/provider-headers rules */
-    skipRules?: boolean;
-    vars?: Record<string, string>;
-    debug?: boolean;
-    onReject?: (name: string, reason: string) => void;
-    /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
-    modelMeta?: ModelMetaOverride;
-    /**
-     * Per-model resolver; wins over `modelMeta` when it returns a value.
-     * Lets one provider register models with different reasoning/ctx settings.
-     */
-    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
-    /**
-     * Read-only models.dev cache lookup by exact model id (no network).
-     * Stale last-good entries are still used; missing key = layer absent.
-     */
-    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
-    /**
-     * Pre-resolved Provider Chat wire fact (preferred).
-     */
-    providerWireCompat?: ResolvedProviderWireCompat;
-    /** Raw Provider-scoped wire override when providerWireCompat omitted. */
-    providerWireOverride?: ProviderWireCompat;
-    /**
-     * Exact-model tuple compat resolver (Chat #64 / Anthropic #67).
-     * Independent of model capability and Provider wire compat.
-     */
-    tupleCompatFor?: (modelId: string) =>
-      | { tuple?: ModelTupleCompat; legacyFlat?: ModelMetaOverride }
-      | undefined;
-  },
+  opts: ProviderRegistrationOpts,
 ): BuiltProviderConfig | undefined {
   if (!isSwitchable(provider) || !provider.api) return undefined;
   const ids = modelIds.length ? modelIds : provider.configModels;
@@ -220,22 +228,7 @@ export function registerProvider(
   pi: PiRegisterApi,
   provider: CcProvider,
   modelIds: string[],
-  opts: {
-    rules: HeaderRule[];
-    overrideHeaders?: Record<string, string>;
-    skipRules?: boolean;
-    vars?: Record<string, string>;
-    debug?: boolean;
-    onReject?: (name: string, reason: string) => void;
-    modelMeta?: ModelMetaOverride;
-    modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
-    modelsDevFor?: (modelId: string) => ModelsDevCapabilities | undefined;
-    providerWireCompat?: ResolvedProviderWireCompat;
-    providerWireOverride?: ProviderWireCompat;
-    tupleCompatFor?: (modelId: string) =>
-      | { tuple?: ModelTupleCompat; legacyFlat?: ModelMetaOverride }
-      | undefined;
-  },
+  opts: ProviderRegistrationOpts,
 ): boolean {
   const config = buildProviderConfig(provider, modelIds, opts);
   if (!config) return false;

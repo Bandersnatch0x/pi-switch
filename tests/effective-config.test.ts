@@ -12,6 +12,7 @@ import type { BuiltProviderConfig } from "../src/register.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import type { CcProvider } from "../src/types.ts";
+import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 
 function provider(): CcProvider {
   return {
@@ -182,7 +183,7 @@ describe("effective config summary", () => {
     const notifications: string[] = [];
     const logs = spyOn(console, "log").mockImplementation(() => undefined);
     const currentProvider = provider();
-    const rt = {
+    const rt = completeFakeRuntime({
       config: { aliasCcs: false },
       headerRules: [],
       state: { readSelection: () => undefined },
@@ -199,30 +200,15 @@ describe("effective config summary", () => {
       headerVars: () => ({}),
       rejectSink: () => undefined,
       // Trusted maxTokens so registration is eligible under issue #63.
-      modelMetaFor: () => ({ contextWindow: 400_000, maxTokens: 32_000 }),
+      modelMetaFor: () => ({
+        contextWindow: 400_000,
+        maxTokens: 32_000,
+        reasoning: true,
+      }),
       providerWireCompatFor: () => undefined,
       modelsDevFor: () => undefined,
-      capabilitiesFor: () => ({
-        contextWindow: { value: 400_000, source: "user-override" },
-        maxTokens: { value: 32_000, source: "user-override" },
-        reasoning: { value: true, source: "user-override" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      }),
-      registrationDecisionFor: () => ({
-        resolved: {
-          contextWindow: { value: 400_000, source: "user-override" },
-          maxTokens: { value: 32_000, source: "user-override" },
-          reasoning: { value: true, source: "user-override" },
-          vision: { value: false, source: "conservative-default" },
-          conflicts: [],
-        },
-        meta: { contextWindow: 400_000, maxTokens: 32_000, reasoning: true },
-        maxTokensUnresolved: false,
-        reasoningConservative: false,
-      }),
       tupleCompatFor: () => undefined,
-    };
+    });
     const ctx = {
       model: { provider: currentProvider.piName, id: "gpt-5" },
       ui: {

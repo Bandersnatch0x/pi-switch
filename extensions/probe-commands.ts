@@ -605,17 +605,7 @@ function findOrRegisterProbeModel(
       api,
       provider,
       [modelId],
-      {
-        rules: rt.headerRules,
-        ...rt.headerOverrideOpts(provider),
-        vars: rt.headerVars(),
-        debug: rt.config.debug,
-        onReject: rt.rejectSink(),
-        modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-        modelsDevFor: (id) => rt.modelsDevFor?.(id),
-        providerWireCompat: rt.providerWireCompatFor?.(provider),
-        tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-      },
+      rt.registrationOptsFor(provider),
     );
   } catch {
     return undefined;

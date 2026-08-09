@@ -19,7 +19,7 @@ import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
-import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
+import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
   ProbeRunPrecheckSnapshot,
@@ -128,7 +128,10 @@ function makeRt(
   providers: CcProvider[],
   opts: { reasoning?: boolean } = {},
 ): Runtime {
-  return {
+  // completeFakeRuntime derives registrationDecisionFor/registrationOptsFor
+  // from these views through the real chain, so per-test overrides of
+  // modelMetaFor / modelsDevFor behave exactly like production.
+  return completeFakeRuntime({
     reloadConfig: () => undefined,
     refreshSnapshot: () => ({ providers, error: undefined }),
     readSelectionCached: () => undefined,
@@ -143,43 +146,17 @@ function makeRt(
     headerOverrideOpts: () => ({}),
     rejectSink: () => undefined,
     modelsDevFor: () => undefined,
+    providerWireCompatFor: () => undefined,
     headerVars: () => ({}),
-    capabilitiesFor: (provider: { api?: string | null; baseUrl: string }, modelId: string) => {
-      // Satisfies precheck capability soft-check when present.
-      void provider;
-      void modelId;
-      return {
-        contextWindow: { value: 128_000, source: "user-override" },
-        maxTokens: { value: 8_192, source: "user-override" },
-        reasoning: { value: Boolean(opts.reasoning), source: "user-override" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      };
-    },
-    // Real chain over the fake layers: user meta (modelMetaFor) wins over
-    // modelsDevFor, exactly like production registrationDecisionFor.
-    registrationDecisionFor(
-      this: Runtime,
-      provider: CcProvider,
-      modelId: string,
-    ) {
-      return resolveRegistrationCapability({
-        modelId,
-        api: provider.api,
-        baseUrl: provider.baseUrl,
-        userMeta: this.modelMetaFor(provider, modelId),
-        modelsDev: this.modelsDevFor(modelId),
-      });
-    },
     home: "/home/user",
     fsLike: (): FsLike =>
       ({
         existsSync: () => false,
         readFileSync: () => "",
       }) as unknown as FsLike,
-    io: { existsSync: () => false } as unknown as Runtime["io"],
+    io: { existsSync: () => false },
     routingProbe: async () => undefined,
-  } as unknown as Runtime;
+  }) as unknown as Runtime;
 }
 
 function makeCtx(

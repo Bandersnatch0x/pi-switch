@@ -430,17 +430,11 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     resolveListedModel(provider.configModels, modelId) ?? modelId;
   const providerWireCompat = rt.providerWireCompatFor?.(provider);
   const decision = rt.registrationDecisionFor(provider, resolvedModelId);
-  const config = buildProviderConfig(provider, [resolvedModelId], {
-    rules: rt.headerRules,
-    ...rt.headerOverrideOpts(provider),
-    vars: rt.headerVars(),
-    debug: rt.config.debug,
-    onReject: rt.rejectSink(),
-    modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-    modelsDevFor: (id) => rt.modelsDevFor?.(id),
-    providerWireCompat,
-    tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-  });
+  const config = buildProviderConfig(
+    provider,
+    [resolvedModelId],
+    rt.registrationOptsFor(provider),
+  );
   if (!config) {
     ctx.ui?.notify?.(
       decision.maxTokensUnresolved

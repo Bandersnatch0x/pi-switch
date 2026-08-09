@@ -45,6 +45,7 @@ import {
   resolveRegistrationCapability,
   type RegistrationCapabilityDecision,
 } from "../src/capabilities/registration.ts";
+import type { ProviderRegistrationOpts } from "../src/register.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
@@ -356,6 +357,25 @@ export class Runtime {
       modelsDev: this.modelsDevFor(modelId),
       ccMeta: ccMetaFrom(provider.meta),
     });
+  }
+
+  /**
+   * The full option bundle buildProviderConfig/registerProvider need for this
+   * provider. Lives here because Runtime owns every ingredient; call sites
+   * used to hand-copy these nine fields (four verbatim copies, one drifted).
+   */
+  registrationOptsFor(provider: CcProvider): ProviderRegistrationOpts {
+    return {
+      rules: this.headerRules,
+      ...this.headerOverrideOpts(provider),
+      vars: this.headerVars(),
+      debug: this.config.debug,
+      onReject: this.rejectSink(),
+      modelMetaFor: (id) => this.modelMetaFor(provider, id),
+      modelsDevFor: (id) => this.modelsDevFor(id),
+      providerWireCompat: this.providerWireCompatFor(provider),
+      tupleCompatFor: (id) => this.tupleCompatFor(provider, id),
+    };
   }
 
   get varsSummary(): VarsSummary | undefined {

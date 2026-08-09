@@ -144,17 +144,12 @@ export function createSwitchLifecycle(
   rt: Runtime,
 ): SwitchLifecycle {
   const register = (provider: CcProvider, modelId: string): boolean => {
-    const ok = registerProvider(asRegisterApi(pi), provider, [modelId], {
-      rules: rt.headerRules,
-      ...rt.headerOverrideOpts(provider),
-      vars: rt.headerVars(),
-      debug: rt.config.debug,
-      onReject: rt.rejectSink(),
-      modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-      modelsDevFor: (id) => rt.modelsDevFor?.(id),
-      providerWireCompat: rt.providerWireCompatFor?.(provider),
-      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-    });
+    const ok = registerProvider(
+      asRegisterApi(pi),
+      provider,
+      [modelId],
+      rt.registrationOptsFor(provider),
+    );
     // Fire-and-forget models.dev refresh after successful registration (issue #39).
     if (ok) rt.scheduleModelsDevRefresh?.(modelId);
     return ok;
@@ -183,17 +178,12 @@ export function createSwitchLifecycle(
   const registerModels = (provider: CcProvider, modelIds: string[]): boolean => {
     const ids = [...new Set(modelIds.map((id) => id.trim()).filter(Boolean))];
     if (!ids.length) return false;
-    const ok = registerProvider(asRegisterApi(pi), provider, ids, {
-      rules: rt.headerRules,
-      ...rt.headerOverrideOpts(provider),
-      vars: rt.headerVars(),
-      debug: rt.config.debug,
-      onReject: rt.rejectSink(),
-      modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-      modelsDevFor: (id) => rt.modelsDevFor?.(id),
-      providerWireCompat: rt.providerWireCompatFor?.(provider),
-      tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
-    });
+    const ok = registerProvider(
+      asRegisterApi(pi),
+      provider,
+      ids,
+      rt.registrationOptsFor(provider),
+    );
     if (!ok) return false;
     for (const id of ids) rt.scheduleModelsDevRefresh?.(id);
     if (!rt.registeredPsNames.includes(provider.piName)) {
