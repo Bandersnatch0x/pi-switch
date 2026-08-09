@@ -572,15 +572,7 @@ async function chooseProbeTarget(
     remoteCache: new Map<string, string[]>(),
     fetchRemote: async (provider) => {
       const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
-      const result = await fetchRemoteModels({
-        api: provider.api,
-        authHeader: provider.authHeader,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        modelsUrl: provider.modelsUrl,
-        isFullUrl: provider.isFullUrl,
-        userAgent: ua,
-      });
+      const result = await fetchRemoteModels(provider, { userAgent: ua });
       if (result.error) throw new Error(result.error);
       return result.models;
     },

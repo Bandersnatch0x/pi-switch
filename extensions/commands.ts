@@ -526,15 +526,7 @@ export async function runCommand(
       },
       fetchRemote: async (provider) => {
         const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
-        const r = await fetchRemoteModels({
-          api: provider.api,
-          authHeader: provider.authHeader,
-          baseUrl: provider.baseUrl,
-          apiKey: provider.apiKey,
-          modelsUrl: provider.modelsUrl,
-          isFullUrl: provider.isFullUrl,
-          userAgent: ua,
-        });
+        const r = await fetchRemoteModels(provider, { userAgent: ua });
         if (r.error) throw new Error(r.error);
         return r.models;
       },

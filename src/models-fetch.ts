@@ -1,5 +1,5 @@
 import { isBracket1mModelId, trimModelId } from "./parse/common.ts";
-import type { PiApi } from "./types.ts";
+import type { CcProvider, PiApi } from "./types.ts";
 
 /**
  * Model list URL candidates — port of cc-switch model_fetch.rs
@@ -27,7 +27,19 @@ const COMPAT_SUFFIXES = [
   "/claude",
 ];
 
-export interface ModelFetchInput {
+/** The provider facts model discovery needs — a CcProvider always qualifies. */
+export type ModelFetchProvider = Pick<
+  CcProvider,
+  "api" | "authHeader" | "baseUrl" | "apiKey" | "modelsUrl" | "isFullUrl"
+>;
+
+export interface ModelFetchOptions {
+  userAgent?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
+
+interface ModelFetchInput {
   api?: PiApi | null;
   authHeader?: boolean;
   baseUrl: string;
@@ -148,10 +160,24 @@ export function deriveFromFullUrl(full: string): string | undefined {
 /**
  * Fetch models trying candidates; only HTTP 404/405 advance to next.
  * Returns sorted unique ids or throws / returns error info.
+ *
+ * Field selection from the provider lives here, not at call sites: hand-copied
+ * subsets drift (a smoke-script copy once dropped api/authHeader and probed
+ * native Gemini through the wrong URL).
  */
 export async function fetchRemoteModels(
-  input: ModelFetchInput,
+  provider: ModelFetchProvider,
+  opts: ModelFetchOptions = {},
 ): Promise<{ models: string[]; error?: string; urlUsed?: string }> {
+  const input: ModelFetchInput = {
+    api: provider.api,
+    authHeader: provider.authHeader,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    modelsUrl: provider.modelsUrl,
+    isFullUrl: provider.isFullUrl,
+    ...opts,
+  };
   const candidates = buildModelUrlCandidates(input);
   if (!candidates.length) {
     return { models: [], error: "no model list candidates" };
