@@ -35,7 +35,6 @@ import {
 import { hasOwn, isPlainObject } from "./compat/wire-shared.ts";
 import {
   readJsonObjectLenient,
-  updateJsonObjectAtomic,
   type FsLike,
 } from "./json-file.ts";
 import {
@@ -97,18 +96,6 @@ export function readJsonFile(fs: FsLike, path: string): Record<string, unknown> 
   return readJsonObjectLenient(fs, path);
 }
 
-export function writeJsonAtomic(
-  fs: FsLike,
-  path: string,
-  data: Record<string, unknown>,
-  pid: number,
-): void {
-  updateJsonObjectAtomic(fs, path, pid, () => ({
-    document: data,
-    result: undefined,
-  }));
-}
-
 export function readSelection(fs: FsLike, settingsPath: string): PiSwitchSelection | undefined {
   const settings = readJsonFile(fs, settingsPath);
   const sel = settings[SETTINGS_KEY] as PiSwitchSelection | undefined;
@@ -130,24 +117,18 @@ export function writeSelection(
   sel: PiSwitchSelection,
   pid: number,
 ): { ok: boolean; error?: string } {
-  try {
-    updateJsonObjectAtomic(fs, settingsPath, pid, (settings) => ({
-      document: {
-        ...settings,
-        [SETTINGS_KEY]: {
-          dbId: sel.dbId,
-          model: sel.model.trim(),
-          tab: sel.tab,
-          appType: sel.appType,
-          provider: sel.provider,
-        },
-      },
-      result: undefined,
-    }));
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  // Same atomic envelope as pi-switch.json writers; the target here is
+  // settings.json (ConfigWriteTarget.configPath = whichever config file).
+  return editConfig({ fs, configPath: settingsPath, pid }, (settings) => ({
+    ...settings,
+    [SETTINGS_KEY]: {
+      dbId: sel.dbId,
+      model: sel.model.trim(),
+      tab: sel.tab,
+      appType: sel.appType,
+      provider: sel.provider,
+    },
+  }));
 }
 
 /**
@@ -790,26 +771,6 @@ export function pushRecentEntry(
   return [next, ...filtered].slice(0, Math.max(1, limit));
 }
 
-/** Persist pins array (full replace). */
-export function writePins(
-  fs: FsLike,
-  configPath: string,
-  pins: PinEntry[],
-  pid: number,
-): ConfigEditResult {
-  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, pins }));
-}
-
-/** Persist recent array (full replace). */
-export function writeRecent(
-  fs: FsLike,
-  configPath: string,
-  recent: RecentEntry[],
-  pid: number,
-): ConfigEditResult {
-  return editConfig({ fs, configPath, pid }, (raw) => ({ ...raw, recent }));
-}
-
 export type TogglePinWriteResult =
   | { ok: true; pins: PinEntry[]; pinned: boolean }
   | { ok: false; error: string; pins: PinEntry[]; pinned: boolean };
@@ -819,12 +780,10 @@ export type RecordRecentWriteResult =
   | { ok: false; error: string; recent: RecentEntry[] };
 
 export function togglePinAndWrite(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   entry: PinEntry,
-  pid: number,
 ): TogglePinWriteResult {
-  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
+  const edited = editConfigWithResult(target, (raw) => {
     const toggled = togglePinEntry(parsePins(raw.pins), entry);
     return {
       document: { ...raw, pins: toggled.pins },
@@ -838,24 +797,17 @@ export function togglePinAndWrite(
 }
 
 export function recordRecentAndWrite(
-  fs: FsLike,
-  configPath: string,
+  target: ConfigWriteTarget,
   entry: Omit<RecentEntry, "at"> & { at?: number },
-  pid: number,
 ): RecordRecentWriteResult {
-  const edited = editConfigWithResult({ fs, configPath, pid }, (raw) => {
-    const config = readPiSwitchConfig(
-      {
-        ...fs,
-        existsSync: (path) => path === configPath || fs.existsSync(path),
-        readFileSync: (path, encoding) =>
-          path === configPath
-            ? JSON.stringify(raw)
-            : fs.readFileSync(path, encoding),
-      },
-      configPath,
-    );
-    const next = pushRecentEntry(config.recent, entry, config.recentLimit);
+  const edited = editConfigWithResult(target, (raw) => {
+    // Parse the two fields we need straight off the in-flight document —
+    // recordRecent used to fake a whole FsLike just to reuse readPiSwitchConfig.
+    const limit =
+      typeof raw.recentLimit === "number" && raw.recentLimit > 0
+        ? Math.floor(raw.recentLimit)
+        : undefined;
+    const next = pushRecentEntry(parseRecent(raw.recent), entry, limit);
     return {
       document: { ...raw, recent: next },
       result: next,

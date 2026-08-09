@@ -174,6 +174,8 @@ export function migrateIdentityState(input: MigrationInput): IdentityMigrationSu
 
   // CAS writes; a conflict retry re-runs the updater against the latest
   // snapshot, and the migration is idempotent so re-running is safe.
+  // Deliberately NOT the editConfig envelope: migration must fail loud
+  // (throw to the caller), while editConfig maps failures to {ok:false}.
   updateJsonObjectAtomic(fs, settingsPath, pid, () => ({
     document: settings,
     result: undefined,

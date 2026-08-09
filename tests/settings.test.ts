@@ -9,11 +9,9 @@ import {
   readSelection,
   resolveProviderOverride,
   togglePinEntry,
-  writePins,
   writeModelMetaOverride,
   writeProviderModelMeta,
   writeProviderWireCompat,
-  writeRecent,
   writeSelection,
   type FsLike,
 } from "../src/settings.ts";
@@ -537,15 +535,6 @@ describe("pins and recent", () => {
     expect(recent[1]).toEqual({ dbId: "2", model: "b", at: 2 });
   });
 
-  test("writePins / writeRecent persist", () => {
-    const fs = memFs({ "/c.json": "{}" });
-    expect(writePins(fs, "/c.json", [{ dbId: "1", model: "m" }], 1).ok).toBe(true);
-    expect(writeRecent(fs, "/c.json", [{ dbId: "1", model: "m", at: 9 }], 1).ok).toBe(true);
-    const raw = JSON.parse(fs.store["/c.json"]);
-    expect(raw.pins).toEqual([{ dbId: "1", model: "m" }]);
-    expect(raw.recent).toEqual([{ dbId: "1", model: "m", at: 9 }]);
-  });
-
   test("readPiSwitchConfig parses pins/recent/defaultModelMeta", () => {
     const fs = memFs({
       "/c.json": JSON.stringify({
@@ -579,10 +568,10 @@ describe("pin appType round-trip (/ps p duplicate bug)", () => {
   test("togglePinAndWrite second toggle unpins instead of duplicating", () => {
     const fs = memFs({ "/c.json": "{}" });
     const entry = { dbId: "1", model: "m1", appType: "claude", label: "p · m1" };
-    const first = togglePinAndWrite(fs, "/c.json", entry, 1);
+    const first = togglePinAndWrite({ fs, configPath: "/c.json", pid: 1 }, entry);
     expect(first.ok).toBe(true);
     expect(first.pinned).toBe(true);
-    const second = togglePinAndWrite(fs, "/c.json", entry, 1);
+    const second = togglePinAndWrite({ fs, configPath: "/c.json", pid: 1 }, entry);
     expect(second.ok).toBe(true);
     expect(second.pinned).toBe(false);
     expect(second.pins).toEqual([]);
@@ -602,7 +591,10 @@ describe("pin appType round-trip (/ps p duplicate bug)", () => {
         ],
       }),
     });
-    const r = togglePinAndWrite(fs, "/c.json", { dbId: "1", model: "m1", appType: "claude" }, 1);
+    const r = togglePinAndWrite(
+      { fs, configPath: "/c.json", pid: 1 },
+      { dbId: "1", model: "m1", appType: "claude" },
+    );
     expect(r.pinned).toBe(false);
     expect(r.pins).toEqual([{ dbId: "2", model: "other" }]);
   });

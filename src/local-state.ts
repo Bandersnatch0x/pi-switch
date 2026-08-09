@@ -74,7 +74,7 @@ export function createLocalState(options: {
       writeModelMetaOverride({ fs, configPath, pid }, provider, scope, modelMeta),
     clearModelMetaOverrides: (provider) =>
       clearAllModelMetaOverrides({ fs, configPath, pid }, provider),
-    togglePin: (entry) => togglePinAndWrite(fs, configPath, entry, pid),
-    recordRecent: (entry) => recordRecentAndWrite(fs, configPath, entry, pid),
+    togglePin: (entry) => togglePinAndWrite({ fs, configPath, pid }, entry),
+    recordRecent: (entry) => recordRecentAndWrite({ fs, configPath, pid }, entry),
   };
 }
