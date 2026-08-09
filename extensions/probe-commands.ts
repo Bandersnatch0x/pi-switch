@@ -35,7 +35,7 @@ import {
   fingerprintHeaderTemplates,
   isFingerprintPreset,
 } from "../src/headers/fingerprints.ts";
-import { JsonFileConflictError, writeJsonObjectAtomic } from "../src/json-file.ts";
+import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
@@ -367,7 +367,8 @@ function contentHash(source: string): string {
 /**
  * Production RepairConfigStore with CAS against pi-switch.json.
  * version = content hash; commit re-checks the hash, then applies the patch
- * through the same atomic write path as manual edits.
+ * through editConfigStrict — the envelope's exact-source adapter (editConfig
+ * merge-retries; Repair must abort on concurrent edits instead).
  */
 export function createRepairConfigStore(deps: {
   /** pi-switch.json directory (production: rt.home). */
@@ -383,15 +384,6 @@ export function createRepairConfigStore(deps: {
   const readSource = (): string | undefined => {
     if (!fs.existsSync(path)) return undefined;
     return fs.readFileSync(path, "utf8");
-  };
-
-  const parseSource = (source: string | undefined): Record<string, unknown> => {
-    if (source === undefined) return {};
-    const value: unknown = JSON.parse(source);
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`invalid JSON object in ${path}`);
-    }
-    return value as Record<string, unknown>;
   };
 
   return {
@@ -425,49 +417,37 @@ export function createRepairConfigStore(deps: {
         };
       }
 
-      try {
-        const doc = parseSource(source);
-        const document = updateOverrideEntry(
-          doc,
-          provider,
-          (entry: MutableOverrideEntry) => {
-            if (patch.kind === "modelMeta") {
-              const map = entry.modelOverrides
-                ? { ...entry.modelOverrides }
-                : {};
-              map[patch.modelId] = { ...patch.modelMeta };
-              entry.modelOverrides = map;
-              entry.label = entry.label ?? provider.displayName;
-            } else if (patch.kind === "fingerprint") {
-              entry.fingerprint = patch.fingerprint;
-              if (patch.claudeCodeCompat) entry.claudeCodeCompat = true;
-            } else if (patch.kind === "geminiToolCompat") {
-              entry.geminiToolCompat = true;
+      const edited = editConfigStrict({ fs, configPath: path, pid }, source, (doc) =>
+        updateOverrideEntry(doc, provider, (entry: MutableOverrideEntry) => {
+          if (patch.kind === "modelMeta") {
+            const map = entry.modelOverrides
+              ? { ...entry.modelOverrides }
+              : {};
+            map[patch.modelId] = { ...patch.modelMeta };
+            entry.modelOverrides = map;
+            entry.label = entry.label ?? provider.displayName;
+          } else if (patch.kind === "fingerprint") {
+            entry.fingerprint = patch.fingerprint;
+            if (patch.claudeCodeCompat) entry.claudeCodeCompat = true;
+          } else if (patch.kind === "geminiToolCompat") {
+            entry.geminiToolCompat = true;
+          }
+          return entry;
+        }),
+      );
+      if (!edited.ok) {
+        return edited.reason === "conflict"
+          ? {
+              ok: false,
+              reason: "conflict",
+              message: "pi-switch.json changed concurrently; aborting",
             }
-            return entry;
-          },
-        );
-        // Strict CAS: write exactly against the source checked above. Unlike
-        // updateJsonObjectAtomic, this path never retries by merging a newer file.
-        writeJsonObjectAtomic(fs, path, document, pid, source);
-        return {
-          ok: true,
-          version: contentHash(JSON.stringify(document, null, 2)),
-        };
-      } catch (err) {
-        if (err instanceof JsonFileConflictError) {
-          return {
-            ok: false,
-            reason: "conflict",
-            message: "pi-switch.json changed concurrently; aborting",
-          };
-        }
-        return {
-          ok: false,
-          reason: "error",
-          message: err instanceof Error ? err.message : String(err),
-        };
+          : { ok: false, reason: "error", message: edited.message };
       }
+      return {
+        ok: true,
+        version: contentHash(JSON.stringify(edited.document, null, 2)),
+      };
     },
   };
 }

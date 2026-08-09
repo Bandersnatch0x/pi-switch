@@ -6,7 +6,9 @@
  */
 
 import {
+  JsonFileConflictError,
   updateJsonObjectAtomic,
+  writeJsonObjectAtomic,
   type FsLike,
   type JsonObject,
 } from "./json-file.ts";
@@ -67,5 +69,54 @@ export function editConfigWithResult<T>(
     return { ok: true, result };
   } catch (err) {
     return configEditError(err);
+  }
+}
+
+export type StrictEditResult =
+  | { ok: true; document: JsonObject }
+  | { ok: false; reason: "conflict" | "error"; message: string };
+
+/**
+ * Strict-CAS edit: parse exactly `expectedSource`, mutate, and write only if
+ * the file on disk still matches that source. Unlike editConfig this never
+ * merge-retries against a newer file — a concurrent external edit is a
+ * conflict to abort on, not something to absorb (Repair's commit semantics).
+ */
+export function editConfigStrict(
+  target: ConfigWriteTarget,
+  expectedSource: string | undefined,
+  mutate: (raw: JsonObject) => JsonObject,
+): StrictEditResult {
+  try {
+    let raw: JsonObject = {};
+    if (expectedSource !== undefined) {
+      const value: unknown = JSON.parse(expectedSource);
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`invalid JSON object in ${target.configPath}`);
+      }
+      raw = value as JsonObject;
+    }
+    const document = mutate(raw);
+    writeJsonObjectAtomic(
+      target.fs,
+      target.configPath,
+      document,
+      target.pid,
+      expectedSource,
+    );
+    return { ok: true, document };
+  } catch (err) {
+    if (err instanceof JsonFileConflictError) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message: err.message,
+      };
+    }
+    return {
+      ok: false,
+      reason: "error",
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 }
