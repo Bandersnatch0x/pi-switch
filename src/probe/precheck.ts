@@ -10,6 +10,11 @@
 import type { DoctorStatus } from "../doctor.ts";
 import { isSwitchable } from "../parse/index.ts";
 import type { CcProvider } from "../types.ts";
+import {
+  formatCapabilityDecision,
+  type RegistrationCapabilityDecision,
+} from "../capabilities/registration.ts";
+import { tf } from "../ui/tui-locale.ts";
 import type { ProbeTarget } from "./types.ts";
 
 /** Dimensions covered by the target precheck (not the full doctor suite). */
@@ -52,6 +57,45 @@ export interface ProbePrecheckSoftCheck {
   status: DoctorStatus;
   detail: string;
   fix?: string;
+}
+
+/**
+ * Capability soft check from the registration decision (issue #63/#83).
+ * Judges with the same booleans registration acts on — no re-derived
+ * "unresolved" spelling — and formats through formatCapabilityDecision.
+ */
+export function capabilitySoftCheck(input: {
+  decision: RegistrationCapabilityDecision;
+  /** e.g. `${appType}/${displayName}` — display only, never a URL/key. */
+  providerLabel: string;
+  modelId: string;
+}): ProbePrecheckSoftCheck {
+  const { decision, providerLabel, modelId } = input;
+  const mt = decision.resolved.maxTokens;
+  const staleWarn =
+    mt.source === "models-dev" && mt.stale
+      ? `；models.dev@${mt.fetchedAt ?? "?"} 过期（保留 last-good）`
+      : "";
+  const detail = formatCapabilityDecision(modelId, decision, providerLabel) + staleWarn;
+
+  if (decision.maxTokensUnresolved) {
+    return {
+      status: "fail",
+      detail,
+      fix:
+        `${tf("maxTokensUnresolvedFix", { model: modelId })}；` +
+        "不切换 Session Model",
+    };
+  }
+  return {
+    status: decision.reasoningConservative || staleWarn ? "warn" : "pass",
+    detail,
+    fix: decision.reasoningConservative
+      ? `可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置`
+      : staleWarn
+        ? "过期：清缓存重拉（pi-switch-cache.json）或显式 override"
+        : undefined,
+  };
 }
 
 /**

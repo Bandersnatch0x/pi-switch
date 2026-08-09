@@ -51,6 +51,7 @@ import {
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
   buildRepairCaseLayers,
   buildRepairPlan,
+  capabilitySoftCheck,
   defaultProbeTargetHighlight,
   executeRepairSwitchAction,
   findProviderForProbeTarget,
@@ -479,18 +480,13 @@ function enrichTarget(
   modelId: string,
 ): ProbeTargetEnrichment | undefined {
   const entry = resolveProviderOverride(rt.config.providerOverrides, provider);
-  const meta = rt.modelMetaFor(provider, modelId);
   const out: ProbeTargetEnrichment = {};
-  if (meta?.reasoning !== undefined) {
-    out.reasoning = meta.reasoning;
-  } else {
-    // modelMetaFor is user-config only. Without this fallback a relay's
-    // reasoning model looks non-reasoning to the probe, which both skips the
-    // reasoning contract and starves the token budget (#83).
-    const resolved = rt.capabilitiesFor(provider, modelId).reasoning;
-    if (resolved.source !== "conservative-default" && resolved.value !== undefined) {
-      out.reasoning = resolved.value;
-    }
+  // Registration's truth: user layer included, conservative-default excluded.
+  // A relay's reasoning model must reach the probe as reasoning (#83).
+  const decision = rt.registrationDecisionFor(provider, modelId);
+  const reasoning = decision.resolved.reasoning;
+  if (!decision.reasoningConservative && reasoning.value !== undefined) {
+    out.reasoning = reasoning.value;
   }
 
   const claudeForce =
@@ -650,48 +646,15 @@ async function buildPrecheck(
         }
       : undefined;
 
-  // Issue #63: surface unresolved maxTokens / conservative reasoning before network.
-  let capabilities: { status: "pass" | "warn" | "fail"; detail: string; fix?: string } | undefined;
-  if (provider) {
-    const resolved = rt.capabilitiesFor(provider, target.modelId);
-    const maxUnresolved =
-      resolved.maxTokens.source === "unresolved" ||
-      typeof resolved.maxTokens.value !== "number";
-    const reasonConservative = resolved.reasoning.source === "conservative-default";
-    const staleWarn =
-      resolved.maxTokens.source === "models-dev" && resolved.maxTokens.stale
-        ? `；models.dev@${resolved.maxTokens.fetchedAt ?? "?"} 过期（保留 last-good）`
-        : "";
-    const label = `${provider.appType}/${provider.displayName}`;
-    if (maxUnresolved) {
-      capabilities = {
-        status: "fail",
-        detail:
-          `${label} · ${target.modelId}: maxTokens=unresolved` +
-          (reasonConservative ? " · reasoning=unknown→conservative false" : "") +
-          staleWarn,
-        fix:
-          `${tf("maxTokensUnresolvedFix", { model: target.modelId })}；` +
-          "不切换 Session Model",
-      };
-    } else {
-      const parts = [
-        `maxTokens=${resolved.maxTokens.value}(${resolved.maxTokens.source})`,
-        reasonConservative
-          ? "reasoning=unknown→conservative false"
-          : `reasoning=${resolved.reasoning.value}(${resolved.reasoning.source})`,
-      ];
-      capabilities = {
-        status: reasonConservative || Boolean(staleWarn) ? "warn" : "pass",
-        detail: `${label} · ${target.modelId}: ${parts.join(" · ")}${staleWarn}`,
-        fix: reasonConservative
-          ? `可选：exact-model 钉 reasoning；当前运行时保守 false，不写回配置`
-          : staleWarn
-            ? "过期：清缓存重拉（pi-switch-cache.json）或显式 override"
-            : undefined,
-      };
-    }
-  }
+  // Issue #63: surface unresolved maxTokens / conservative reasoning before
+  // network — judged with registration's decision, formatted in one place.
+  const capabilities = provider
+    ? capabilitySoftCheck({
+        decision: rt.registrationDecisionFor(provider, target.modelId),
+        providerLabel: `${provider.appType}/${provider.displayName}`,
+        modelId: target.modelId,
+      })
+    : undefined;
 
   return runTargetDoctorPrecheck({
     target,

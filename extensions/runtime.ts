@@ -41,6 +41,10 @@ import {
   resolveModelCapabilities,
   type ResolvedCapabilities,
 } from "../src/capabilities/resolve.ts";
+import {
+  resolveRegistrationCapability,
+  type RegistrationCapabilityDecision,
+} from "../src/capabilities/registration.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
@@ -331,6 +335,27 @@ export class Runtime {
         ccMeta: ccMetaFrom(provider.meta),
       }),
     );
+  }
+
+  /**
+   * The registration-facing capability decision — same inputs buildProviderConfig
+   * resolves when it registers this model, so doctor / precheck / ps-info /
+   * notifications judge and display with registration's truth instead of
+   * re-deriving it from lower-level facts (three hand-rolled respellings of
+   * "maxTokens unresolved" disagreed on value:0 before this existed).
+   */
+  registrationDecisionFor(
+    provider: CcProvider,
+    modelId: string,
+  ): RegistrationCapabilityDecision {
+    return resolveRegistrationCapability({
+      modelId,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+      userMeta: this.modelMetaFor(provider, modelId),
+      modelsDev: this.modelsDevFor(modelId),
+      ccMeta: ccMetaFrom(provider.meta),
+    });
   }
 
   get varsSummary(): VarsSummary | undefined {

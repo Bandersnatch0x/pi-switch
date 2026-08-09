@@ -4,11 +4,26 @@ import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type { CcProvider } from "../src/types.ts";
+import type { RegistrationCapabilityDecision } from "../src/capabilities/registration.ts";
+import {
+  isMaxTokensResolved,
+  type ResolvedCapabilities,
+} from "../src/capabilities/resolve.ts";
 
 // Doctor badges are hardcoded-English by design; pin en so the [FAIL] assertion
 // is deterministic regardless of the test runner's LANG.
 beforeAll(() => setLocale("en"));
 afterAll(() => setLocale("en"));
+
+/** Doctor input is the registration decision; derive its booleans with the production gate. */
+function capDecision(resolved: ResolvedCapabilities): RegistrationCapabilityDecision {
+  return {
+    resolved,
+    meta: undefined,
+    maxTokensUnresolved: !isMaxTokensResolved(resolved.maxTokens),
+    reasoningConservative: resolved.reasoning.source === "conservative-default",
+  };
+}
 
 function mk(
   partial: Partial<CcProvider> & Pick<CcProvider, "id" | "displayName" | "appType">,
@@ -532,13 +547,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "m1",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 200000, source: "protocol-default" },
           maxTokens: { value: 64000, source: "user-override" },
           reasoning: { value: true, source: "user-override" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
     });
     const check = report.checks.find((c) => c.id === "capabilities");
@@ -557,13 +572,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "unknown-relay-model",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 128000, source: "protocol-default" },
           maxTokens: { value: undefined, source: "unresolved" },
           reasoning: { value: false, source: "conservative-default" },
           vision: { value: false, source: "conservative-default" },
           conflicts: [],
-        },
+        }),
       },
     });
     const check = report.checks.find((c) => c.id === "capabilities");
@@ -586,7 +601,7 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "m1",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 1000000, source: "models-dev", fetchedAt: "2026-04-24" },
           maxTokens: { value: 384000, source: "models-dev", fetchedAt: "2026-04-24" },
           reasoning: { value: true, source: "protocol-default" },
@@ -600,7 +615,7 @@ describe("runDoctor", () => {
               overriddenSource: "cc-meta",
             },
           ],
-        },
+        }),
       },
     });
     const check = report.checks.find((c) => c.id === "capabilities");
@@ -620,7 +635,7 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "m1",
-        resolved: {
+        decision: capDecision({
           contextWindow: {
             value: 1000000,
             source: "models-dev",
@@ -631,7 +646,7 @@ describe("runDoctor", () => {
           reasoning: { value: true, source: "protocol-default" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
     });
     const check = report.checks.find((c) => c.id === "capabilities");
@@ -650,13 +665,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "private-proxy-id",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 200000, source: "protocol-default" },
           maxTokens: { value: 64000, source: "protocol-default" },
           reasoning: { value: true, source: "protocol-default" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
       modelsDevCache: { state: "miss", observedAt: "2026-08-01T12:00:00.000Z" },
     });
@@ -676,13 +691,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "m1",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 200000, source: "protocol-default" },
           maxTokens: { value: 64000, source: "protocol-default" },
           reasoning: { value: true, source: "protocol-default" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
       modelsDevCache: { state: "cold" },
     });
@@ -702,13 +717,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "m1",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 200000, source: "protocol-default" },
           maxTokens: { value: 64000, source: "protocol-default" },
           reasoning: { value: true, source: "protocol-default" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
       refreshFailure: { at: Date.parse("2026-08-03T10:00:00.000Z"), message: "network down" },
     });
@@ -728,13 +743,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "deepseek-v4-flash[1M]",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 1000000, source: "model-id-tag" },
           maxTokens: { value: 32000, source: "protocol-default" },
           reasoning: { value: false, source: "protocol-default" },
           vision: { value: false, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
     });
     const check = report.checks.find((c) => c.id === "capabilities");
@@ -751,13 +766,13 @@ describe("runDoctor", () => {
       headerRuleCount: 1,
       capabilities: {
         modelId: "claude-fable-5",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 1000000, source: "host-adaptation" },
           maxTokens: { value: 64000, source: "protocol-default" },
           reasoning: { value: true, source: "protocol-default" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
     });
     const hostCheck = hostReport.checks.find((c) => c.id === "capabilities");
@@ -899,13 +914,13 @@ describe("runDoctor", () => {
       },
       capabilities: {
         modelId: "glm-4.6",
-        resolved: {
+        decision: capDecision({
           contextWindow: { value: 200000, source: "protocol-default" },
           maxTokens: { value: 64000, source: "user-override" },
           reasoning: { value: true, source: "user-override" },
           vision: { value: true, source: "protocol-default" },
           conflicts: [],
-        },
+        }),
       },
       routingProbe: { url: "http://127.0.0.1:15721", reachable: false },
     });

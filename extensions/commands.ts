@@ -23,14 +23,13 @@ import { pickOverrideProvider } from "../src/ui/provider-override-pick.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
-import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
 import { isModelsDevMiss } from "../src/capabilities/models-dev.ts";
 import {
   ccMetaFrom,
   trustedMaxTokensHint,
+  type RegistrationCapabilityDecision,
   type TrustedMaxTokensHint,
 } from "../src/capabilities/registration.ts";
-import { isMaxTokensResolved } from "../src/capabilities/resolve.ts";
 import {
   createEffectiveConfigSummary,
   formatEffectiveConfigSummary,
@@ -114,7 +113,7 @@ export function maxTokensUnresolvedFix(
   provider: CcProvider,
   modelId: string,
 ): string | undefined {
-  if (isMaxTokensResolved(rt.capabilitiesFor(provider, modelId).maxTokens)) {
+  if (!rt.registrationDecisionFor(provider, modelId).maxTokensUnresolved) {
     return undefined;
   }
   return tf("maxTokensUnresolvedFix", { model: modelId });
@@ -322,7 +321,9 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
   const routingProbe = await rt.routingProbe();
 
   // W4: refresh the selected model's capability fact when missing/stale, then resolve.
-  let capabilities: { modelId: string; resolved: ResolvedCapabilities } | undefined;
+  let capabilities:
+    | { modelId: string; decision: RegistrationCapabilityDecision }
+    | undefined;
   let modelsDevCache: { state: "hit" | "miss" | "cold"; observedAt?: string } | undefined;
   const selMatch = sel
     ? providers.find(
@@ -334,7 +335,10 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
     if (!cached || rt.isCapabilitiesStale(cached)) {
       await rt.refreshCapabilities([sel.model]);
     }
-    capabilities = { modelId: sel.model, resolved: rt.capabilitiesFor(selMatch, sel.model) };
+    capabilities = {
+      modelId: sel.model,
+      decision: rt.registrationDecisionFor(selMatch, sel.model),
+    };
     // Issue #39: surface cache state after on-demand refresh.
     const entry = rt.rawCacheEntry(sel.model);
     if (!entry) {
@@ -425,7 +429,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
   const providerWireCompat = rt.providerWireCompatFor?.(provider);
-  const caps = rt.capabilitiesFor(provider, resolvedModelId);
+  const decision = rt.registrationDecisionFor(provider, resolvedModelId);
   const config = buildProviderConfig(provider, [resolvedModelId], {
     rules: rt.headerRules,
     ...rt.headerOverrideOpts(provider),
@@ -438,11 +442,8 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
   });
   if (!config) {
-    const maxUnresolved =
-      caps.maxTokens.source === "unresolved" ||
-      typeof caps.maxTokens.value !== "number";
     ctx.ui?.notify?.(
-      maxUnresolved
+      decision.maxTokensUnresolved
         ? `${tf("effectiveConfigMaxUnresolved", {
             provider: provider.displayName,
             model: resolvedModelId,
@@ -467,7 +468,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     config,
     fingerprint,
     providerWireCompat,
-    reasoningConservative: caps.reasoning.source === "conservative-default",
+    reasoningConservative: decision.reasoningConservative,
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {
@@ -579,7 +580,9 @@ function notifyActivation(
   if (warnings.length) {
     ctx.ui.notify(tf("activationPartial", { warnings: warnings.join("\n- ") }), "warning");
   } else {
-    const metaHint = summarizeModelMeta(rt.modelMetaFor(provider, modelId));
+    const metaHint = summarizeModelMeta(
+      rt.registrationDecisionFor(provider, modelId).meta,
+    );
     ctx.ui.notify(
       tf("activationSuccess", {
         provider: provider.displayName,

@@ -10,6 +10,7 @@ import {
 } from "../src/effective-config.ts";
 import type { BuiltProviderConfig } from "../src/register.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function provider(): CcProvider {
@@ -208,6 +209,18 @@ describe("effective config summary", () => {
         vision: { value: false, source: "conservative-default" },
         conflicts: [],
       }),
+      registrationDecisionFor: () => ({
+        resolved: {
+          contextWindow: { value: 400_000, source: "user-override" },
+          maxTokens: { value: 32_000, source: "user-override" },
+          reasoning: { value: true, source: "user-override" },
+          vision: { value: false, source: "conservative-default" },
+          conflicts: [],
+        },
+        meta: { contextWindow: 400_000, maxTokens: 32_000, reasoning: true },
+        maxTokensUnresolved: false,
+        reasoningConservative: false,
+      }),
       tupleCompatFor: () => undefined,
     };
     const ctx = {
@@ -237,42 +250,37 @@ describe("effective config summary", () => {
 });
 
 describe("maxTokensUnresolvedFix (#63 guidance gate)", () => {
-  const rtWith = (maxTokens: { value?: number; source: string }) =>
+  // Real decision chain over an injected user layer: the gate under test is
+  // resolveRegistrationCapability's own, not a fake's re-spelling of it.
+  const rtWith = (userMaxTokens?: number) =>
     ({
-      capabilitiesFor: () => ({
-        contextWindow: { value: 128_000, source: "protocol-default" },
-        maxTokens,
-        reasoning: { value: false, source: "conservative-default" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      }),
+      registrationDecisionFor: (p: CcProvider, modelId: string) =>
+        resolveRegistrationCapability({
+          modelId,
+          api: p.api,
+          baseUrl: p.baseUrl,
+          userMeta:
+            userMaxTokens !== undefined ? { maxTokens: userMaxTokens } : undefined,
+        }),
     }) as never;
 
   test("names the model and the command when the gate blocks registration", () => {
-    const fix = maxTokensUnresolvedFix(
-      rtWith({ value: undefined, source: "unresolved" }),
-      provider(),
-      "relay-unknown",
-    );
+    const fix = maxTokensUnresolvedFix(rtWith(), provider(), "relay-unknown");
     expect(fix).toContain("relay-unknown");
     expect(fix).toContain("/ps-override");
   });
 
   test("stays silent when maxTokens resolved, so unrelated failures are not annotated", () => {
     expect(
-      maxTokensUnresolvedFix(
-        rtWith({ value: 32_000, source: "models-dev" }),
-        provider(),
-        "gpt-5",
-      ),
+      maxTokensUnresolvedFix(rtWith(32_000), provider(), "gpt-5"),
     ).toBeUndefined();
   });
 
   test("a non-positive trusted value is still a blocked gate, not a resolved one", () => {
     // registration refuses maxTokens <= 0, so the user must still be told how
     // to fix it rather than left with a bare "cannot register provider".
-    expect(
-      maxTokensUnresolvedFix(rtWith({ value: 0, source: "cc-meta" }), provider(), "m"),
-    ).toContain("/ps-override");
+    expect(maxTokensUnresolvedFix(rtWith(0), provider(), "m")).toContain(
+      "/ps-override",
+    );
   });
 });

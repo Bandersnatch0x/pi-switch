@@ -116,6 +116,12 @@ describe("runQuickSwitch", () => {
       refreshSnapshot: () => ({ providers, error: undefined }),
       config: { pins, recent },
       modelMetaFor: () => ({}),
+      registrationDecisionFor: () => ({
+        resolved: {} as never,
+        meta: {},
+        maxTokensUnresolved: false,
+        reasoningConservative: false,
+      }),
     };
     const lifecycle = {
       install() {},

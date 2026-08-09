@@ -95,6 +95,7 @@ export type {
 } from "./repair-case.ts";
 export {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
+  capabilitySoftCheck,
   runTargetDoctorPrecheck,
 } from "./precheck.ts";
 export type {

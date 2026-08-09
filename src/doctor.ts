@@ -22,7 +22,8 @@ import {
   KNOWN_PROVIDERS_COLUMNS,
   type DbCapabilities,
 } from "./db.ts";
-import type { ResolvedCapabilities, CapabilitySource } from "./capabilities/resolve.ts";
+import type { CapabilitySource } from "./capabilities/resolve.ts";
+import type { RegistrationCapabilityDecision } from "./capabilities/registration.ts";
 import type { IdentityMigrationSummary } from "./migration.ts";
 import { summarizeTiers } from "./tier.ts";
 import {
@@ -83,7 +84,7 @@ export interface DoctorInput {
   /** Routing probe result (W3). Undefined when probing disabled. */
   routingProbe?: { url: string; reachable: boolean };
   /** Resolved capability facts for the current model (W4). */
-  capabilities?: { modelId: string; resolved: ResolvedCapabilities };
+  capabilities?: { modelId: string; decision: RegistrationCapabilityDecision };
   /**
    * models.dev cache state for the selected model (issue #39).
    * miss/cold are informational only and never upgrade the check to warn.
@@ -486,7 +487,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
 
   // 11. capabilities (W4 + #63): provenance, conflicts, staleness, unresolved maxTokens
   if (input.capabilities) {
-    const cap = input.capabilities.resolved;
+    // Judged with registration's decision booleans; fieldLine below is the
+    // doctor-only provenance view, not a second judgement.
+    const decision = input.capabilities.decision;
+    const cap = decision.resolved;
     const fieldLine = (
       label: string,
       e: {
@@ -516,13 +520,10 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     };
     const failRows: string[] = [];
     const warnRows: string[] = [];
-    if (
-      cap.maxTokens.source === "unresolved" ||
-      typeof cap.maxTokens.value !== "number"
-    ) {
+    if (decision.maxTokensUnresolved) {
       failRows.push(`maxTokens=unresolved${t("docCapUnresolved")}`);
     }
-    if (cap.reasoning.source === "conservative-default") {
+    if (decision.reasoningConservative) {
       warnRows.push(`reasoning=unknown→conservative false${t("docCapReasoningUnknown")}`);
     }
     for (const c of cap.conflicts) {

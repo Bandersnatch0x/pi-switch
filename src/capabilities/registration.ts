@@ -122,42 +122,4 @@ export function resolveRegistrationCapability(input: {
   };
 }
 
-/**
- * Back-compat wrapper: returns registration meta, or a partial shell when
- * maxTokens is unresolved (callers that still need a number should use
- * resolveRegistrationCapability and gate on maxTokensUnresolved).
- *
- * Prefer resolveRegistrationCapability for new code.
- */
-export function resolveRegistrationMeta(input: {
-  modelId: string;
-  api: PiApi | null;
-  baseUrl: string;
-  userMeta?: ModelMetaOverride;
-  modelsDev?: ModelsDevCapabilities;
-  ccMeta?: CapabilityMeta;
-}): ModelMetaOverride {
-  const decision = resolveRegistrationCapability(input);
-  if (decision.meta) return decision.meta;
-  // Unresolved path: expose conservative reasoning + context only; omit maxTokens
-  // so register can detect absence and skip the model.
-  const defaults = protocolCapabilityDefaults(input.api);
-  const out: ModelMetaOverride = {
-    contextWindow:
-      typeof decision.resolved.contextWindow.value === "number"
-        ? decision.resolved.contextWindow.value
-        : defaults.contextWindow,
-    reasoning: decision.resolved.reasoning.value === true,
-  };
-  // Same compat merge as the resolved path (user > built-in).
-  const compat = mergeBuiltInCompatUnderUser(input.modelId, input.userMeta);
-  if (compat?.thinkingFormat) out.thinkingFormat = compat.thinkingFormat;
-  if (compat?.thinkingLevelMap) out.thinkingLevelMap = compat.thinkingLevelMap;
-  if (typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean") {
-    out.requiresReasoningContentOnAssistantMessages =
-      compat.requiresReasoningContentOnAssistantMessages;
-  }
-  return out;
-}
-
 export type { CapabilitySource, ResolvedCapabilities };

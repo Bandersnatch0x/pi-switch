@@ -19,6 +19,7 @@ import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
   ProbeRunPrecheckSnapshot,
@@ -154,6 +155,21 @@ function makeRt(
         vision: { value: false, source: "conservative-default" },
         conflicts: [],
       };
+    },
+    // Real chain over the fake layers: user meta (modelMetaFor) wins over
+    // modelsDevFor, exactly like production registrationDecisionFor.
+    registrationDecisionFor(
+      this: Runtime,
+      provider: CcProvider,
+      modelId: string,
+    ) {
+      return resolveRegistrationCapability({
+        modelId,
+        api: provider.api,
+        baseUrl: provider.baseUrl,
+        userMeta: this.modelMetaFor(provider, modelId),
+        modelsDev: this.modelsDevFor(modelId),
+      });
     },
     home: "/home/user",
     fsLike: (): FsLike =>
@@ -346,19 +362,17 @@ describe("runProbeCommand (command flow)", () => {
   });
 
   test("models.dev reasoning reaches the target even without a user override (#83)", async () => {
-    // modelMetaFor is user-config only. Before the fallback, a relay's reasoning
-    // model looked non-reasoning here: the reasoning contract was skipped and
-    // the run used the 32-token budget, so thinking models failed as false
-    // negatives.
+    // User config carries no reasoning here. Before the decision seam, a
+    // relay's reasoning model looked non-reasoning to the probe: the reasoning
+    // contract was skipped and the run used the 32-token budget, so thinking
+    // models failed as false negatives.
     const rt = makeRt(providers);
-    rt.capabilitiesFor = () =>
-      ({
-        contextWindow: { value: 128_000, source: "models-dev" },
-        maxTokens: { value: 8_192, source: "models-dev" },
-        reasoning: { value: true, source: "models-dev" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      }) as never;
+    rt.modelsDevFor = () => ({
+      maxTokens: 8_192,
+      reasoning: true,
+      observedAt: "2026-08-01",
+      source: "models-dev",
+    });
 
     const calls: ProbeRequest[] = [];
     const { pi } = makePi();
@@ -381,14 +395,12 @@ describe("runProbeCommand (command flow)", () => {
   test("an explicit user reasoning=false still wins over the resolved chain", async () => {
     const rt = makeRt(providers);
     rt.modelMetaFor = (() => ({ maxTokens: 8_192, reasoning: false })) as never;
-    rt.capabilitiesFor = () =>
-      ({
-        contextWindow: { value: 128_000, source: "models-dev" },
-        maxTokens: { value: 8_192, source: "models-dev" },
-        reasoning: { value: true, source: "models-dev" },
-        vision: { value: false, source: "conservative-default" },
-        conflicts: [],
-      }) as never;
+    rt.modelsDevFor = () => ({
+      maxTokens: 8_192,
+      reasoning: true,
+      observedAt: "2026-08-01",
+      source: "models-dev",
+    });
 
     const calls: ProbeRequest[] = [];
     const { pi } = makePi();
