@@ -28,8 +28,6 @@ import {
 } from "../src/compat/gemini-tool-compat.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { fetchRemoteModels } from "../src/models-fetch.ts";
-import { asRegisterApi } from "../src/pi-context.ts";
-import { registerProvider } from "../src/register.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import {
   fingerprintHeaderTemplates,
@@ -84,7 +82,10 @@ import {
   type ResolveProbeTargetResult,
 } from "../src/probe/index.ts";
 import type { Runtime } from "./runtime.ts";
-import type { SwitchLifecycle } from "./switch-lifecycle.ts";
+import {
+  createSwitchLifecycle,
+  type SwitchLifecycle,
+} from "./switch-lifecycle.ts";
 
 // ── Transport (production) ──────────────────────────────────────────────────
 
@@ -564,36 +565,6 @@ async function chooseProbeTarget(
   );
 }
 
-function findOrRegisterProbeModel(
-  pi: ExtensionAPI,
-  rt: Runtime,
-  ctx: PiSwitchCtx,
-  provider: CcProvider,
-  modelId: string,
-): unknown {
-  const registry = ctx.modelRegistry as
-    | { find: (p: string, m: string) => unknown }
-    | undefined;
-  const existing = registry?.find?.(provider.piName, modelId);
-  if (existing) return existing;
-
-  const api = asRegisterApi(pi);
-  if (typeof api.registerProvider !== "function") return undefined;
-  let registered = false;
-  try {
-    registered = registerProvider(
-      api,
-      provider,
-      [modelId],
-      rt.registrationOptsFor(provider),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!registered) return undefined;
-  return registry?.find?.(provider.piName, modelId);
-}
-
 // ── Precheck facts (production) ─────────────────────────────────────────────
 
 async function buildPrecheck(
@@ -661,6 +632,8 @@ export interface ProbeCommandDeps {
     providersError: string | undefined,
     target: ProbeTarget,
   ) => Promise<ProbeRunPrecheckSnapshot | undefined>;
+  /** Existing lifecycle in production; tests may use an uninstalled lifecycle. */
+  registrationLifecycle?: SwitchLifecycle;
 }
 
 export async function runProbeCommand(
@@ -707,15 +680,19 @@ export async function runProbeCommand(
     return;
   }
 
-  const model = findOrRegisterProbeModel(pi, rt, ctx, provider, modelId);
-  if (!model) {
+  const registration = (
+    deps.registrationLifecycle ?? createSwitchLifecycle(pi, rt)
+  ).ensureProbeTarget(ctx, provider, modelId);
+  if (registration.kind === "failed") {
     ctx.ui.notify(
       `model not found in pi registry: ${provider.piName}/${modelId}\n` +
+        `${registration.error}\n` +
         tf("maxTokensUnresolvedFix", { model: modelId }),
       "error",
     );
     return;
   }
+  const model = registration.model;
 
   const observations: RawProbeObservation[] = [];
   const transport = deps.transport ?? buildTransport(rt, ctx, observations);
@@ -763,14 +740,16 @@ export async function runRepairCommand(
   }
   const { target, provider, modelId } = resolved;
 
-  const model = findOrRegisterProbeModel(pi, rt, ctx, provider, modelId);
-  if (!model) {
+  const registration = lifecycle.ensureProbeTarget(ctx, provider, modelId);
+  if (registration.kind === "failed") {
     ctx.ui.notify(
-      `model not found in pi registry: ${provider.piName}/${modelId}`,
+      `model not found in pi registry: ${provider.piName}/${modelId}\n` +
+        registration.error,
       "error",
     );
     return;
   }
+  const model = registration.model;
 
   const precheck = deps.buildPrecheck
     ? await deps.buildPrecheck(rt, providers, error, target)

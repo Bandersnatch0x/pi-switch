@@ -148,6 +148,7 @@ function makeRt(
     modelsDevFor: () => undefined,
     providerWireCompatFor: () => undefined,
     headerVars: () => ({}),
+    scheduleModelsDevRefresh: () => undefined,
     home: "/home/user",
     fsLike: (): FsLike =>
       ({
@@ -221,6 +222,16 @@ function makeLifecycle(activateImpl?: () => unknown) {
   const activated: unknown[] = [];
   return {
     lifecycle: {
+      ensureProbeTarget: (
+        ctx: PiSwitchCtx,
+        targetProvider: CcProvider,
+        modelId: string,
+      ) => {
+        const model = ctx.modelRegistry?.find?.(targetProvider.piName, modelId);
+        return model
+          ? { kind: "ready", source: "existing", model }
+          : { kind: "failed", error: "model unavailable" };
+      },
       activate: async (target: unknown, _ctx: PiSwitchCtx) => {
         activated.push(target);
         if (activateImpl) return activateImpl();

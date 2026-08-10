@@ -110,9 +110,18 @@ export type ActivationResult =
       stages: ActivationStages;
     };
 
+export type ProbeTargetResult =
+  | { kind: "ready"; source: "existing" | "registered"; model: unknown }
+  | { kind: "failed"; error: string };
+
 export interface SwitchLifecycle {
   install(): void;
   activate(target: SwitchTarget, ctx: PiSwitchCtx): Promise<ActivationResult>;
+  ensureProbeTarget(
+    ctx: PiSwitchCtx,
+    provider: CcProvider,
+    modelId: string,
+  ): ProbeTargetResult;
 }
 
 const SUCCEEDED: ActivationStageResult = { status: "succeeded" };
@@ -179,16 +188,43 @@ export function createSwitchLifecycle(
   pi: ExtensionAPI,
   rt: Runtime,
 ): SwitchLifecycle {
-  const register = (provider: CcProvider, modelId: string): boolean => {
-    const ok = registerProvider(
-      asRegisterApi(pi),
-      provider,
-      [modelId],
-      rt.registrationOptsFor(provider),
-    );
-    // Fire-and-forget models.dev refresh after successful registration (issue #39).
-    if (ok) rt.scheduleModelsDevRefresh(modelId);
-    return ok;
+  type RegistrationOutcome =
+    | { kind: "registered" }
+    | { kind: "failed"; error: string };
+
+  const registerModels = (
+    provider: CcProvider,
+    modelIds: string[],
+  ): RegistrationOutcome => {
+    const ids = [...new Set(modelIds.map((id) => id.trim()).filter(Boolean))];
+    if (!ids.length) return { kind: "failed", error: "no model ids" };
+    try {
+      const result = registerProvider(
+        asRegisterApi(pi),
+        provider,
+        ids,
+        rt.registrationOptsFor(provider),
+      );
+      if (result.kind === "skipped") return { kind: "failed", error: result.error };
+      // Fire-and-forget models.dev refresh after successful registration (issue #39).
+      for (const id of result.modelIds) rt.scheduleModelsDevRefresh(id);
+      return { kind: "registered" };
+    } catch (error) {
+      return { kind: "failed", error: formatError(error) };
+    }
+  };
+
+  const registerSessionModels = (
+    provider: CcProvider,
+    modelIds: string[],
+  ): RegistrationOutcome => {
+    const result = registerModels(provider, modelIds);
+    if (result.kind === "registered") {
+      if (!rt.registeredPsNames.includes(provider.piName)) {
+        rt.registeredPsNames = [...rt.registeredPsNames, provider.piName];
+      }
+    }
+    return result;
   };
 
   const warnMissingSelection = (ctx?: PiSwitchCtx): void => {
@@ -203,29 +239,6 @@ export function createSwitchLifecycle(
       return;
     }
     console.warn("[pi-switch] saved dbId not available; keeping selection, not auto-switching");
-  };
-
-  /**
-   * Register one or more models on a provider; track piName for later cleanup.
-   * Multiple model ids are required so continue/resume can restore any recent
-   * session model without re-registering mid-restore (Pi restores before
-   * session_start).
-   */
-  const registerModels = (provider: CcProvider, modelIds: string[]): boolean => {
-    const ids = [...new Set(modelIds.map((id) => id.trim()).filter(Boolean))];
-    if (!ids.length) return false;
-    const ok = registerProvider(
-      asRegisterApi(pi),
-      provider,
-      ids,
-      rt.registrationOptsFor(provider),
-    );
-    if (!ok) return false;
-    for (const id of ids) rt.scheduleModelsDevRefresh(id);
-    if (!rt.registeredPsNames.includes(provider.piName)) {
-      rt.registeredPsNames = [...rt.registeredPsNames, provider.piName];
-    }
-    return true;
   };
 
   /** Merge selection + recent into per-provider model id sets for install. */
@@ -313,7 +326,12 @@ export function createSwitchLifecycle(
     // Fresh process install: replace any leftover tracking names.
     rt.registeredPsNames = [];
     for (const { provider, modelIds } of targets.values()) {
-      registerModels(provider, [...modelIds]);
+      const result = registerSessionModels(provider, [...modelIds]);
+      if (result.kind === "failed") {
+        console.warn(
+          `[pi-switch] install registration failed: ${provider.piName}: ${result.error}`,
+        );
+      }
     }
     // Normalize selection model id if it still holds a filtered [1M] tag.
     if (selection) {
@@ -355,7 +373,14 @@ export function createSwitchLifecycle(
       }
 
       const { provider, modelId, source } = target;
-      if (!registerModels(provider, [modelId])) return;
+      const registration = registerSessionModels(provider, [modelId]);
+      if (registration.kind !== "registered") {
+        ctx.ui?.notify?.(
+          `pi-switch: provider registration failed: ${registration.error}`,
+          "error",
+        );
+        return;
+      }
       const model = findRegisteredModel(ctx, provider.piName, modelId);
       if (!model) return;
 
@@ -403,17 +428,9 @@ export function createSwitchLifecycle(
     const { provider, modelId } = target;
     const stages = stageRecorder();
 
-    let registered = false;
-    try {
-      registered = register(provider, modelId);
-    } catch (error) {
-      return stages.failure("providerRegistration", formatError(error));
-    }
-    if (!registered) {
-      return stages.failure(
-        "providerRegistration",
-        provider.parseError ?? "cannot register provider",
-      );
+    const registered = registerModels(provider, [modelId]);
+    if (registered.kind !== "registered") {
+      return stages.failure("providerRegistration", registered.error);
     }
     stages.set("providerRegistration", SUCCEEDED);
 
@@ -504,5 +521,32 @@ export function createSwitchLifecycle(
     return stages.activated();
   };
 
-  return { install, activate };
+  const ensureProbeTarget = (
+    ctx: PiSwitchCtx,
+    provider: CcProvider,
+    modelId: string,
+  ): ProbeTargetResult => {
+    const existing = findRegisteredModel(ctx, provider.piName, modelId);
+    if (existing) return { kind: "ready", source: "existing", model: existing };
+
+    const api = asRegisterApi(pi);
+    if (typeof api.registerProvider !== "function") {
+      return { kind: "failed", error: "registerProvider is unavailable" };
+    }
+
+    const registered = registerModels(provider, [modelId]);
+    if (registered.kind !== "registered") {
+      return { kind: "failed", error: registered.error };
+    }
+
+    const model = findRegisteredModel(ctx, provider.piName, modelId);
+    return model
+      ? { kind: "ready", source: "registered", model }
+      : {
+          kind: "failed",
+          error: `model not found after register: ${provider.piName} / ${modelId}`,
+        };
+  };
+
+  return { install, activate, ensureProbeTarget };
 }

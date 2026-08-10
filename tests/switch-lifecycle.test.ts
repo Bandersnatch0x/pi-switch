@@ -89,6 +89,8 @@ function setup(options?: {
   branch?: Array<Record<string, unknown>>;
   /** Stub for Runtime.providerWireCompatFor (issue #62). */
   providerWireCompatFor?: Runtime["providerWireCompatFor"];
+  findModel?: (providerName: string, modelId: string) => unknown;
+  onRegister?: () => void;
 }) {
   const home = "/home/test";
   const settingsPath = `${home}/.pi/agent/settings.json`;
@@ -124,6 +126,7 @@ function setup(options?: {
         models?: Array<{ id: string; compat?: { supportsStore?: boolean } }>;
       },
     ) => {
+      options?.onRegister?.();
       operations.push({
         op: "register",
         name,
@@ -185,6 +188,7 @@ function setup(options?: {
     modelRegistry: {
       find: (name: string, modelId?: string) => {
         operations.push({ op: "find", name });
+        if (options?.findModel) return options.findModel(name, modelId ?? "gpt-5");
         return { provider: name, id: modelId ?? "gpt-5" };
       },
     },
@@ -215,6 +219,38 @@ function setup(options?: {
 }
 
 describe("switch lifecycle interface", () => {
+  test("ensureProbeTarget registers a missing model without changing Session Model state", () => {
+    let registered = false;
+    const state = setup({
+      onRegister: () => {
+        registered = true;
+      },
+      findModel: (providerName, modelId) =>
+        registered ? { provider: providerName, id: modelId } : undefined,
+    });
+
+    const result = state.lifecycle.ensureProbeTarget(
+      state.ctx,
+      provider(),
+      "gpt-5",
+    );
+
+    expect(result).toEqual({
+      kind: "ready",
+      source: "registered",
+      model: { provider: "ps-codex-new", id: "gpt-5" },
+    });
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "find",
+      "register",
+      "find",
+    ]);
+    expect(state.runtime.registeredPsNames).toEqual(["ps-claude-old"]);
+    expect(readSelection(state.fs, state.settingsPath)).toBeUndefined();
+    expect(readPiSwitchConfig(state.fs, state.configPath).recent).toBeUndefined();
+    expect(state.runtime.scheduleCalls).toEqual(["gpt-5"]);
+  });
+
   test("activate commits register, setModel, cleanup, and selection in order", async () => {
     const state = setup();
     const result = await state.lifecycle.activate(
