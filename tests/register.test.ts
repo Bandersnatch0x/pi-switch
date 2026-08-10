@@ -1,5 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { buildProviderConfig } from "../src/register.ts";
+import {
+  buildProviderConfig,
+  registerProvider,
+  type PiRegisterApi,
+} from "../src/register.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { ModelsDevCapabilities } from "../src/capabilities/models-dev.ts";
@@ -26,6 +30,50 @@ const md = (partial: Partial<ModelsDevCapabilities> = {}): ModelsDevCapabilities
   observedAt: "2026-07-31T00:00:00Z",
   source: "models-dev",
   ...partial,
+});
+
+describe("registerProvider", () => {
+  test("returns the registered model ids", () => {
+    const registered: string[] = [];
+    const result = registerProvider(
+      {
+        registerProvider: (name) => registered.push(name),
+        setModel: () => true,
+      } satisfies PiRegisterApi,
+      mk({ id: "registered", appType: "codex" }),
+      ["m1"],
+      { rules: [], modelMeta: TRUSTED_MAX },
+    );
+
+    expect(result).toEqual({
+      kind: "registered",
+      providerName: "ps-codex-registered",
+      modelIds: ["m1"],
+    });
+    expect(registered).toEqual(["ps-codex-registered"]);
+  });
+
+  test("returns an explicit reason when no model is registerable", () => {
+    let called = false;
+    const target = mk({ id: "unresolved", appType: "codex" });
+    const result = registerProvider(
+      {
+        registerProvider: () => {
+          called = true;
+        },
+        setModel: () => true,
+      } satisfies PiRegisterApi,
+      target,
+      ["unknown-model"],
+      { rules: [] },
+    );
+
+    expect(result).toEqual({
+      kind: "skipped",
+      error: `no registerable models for ${target.piName}`,
+    });
+    expect(called).toBe(false);
+  });
 });
 
 describe("buildProviderConfig", () => {

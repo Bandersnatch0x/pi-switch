@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   buildRepairPlan,
+  createProbeVerifier,
   detectUniqueClientGate,
   isRecipeAdmitted,
   matchRepairRecipes,
@@ -399,8 +400,7 @@ describe("runRepair reuses ticket 4 pipeline for Recipe2 (ticket 5)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: { id: target.modelId },
-      transport,
+      verify: createProbeVerifier({ model: { id: target.modelId }, transport }),
       configStore: store,
     });
 
@@ -457,8 +457,7 @@ describe("runRepair reuses ticket 4 pipeline for Recipe2 (ticket 5)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -479,8 +478,7 @@ describe("runRepair reuses ticket 4 pipeline for Recipe2 (ticket 5)", () => {
       mode: "interactive",
       confirmed: false,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 

@@ -224,14 +224,27 @@ export function buildProviderConfig(
   };
 }
 
+export type RegisterProviderResult =
+  | { kind: "registered"; providerName: string; modelIds: string[] }
+  | { kind: "skipped"; error: string };
+
 export function registerProvider(
   pi: PiRegisterApi,
   provider: CcProvider,
   modelIds: string[],
   opts: ProviderRegistrationOpts,
-): boolean {
+): RegisterProviderResult {
   const config = buildProviderConfig(provider, modelIds, opts);
-  if (!config) return false;
+  if (!config) {
+    return {
+      kind: "skipped",
+      error: provider.parseError ?? `no registerable models for ${provider.piName}`,
+    };
+  }
   pi.registerProvider(provider.piName, config);
-  return true;
+  return {
+    kind: "registered",
+    providerName: provider.piName,
+    modelIds: config.models.map((model) => model.id),
+  };
 }

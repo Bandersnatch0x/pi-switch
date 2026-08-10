@@ -238,11 +238,11 @@ export function formatTuiLegend(theme?: ThemeLike): string {
   const g = (key: ThemeColor, s: string) =>
     typeof theme?.fg === "function" ? theme.fg(key, s) : s;
   return [
-    `${g("accent", GLYPH.cursor)}${t("cursor")}`,
-    `${GLYPH.pin}${t("pinned")}`,
-    `${GLYPH.override}${t("overridden")}`,
-    `${g("warning", GLYPH.blocked)}${t("blocked")}`,
-    `${g("success", GLYPH.active)}${t("active")}`,
+    `${g("accent", GLYPH.cursor)} ${t("cursor")}`,
+    `${GLYPH.pin} ${t("pinned")}`,
+    `${GLYPH.override} ${t("overridden")}`,
+    `${g("warning", GLYPH.blocked)} ${t("blocked")}`,
+    `${g("success", GLYPH.active)} ${t("active")}`,
   ].join("  ");
 }
 

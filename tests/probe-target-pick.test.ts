@@ -8,6 +8,7 @@ import { isSwitchable } from "../src/parse/index.ts";
 import type { CcProvider, PiSwitchSelection } from "../src/types.ts";
 import {
   buildRepairPlan,
+  createProbeVerifier,
   defaultProbeTargetHighlight,
   executeRepairSwitchAction,
   hasRepairSwitchAction,
@@ -367,8 +368,7 @@ describe("post-success switch action (ticket 8)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 

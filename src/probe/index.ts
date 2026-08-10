@@ -39,6 +39,8 @@ export type {
   ProbeTransport,
   ProbeTransportResult,
   ProbeUserMessage,
+  ProbeVerificationOptions,
+  ProbeVerifier,
 } from "./types.ts";
 
 export { PROBE_ECHO_TOOL, buildContractRequest } from "./contracts.ts";
@@ -106,7 +108,7 @@ export type {
   ProbePrecheckStatus,
   TargetDoctorPrecheckInput,
 } from "./precheck.ts";
-export { runProbe } from "./engine.ts";
+export { createProbeVerifier, runProbe } from "./engine.ts";
 export { formatProbeResultJson, formatProbeResultSummary } from "./format.ts";
 export {
   applyPatchToTarget,

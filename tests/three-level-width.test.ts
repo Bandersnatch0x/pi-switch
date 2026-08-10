@@ -132,6 +132,17 @@ describe("key hint formatting", () => {
     expect(footer).toContain("<dim> · </dim>");
   });
 
+  test("legend separates each glyph from its label", () => {
+    setLocale("en");
+    try {
+      expect(formatTuiLegend()).toBe(
+        "› cursor  ★ pinned  ⚙ overridden  ✕ blocked  ● active",
+      );
+    } finally {
+      setLocale("zh");
+    }
+  });
+
   test("legend only uses Pi-supported theme colors", () => {
     const supported = new Set([
       "accent",

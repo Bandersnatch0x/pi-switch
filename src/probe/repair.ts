@@ -16,14 +16,12 @@ import {
   type RepairRecipeId,
   type RepairRecipeMatch,
 } from "./recipes.ts";
-import { runProbe } from "./engine.ts";
 import {
   probeMaxTokensFor,
   type ProbeEngineOptions,
   type ProbeRunResult,
   type ProbeTarget,
-  type ProbeTransport,
-  type ProbePrecheckInput,
+  type ProbeVerifier,
 } from "./types.ts";
 
 // ── Plan ────────────────────────────────────────────────────────────────────
@@ -183,13 +181,11 @@ export interface RunRepairOptions {
    */
   confirmed: boolean;
   plan: RepairPlan;
-  /** Opaque model handle passed through to verification transport. */
-  model: unknown;
-  transport: ProbeTransport;
+  /** Reuses the model, transport, and precheck snapshot from the fresh probe. */
+  verify: ProbeVerifier;
   configStore: RepairConfigStore;
   /** Which recipe to try (default 0). At most one recipe is committed. */
   recipeIndex?: number;
-  precheck?: ProbePrecheckInput;
   maxRequests?: number;
   timeoutMs?: number;
   maxTokens?: number;
@@ -256,12 +252,9 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
   const attempts: ProbeRunResult[] = [];
 
   for (let i = 0; i < CONSECUTIVE_PASSES_REQUIRED; i++) {
-    const result = await runProbe({
+    const result = await opts.verify({
       target: candidateTarget,
-      model: opts.model,
-      transport: opts.transport,
       contracts: recipe.verifyContracts,
-      precheck: opts.precheck,
       maxRequests: opts.maxRequests,
       timeoutMs: opts.timeoutMs,
       maxTokens: verifyMaxTokens,

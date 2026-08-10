@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { installClaudeCodeCompat } from "../extensions/claude-code-compat.ts";
+import { installGeminiToolCompat } from "../extensions/gemini-tool-compat.ts";
 import { Runtime, type NodeIo } from "../extensions/runtime.ts";
 import { isModelsDevMiss, makeMiss, MODELS_DEV_API_URL } from "../src/capabilities/models-dev.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
@@ -237,5 +239,126 @@ describe("Runtime capabilities cache (issue #39)", () => {
     });
     await rt.refreshCapabilities(["x"]);
     expect(urls).toEqual([MODELS_DEV_API_URL]);
+  });
+});
+
+describe("effective provider compatibility", () => {
+  test("Claude live hook honors canonical nested provider override", () => {
+    const { rt } = makeIo();
+    const provider: CcProvider = {
+      id: "claude-relay",
+      piName: "ps-claude-relay",
+      displayName: "Claude Relay",
+      appType: "claude",
+      api: "anthropic-messages",
+      baseUrl: "https://relay.example",
+      apiKey: "",
+      authHeader: true,
+      configModels: ["claude-sonnet"],
+      meta: {},
+      isCurrentInCc: false,
+    };
+    rt.config = {
+      claudeCodeCompat: { mode: "always" },
+      providerOverrides: {
+        claude: {
+          [provider.id]: { claudeCodeCompat: false },
+        },
+      },
+    };
+    rt.lastGoodProviders = [provider];
+    rt.readSelectionCached = () => ({
+      appType: "claude",
+      dbId: provider.id,
+      provider: provider.piName,
+      model: provider.configModels[0],
+    });
+
+    const hooks = new Map<string, unknown>();
+    installClaudeCodeCompat(
+      {
+        on(event: string, handler: unknown) {
+          hooks.set(event, handler);
+        },
+      } as never,
+      rt,
+    );
+    const headers: Record<string, string> = {};
+    const beforeHeaders = hooks.get("before_provider_headers") as (event: {
+      headers: Record<string, string>;
+    }) => void;
+
+    beforeHeaders({ headers });
+
+    expect(headers).toEqual({});
+  });
+
+  test("Gemini live hook honors canonical nested provider override", () => {
+    const { rt } = makeIo();
+    const provider: CcProvider = {
+      id: "gemini-relay",
+      piName: "ps-gemini-relay",
+      displayName: "Gemini Relay",
+      appType: "gemini",
+      api: "google-generative-ai",
+      baseUrl: "https://relay.example",
+      apiKey: "",
+      authHeader: true,
+      configModels: ["gemini-2.0-flash"],
+      meta: {},
+      isCurrentInCc: false,
+    };
+    rt.config = {
+      geminiToolCompat: { mode: "always" },
+      providerOverrides: {
+        gemini: {
+          [provider.id]: { geminiToolCompat: false },
+        },
+      },
+    };
+    rt.lastGoodProviders = [provider];
+    rt.readSelectionCached = () => ({
+      appType: "gemini",
+      dbId: provider.id,
+      provider: provider.piName,
+      model: provider.configModels[0],
+    });
+
+    const hooks = new Map<string, unknown>();
+    installGeminiToolCompat(
+      {
+        on(event: string, handler: unknown) {
+          hooks.set(event, handler);
+        },
+      } as never,
+      rt,
+    );
+    const payload = {
+      model: provider.configModels[0],
+      contents: [],
+      config: {
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "read",
+                parametersJsonSchema: {
+                  type: "object",
+                  properties: { path: { type: "string" } },
+                  required: ["path"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const beforeRequest = hooks.get("before_provider_request") as (event: {
+      payload: unknown;
+    }) => unknown;
+
+    const result = beforeRequest({ payload });
+
+    expect(result).toBe(payload);
   });
 });

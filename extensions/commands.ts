@@ -630,7 +630,7 @@ export function registerCommands(
   pi.registerCommand("ps-probe", {
     description: t("cmdProbeDescription"),
     handler: async (_args, ctx) => {
-      await runProbeCommand(pi, rt, ctx);
+      await runProbeCommand(pi, rt, ctx, { registrationLifecycle: lifecycle });
     },
   });
 
