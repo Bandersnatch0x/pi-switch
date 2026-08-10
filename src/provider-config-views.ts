@@ -30,8 +30,28 @@ export interface TupleCompatSelection {
   legacyFlat?: ModelMetaOverride;
 }
 
+export interface EffectiveProviderCompatibility {
+  claudeCodeCompat?: boolean;
+  geminiToolCompat?: boolean;
+}
+
 export class ProviderConfigViews {
   constructor(private readonly getConfig: () => PiSwitchConfig) {}
+
+  effectiveCompatibilityFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName"> & { appType?: string },
+  ): EffectiveProviderCompatibility {
+    const entry = resolveProviderOverride(
+      this.getConfig().providerOverrides,
+      provider,
+    );
+    return {
+      claudeCodeCompat:
+        typeof entry?.claudeCodeCompat === "boolean" ? entry.claudeCodeCompat : undefined,
+      geminiToolCompat:
+        typeof entry?.geminiToolCompat === "boolean" ? entry.geminiToolCompat : undefined,
+    };
+  }
 
   overridesFor(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {
     const ov = resolveProviderOverride(

@@ -73,36 +73,20 @@ function resolveCompatTarget(rt: Runtime): {
   provider?: CcProvider;
 } {
   const config: ClaudeCodeCompatConfig = rt.config.claudeCodeCompat ?? {};
-  // Ensure provider list is warm (install may have failed earlier, or DB updated).
-  if (!rt.lastGoodProviders.length) {
-    try {
-      rt.refreshSnapshot();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const selection = rt.readSelectionCached();
-  let provider = selection
-    ? rt.lastGoodProviders.find((p) => p.id === selection.dbId)
-    : undefined;
-
-  // Fallback: match by registered piName (settings.defaultProvider / selection.provider).
-  if (!provider && selection?.provider) {
-    provider = rt.lastGoodProviders.find((p) => p.piName === selection.provider);
-  }
+  const session = rt.sessionCompatibilityTarget();
+  const provider = session.provider;
 
   if (!provider) {
     // Heuristic: selection.provider name contains anyrouter → treat as anyrouter host.
-    const nameHint = (selection?.provider ?? "").toLowerCase();
+    const nameHint = (session.providerName ?? "").toLowerCase();
     if (nameHint.includes("anyrouter") && (config.mode ?? "auto") !== "never") {
       return {
         apply: true,
         config,
         provider: {
-          id: selection?.dbId ?? "unknown",
-          piName: selection?.provider ?? "anyrouter",
-          displayName: selection?.provider ?? "anyrouter",
+          id: session.dbId ?? "unknown",
+          piName: session.providerName ?? "anyrouter",
+          displayName: session.providerName ?? "anyrouter",
           appType: "claude",
           api: "anthropic-messages",
           baseUrl: "https://anyrouter.top",
@@ -120,7 +104,7 @@ function resolveCompatTarget(rt: Runtime): {
     };
   }
 
-  const force = rt.config.providerOverrides?.[provider.id]?.claudeCodeCompat;
+  const force = session.compatibility.claudeCodeCompat;
   const apply = shouldApplyClaudeCodeCompat({
     mode: config.mode,
     hosts: config.hosts,

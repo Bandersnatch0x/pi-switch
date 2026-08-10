@@ -87,23 +87,8 @@ function resolveCompatTarget(rt: Runtime): {
   modelId?: string;
 } {
   const config: GeminiToolCompatConfig = rt.config.geminiToolCompat ?? {};
-
-  if (!rt.lastGoodProviders.length) {
-    try {
-      rt.refreshSnapshot();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const selection = rt.readSelectionCached();
-  let provider = selection
-    ? rt.lastGoodProviders.find((p) => p.id === selection.dbId)
-    : undefined;
-
-  if (!provider && selection?.provider) {
-    provider = rt.lastGoodProviders.find((p) => p.piName === selection.provider);
-  }
+  const session = rt.sessionCompatibilityTarget();
+  const provider = session.provider;
 
   if (!provider) {
     // Without a resolved provider we cannot confirm google-generative-ai.
@@ -112,7 +97,7 @@ function resolveCompatTarget(rt: Runtime): {
     return { apply: false, config };
   }
 
-  const force = rt.config.providerOverrides?.[provider.id]?.geminiToolCompat;
+  const force = session.compatibility.geminiToolCompat;
   const apply = shouldApplyGeminiToolCompat({
     mode: config.mode,
     hosts: config.hosts,
@@ -125,7 +110,7 @@ function resolveCompatTarget(rt: Runtime): {
     apply,
     config,
     provider,
-    modelId: selection?.model ?? provider.configModels[0],
+    modelId: session.modelId,
   };
 }
 

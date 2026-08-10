@@ -57,6 +57,7 @@ import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import type { ResolvedProviderWireCompat } from "../src/provider-wire-compat.ts";
 import {
   ProviderConfigViews,
+  type EffectiveProviderCompatibility,
   type TupleCompatSelection,
 } from "../src/provider-config-views.ts";
 import {
@@ -89,6 +90,14 @@ export type NodeIo = {
 };
 
 export type { FingerprintSnapshot, CapabilitiesCache, VarsSummary };
+
+export type SessionCompatibilityTarget = {
+  provider?: CcProvider;
+  dbId?: string;
+  providerName?: string;
+  modelId?: string;
+  compatibility: EffectiveProviderCompatibility;
+};
 
 export class Runtime {
   readonly io: NodeIo;
@@ -181,6 +190,34 @@ export class Runtime {
    */
   readSelectionCached(ttlMs = 1000): PiSwitchSelection | undefined {
     return this.selectionCache.get(ttlMs, () => this.state.readSelection());
+  }
+
+  sessionCompatibilityTarget(): SessionCompatibilityTarget {
+    if (!this.lastGoodProviders.length) this.refreshSnapshot();
+
+    const selection = this.readSelectionCached();
+    const matchesApp = (provider: CcProvider) =>
+      !selection?.appType || provider.appType === selection.appType;
+    let provider = selection
+      ? this.lastGoodProviders.find(
+          (candidate) => candidate.id === selection.dbId && matchesApp(candidate),
+        )
+      : undefined;
+    if (!provider && selection?.provider) {
+      provider = this.lastGoodProviders.find(
+        (candidate) => candidate.piName === selection.provider && matchesApp(candidate),
+      );
+    }
+
+    return {
+      provider,
+      dbId: selection?.dbId,
+      providerName: selection?.provider,
+      modelId: selection?.model ?? provider?.configModels[0],
+      compatibility: provider
+        ? this.providerViews.effectiveCompatibilityFor(provider)
+        : {},
+    };
   }
 
   loadConfig(): PiSwitchConfig {
