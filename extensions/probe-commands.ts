@@ -60,7 +60,6 @@ import {
   redactProbeText,
   resolveProbeTarget,
   selectProbeTarget,
-  runProbe,
   runRepair,
   runTargetDoctorPrecheck,
   type NormalizedProbeRunEvidence,
@@ -86,6 +85,10 @@ import {
   createSwitchLifecycle,
   type SwitchLifecycle,
 } from "./switch-lifecycle.ts";
+import {
+  createCompatibilityProbeExecutor,
+  type CompatibilityProbeExecutor,
+} from "./probe-executor.ts";
 
 // ── Transport (production) ──────────────────────────────────────────────────
 
@@ -636,6 +639,26 @@ export interface ProbeCommandDeps {
   registrationLifecycle?: SwitchLifecycle;
 }
 
+function buildProbeExecutor(
+  rt: Runtime,
+  lifecycle: SwitchLifecycle,
+  ctx: PiSwitchCtx,
+  providers: CcProvider[],
+  providersError: string | undefined,
+  deps: ProbeCommandDeps,
+): CompatibilityProbeExecutor {
+  return createCompatibilityProbeExecutor({
+    buildPrecheck: (target) =>
+      deps.buildPrecheck
+        ? deps.buildPrecheck(rt, providers, providersError, target)
+        : buildPrecheck(rt, providers, providersError, target),
+    ensureProbeTarget: (provider, modelId) =>
+      lifecycle.ensureProbeTarget(ctx, provider, modelId),
+    createTransport: (observations) =>
+      deps.transport ?? buildTransport(rt, ctx, observations),
+  });
+}
+
 export async function runProbeCommand(
   pi: ExtensionAPI,
   rt: Runtime,
@@ -656,60 +679,49 @@ export async function runProbeCommand(
   }
   const { target, provider, modelId } = resolved;
 
-  // Precheck runs before registry/network so unresolved maxTokens fails closed
-  // without inventing a registration or switching Session Model (issue #63).
-  const precheck = deps.buildPrecheck
-    ? await deps.buildPrecheck(rt, providers, error, target)
-    : await buildPrecheck(rt, providers, error, target);
-  if (precheck && precheck.status === "fail") {
-    const halt = {
-      ok: false as const,
-      target,
-      stages: [],
-      requestCount: 0,
-      stoppedReason: "precheck" as const,
-      budget: { maxRequests: 0, used: 0, maxTokens: 0, timeoutMs: 0 },
-      precheck,
-    };
-    reportPrecheckStop(ctx, "ps-probe", halt);
+  const execution = await buildProbeExecutor(
+    rt,
+    deps.registrationLifecycle ?? createSwitchLifecycle(pi, rt),
+    ctx,
+    providers,
+    error,
+    deps,
+  ).execute({ target, provider });
+  if (execution.kind === "precheck-stopped") {
+    reportPrecheckStop(ctx, "ps-probe", execution.result);
     // Headless / CI structured output (parity with post-runProbe path).
     if (ctx.mode === "json" || ctx.mode === "print") {
-      console.log(formatProbeResultJson(halt));
+      console.log(formatProbeResultJson(execution.result));
     }
-    recordProbeCase(pi, halt, []);
+    recordProbeCase(
+      pi,
+      execution.result,
+      execution.observations,
+      execution.evidence,
+    );
     return;
   }
-
-  const registration = (
-    deps.registrationLifecycle ?? createSwitchLifecycle(pi, rt)
-  ).ensureProbeTarget(ctx, provider, modelId);
-  if (registration.kind === "failed") {
+  if (execution.kind === "registration-failed") {
     ctx.ui.notify(
       `model not found in pi registry: ${provider.piName}/${modelId}\n` +
-        `${registration.error}\n` +
+        `${execution.error}\n` +
         tf("maxTokensUnresolvedFix", { model: modelId }),
       "error",
     );
     return;
   }
-  const model = registration.model;
 
-  const observations: RawProbeObservation[] = [];
-  const transport = deps.transport ?? buildTransport(rt, ctx, observations);
-
-  const result = await runProbe({
-    target,
-    model,
-    transport,
-    precheck,
-  });
-
-  reportProbeResult(ctx, result);
+  reportProbeResult(ctx, execution.result);
   // Headless / CI structured output (spec: ps-probe emits JSON without interaction).
   if (ctx.mode === "json" || ctx.mode === "print") {
-    console.log(formatProbeResultJson(result));
+    console.log(formatProbeResultJson(execution.result));
   }
-  recordProbeCase(pi, result, observations);
+  recordProbeCase(
+    pi,
+    execution.result,
+    execution.observations,
+    execution.evidence,
+  );
 }
 
 // ── Repair command ──────────────────────────────────────────────────────────
@@ -740,44 +752,36 @@ export async function runRepairCommand(
   }
   const { target, provider, modelId } = resolved;
 
-  const registration = lifecycle.ensureProbeTarget(ctx, provider, modelId);
-  if (registration.kind === "failed") {
+  const execution = await buildProbeExecutor(
+    rt,
+    lifecycle,
+    ctx,
+    providers,
+    error,
+    deps,
+  ).execute({ target, provider });
+  if (execution.kind === "registration-failed") {
     ctx.ui.notify(
       `model not found in pi registry: ${provider.piName}/${modelId}\n` +
-        registration.error,
+        execution.error,
       "error",
     );
     return;
   }
-  const model = registration.model;
-
-  const precheck = deps.buildPrecheck
-    ? await deps.buildPrecheck(rt, providers, error, target)
-    : await buildPrecheck(rt, providers, error, target);
-
-  const observations: RawProbeObservation[] = [];
-  const transport = deps.transport ?? buildTransport(rt, ctx, observations);
-
-  // /ps-repair re-probes fresh every run (evidence freshness).
-  const probeResult = await runProbe({
-    target,
-    model,
-    transport,
-    precheck,
-  });
-  if (probeResult.stoppedReason === "precheck") {
-    reportPrecheckStop(ctx, "ps-repair", probeResult);
-    recordProbeCase(pi, probeResult, observations);
+  if (execution.kind === "precheck-stopped") {
+    reportPrecheckStop(ctx, "ps-repair", execution.result);
+    recordProbeCase(
+      pi,
+      execution.result,
+      execution.observations,
+      execution.evidence,
+    );
     return;
   }
 
-  reportProbeResult(ctx, probeResult);
+  const { result: probeResult, observations, evidence, verify } = execution;
 
-  const evidence = normalizeProbeRun({
-    result: probeResult,
-    observations,
-    capturedAt: new Date().toISOString(),
-  });
+  reportProbeResult(ctx, probeResult);
   const plan = buildRepairPlan(evidence);
   if (plan.recipes.length === 0) {
     ctx.ui.notify(
@@ -818,10 +822,8 @@ export async function runRepairCommand(
     mode: "interactive",
     confirmed: true,
     plan,
-    model,
-    transport,
+    verify,
     configStore: store,
-    precheck,
   });
 
   notifyRepairOutcome(ctx, outcome);

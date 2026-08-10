@@ -251,3 +251,13 @@ export interface ProbeEngineOptions {
   /** Clock for synthetic message timestamps. */
   now?: () => number;
 }
+
+export type ProbeVerificationOptions = Omit<
+  ProbeEngineOptions,
+  "model" | "transport" | "precheck"
+>;
+
+/** Re-run Probe Contracts with a previously resolved execution context. */
+export type ProbeVerifier = (
+  options: ProbeVerificationOptions,
+) => Promise<ProbeRunResult>;

@@ -220,6 +220,7 @@ function expectRecordedPrecheckCase(
 
 function makeLifecycle(activateImpl?: () => unknown) {
   const activated: unknown[] = [];
+  const ensured: unknown[] = [];
   return {
     lifecycle: {
       ensureProbeTarget: (
@@ -227,6 +228,7 @@ function makeLifecycle(activateImpl?: () => unknown) {
         targetProvider: CcProvider,
         modelId: string,
       ) => {
+        ensured.push({ targetProvider, modelId });
         const model = ctx.modelRegistry?.find?.(targetProvider.piName, modelId);
         return model
           ? { kind: "ready", source: "existing", model }
@@ -239,6 +241,7 @@ function makeLifecycle(activateImpl?: () => unknown) {
       },
     } as unknown as SwitchLifecycle,
     activated,
+    ensured,
   };
 }
 
@@ -617,7 +620,7 @@ describe("runRepairCommand (command flow)", () => {
     const { pi, entries, sent } = makePi();
     const { ctx, msgs } = makeCtx();
     const { store, commits } = makeStore();
-    const { lifecycle, activated } = makeLifecycle();
+    const { lifecycle, activated, ensured } = makeLifecycle();
     let calls = 0;
     const transport: ProbeTransport = async () => {
       calls += 1;
@@ -631,6 +634,7 @@ describe("runRepairCommand (command flow)", () => {
     });
 
     expect(calls).toBe(0);
+    expect(ensured).toHaveLength(0);
     expect(commits).toHaveLength(0);
     expect(activated).toHaveLength(0);
     expect(msgs.some((m) => m.msg.startsWith("ps-repair stopped"))).toBe(true);

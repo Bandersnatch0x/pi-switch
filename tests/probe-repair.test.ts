@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildRepairPlan,
+  createProbeVerifier,
   matchRepairRecipes,
   PROBE_REASONING_MAX_TOKENS,
   runRepair,
@@ -289,8 +290,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "headless",
       confirmed: true,
       plan,
-      model: { id: target.modelId },
-      transport,
+      verify: createProbeVerifier({ model: { id: target.modelId }, transport }),
       configStore: store,
     });
 
@@ -309,8 +309,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: false,
       plan,
-      model: { id: target.modelId },
-      transport,
+      verify: createProbeVerifier({ model: { id: target.modelId }, transport }),
       configStore: store,
     });
 
@@ -333,8 +332,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -359,8 +357,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: { id: target.modelId },
-      transport,
+      verify: createProbeVerifier({ model: { id: target.modelId }, transport }),
       configStore: store,
     });
 
@@ -432,8 +429,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -473,8 +469,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -503,8 +498,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -546,8 +540,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -575,8 +568,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 
@@ -618,8 +610,7 @@ describe("runRepair pipeline (ticket 4)", () => {
       mode: "interactive",
       confirmed: true,
       plan,
-      model: {},
-      transport,
+      verify: createProbeVerifier({ model: {}, transport }),
       configStore: store,
     });
 

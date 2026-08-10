@@ -20,6 +20,7 @@ import {
   type ProbeStageResult,
   type ProbeStoppedReason,
   type ProbeTarget,
+  type ProbeVerifier,
 } from "./types.ts";
 
 function planContracts(
@@ -213,4 +214,11 @@ export async function runProbe(opts: ProbeEngineOptions): Promise<ProbeRunResult
     budget: budgetSnapshot(maxRequests, requestCount, maxTokens, timeoutMs),
     ...(precheck ? { precheck } : {}),
   };
+}
+
+/** Bind one resolved model/transport/precheck context for later verification. */
+export function createProbeVerifier(
+  context: Pick<ProbeEngineOptions, "model" | "transport" | "precheck">,
+): ProbeVerifier {
+  return (options) => runProbe({ ...options, ...context });
 }
