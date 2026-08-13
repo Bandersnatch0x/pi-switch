@@ -11,7 +11,7 @@ import type { DbReaderDeps } from "../src/db.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { isSwitchable } from "../src/parse/index.ts";
 import type { DoctorInput } from "../src/doctor.ts";
-import { type FsLike } from "../src/settings.ts";
+import { type FsLike } from "../src/json-file.ts";
 import { PI_MIN_VERSION } from "../src/settings.ts";
 import { createLocalState, type LocalState } from "../src/local-state.ts";
 import type { ProbeDeps } from "../src/headers/vars.ts";
@@ -38,20 +38,10 @@ import type {
   ModelsDevCacheEntry,
   ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
-import {
-  assembleCapabilityLayers,
-  ccMetaFrom,
-} from "../src/capabilities/layers.ts";
-import {
-  resolveModelCapabilities,
-  type ResolvedCapabilities,
-} from "../src/capabilities/resolve.ts";
-import {
-  resolveRegistrationCapability,
-  type RegistrationCapabilityDecision,
-} from "../src/capabilities/registration.ts";
+import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
+import type { RegistrationCapabilityDecision } from "../src/capabilities/registration.ts";
 import type { ProviderRegistrationOpts } from "../src/register.ts";
-import { resolveEffectiveModelMeta, type ModelMetaLayers } from "../src/model-meta.ts";
+import type { ModelMetaLayers } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import type { ResolvedProviderWireCompat } from "../src/provider-wire-compat.ts";
@@ -67,6 +57,11 @@ import {
 import { SelectionCache } from "../src/selection-cache.ts";
 import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
+import {
+  resolveRegistrationDecisionFor,
+  resolveCapabilitiesFor,
+  resolveSessionCompatibilityTarget,
+} from "./runtime-facades.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -195,29 +190,11 @@ export class Runtime {
   sessionCompatibilityTarget(): SessionCompatibilityTarget {
     if (!this.lastGoodProviders.length) this.refreshSnapshot();
 
-    const selection = this.readSelectionCached();
-    const matchesApp = (provider: CcProvider) =>
-      !selection?.appType || provider.appType === selection.appType;
-    let provider = selection
-      ? this.lastGoodProviders.find(
-          (candidate) => candidate.id === selection.dbId && matchesApp(candidate),
-        )
-      : undefined;
-    if (!provider && selection?.provider) {
-      provider = this.lastGoodProviders.find(
-        (candidate) => candidate.piName === selection.provider && matchesApp(candidate),
-      );
-    }
-
-    return {
-      provider,
-      dbId: selection?.dbId,
-      providerName: selection?.provider,
-      modelId: selection?.model ?? provider?.configModels[0],
-      compatibility: provider
-        ? this.providerViews.effectiveCompatibilityFor(provider)
-        : {},
-    };
+    return resolveSessionCompatibilityTarget({
+      lastGoodProviders: this.lastGoodProviders,
+      readSelectionCached: (ttl) => this.readSelectionCached(ttl),
+      effectiveCompatibilityFor: (p) => this.providerViews.effectiveCompatibilityFor(p),
+    });
   }
 
   loadConfig(): PiSwitchConfig {
@@ -368,18 +345,10 @@ export class Runtime {
 
   /** Resolve capability facts for a provider/model (full #36/#63 priority chain). */
   capabilitiesFor(provider: CcProvider, modelId: string): ResolvedCapabilities {
-    // User-config layers only — built-in compat is not a capability source.
-    const user = resolveEffectiveModelMeta(this.config, provider, modelId);
-    return resolveModelCapabilities(
-      assembleCapabilityLayers({
-        modelId,
-        api: provider.api,
-        baseUrl: provider.baseUrl,
-        user,
-        modelsDev: this.modelsDevFor(modelId),
-        ccMeta: ccMetaFrom(provider.meta),
-      }),
-    );
+    return resolveCapabilitiesFor(provider, modelId, {
+      config: this.config,
+      modelsDevFor: (m) => this.modelsDevFor(m),
+    });
   }
 
   /**
@@ -393,13 +362,9 @@ export class Runtime {
     provider: CcProvider,
     modelId: string,
   ): RegistrationCapabilityDecision {
-    return resolveRegistrationCapability({
-      modelId,
-      api: provider.api,
-      baseUrl: provider.baseUrl,
-      userMeta: this.modelMetaFor(provider, modelId),
-      modelsDev: this.modelsDevFor(modelId),
-      ccMeta: ccMetaFrom(provider.meta),
+    return resolveRegistrationDecisionFor(provider, modelId, {
+      modelMetaFor: (p, m) => this.modelMetaFor(p, m),
+      modelsDevFor: (m) => this.modelsDevFor(m),
     });
   }
 

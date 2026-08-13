@@ -13,9 +13,9 @@ import {
   readSelection,
   writeModelMetaOverride,
   writeSelection,
-  type FsLike,
   type ModelMetaScope,
 } from "./settings.ts";
+import type { FsLike } from "./json-file.ts";
 import { piSettingsPath, piSwitchConfigPath } from "./paths.ts";
 import { recordRecentAndWrite, togglePinAndWrite } from "./pins-recent.ts";
 

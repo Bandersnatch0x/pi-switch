@@ -5,7 +5,7 @@
  * path swallows errors.
  */
 
-import type { FsLike } from "../src/settings.ts";
+import type { FsLike } from "../src/json-file.ts";
 
 /** Minimum fs surface the logger needs — lets tests pass a 3-method mock. */
 export type LogFs = Pick<FsLike, "existsSync" | "readFileSync" | "writeFileSync">;

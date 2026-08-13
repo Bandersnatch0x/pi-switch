@@ -7,8 +7,14 @@ import {
   type PiSwitchCtx,
 } from "../src/pi-context.ts";
 import { registerProvider } from "../src/register.ts";
-import type { CcProvider, PiSwitchSelection, RecentEntry } from "../src/types.ts";
+import type {
+  CcProvider,
+  PiSwitchSelection,
+  RecentEntry,
+  SessionModelStrategy,
+} from "../src/types.ts";
 import type { Runtime } from "./runtime.ts";
+import { matchProvider } from "./runtime-facades.ts";
 
 /** session_start reasons that may need a pi-switch provider re-registered. */
 const SESSION_ACTIVATE_REASONS = new Set([
@@ -63,26 +69,91 @@ export function sessionModelFromBranch(
   return found;
 }
 
-function matchProvider(
-  providers: CcProvider[],
-  opts: { dbId?: string; appType?: string; piName?: string },
-): CcProvider | undefined {
-  if (opts.dbId) {
-    const byId = providers.find(
-      (item) =>
-        item.id === opts.dbId &&
-        (!opts.appType || item.appType === opts.appType),
-    );
-    if (byId) return byId;
-  }
-  if (opts.piName) {
-    return providers.find((item) => item.piName === opts.piName);
-  }
-  return undefined;
-}
-
 function resolveModelId(provider: CcProvider, preferred: string): string {
   return resolveListedModel(provider.configModels, preferred) ?? preferred;
+}
+
+/**
+ * Resolve target model for session_start events (startup/resume/fork/reload).
+ *
+ * Why this exists: the session branch used to win unconditionally, so resumed
+ * sessions and subagent forks ignored a newer /ps selection. The strategy makes
+ * the saved selection authoritative by default while keeping the old behavior
+ * reachable ("session-first"). Pure so the strategy matrix is directly testable
+ * without faking a Runtime.
+ */
+export type SessionTarget = {
+  provider: CcProvider;
+  modelId: string;
+  source: "session" | "selection";
+};
+
+/** Resolve all usable targets in the order dictated by the configured strategy. */
+export function resolveSessionTargets(
+  strategy: SessionModelStrategy | undefined,
+  providers: CcProvider[],
+  selection: { dbId: string; model: string; appType?: string } | undefined,
+  sessionModel: { provider: string; modelId: string } | undefined,
+): SessionTarget[] {
+  const actualStrategy = strategy ?? "selection-first";
+  const sources =
+    actualStrategy === "selection-only"
+      ? (["selection"] as const)
+      : actualStrategy === "session-first"
+        ? (["session", "selection"] as const)
+        : (["selection", "session"] as const);
+  const targets: SessionTarget[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    const target =
+      source === "selection"
+        ? selection
+          ? (() => {
+              const provider = matchProvider(providers, {
+                dbId: selection.dbId,
+                appType: selection.appType,
+              });
+              return provider && isSwitchable(provider)
+                ? {
+                    provider,
+                    modelId: resolveModelId(provider, selection.model),
+                    source: "selection" as const,
+                  }
+                : undefined;
+            })()
+          : undefined
+        : sessionModel
+          ? (() => {
+              const provider = matchProvider(providers, {
+                piName: sessionModel.provider,
+              });
+              return provider && isSwitchable(provider)
+                ? {
+                    provider,
+                    modelId: resolveModelId(provider, sessionModel.modelId),
+                    source: "session" as const,
+                  }
+                : undefined;
+            })()
+          : undefined;
+    if (!target) continue;
+    const key = `${target.provider.piName}\0${target.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push(target);
+  }
+  return targets;
+}
+
+/** Backwards-compatible first-target resolver for callers that only need a pick. */
+export function resolveSessionTarget(
+  strategy: SessionModelStrategy | undefined,
+  providers: CcProvider[],
+  selection: { dbId: string; model: string; appType?: string } | undefined,
+  sessionModel: { provider: string; modelId: string } | undefined,
+): SessionTarget | undefined {
+  return resolveSessionTargets(strategy, providers, selection, sessionModel)[0];
 }
 
 export type ActivationStageResult =
@@ -205,7 +276,18 @@ export function createSwitchLifecycle(
         ids,
         rt.registrationOptsFor(provider),
       );
-      if (result.kind === "skipped") return { kind: "failed", error: result.error };
+      if (result.kind === "skipped") {
+        // A #63 skip on a *switchable* provider means "no trusted maxTokens
+        // authority yet". Still schedule the models.dev refresh: the
+        // success-only hook below (#39) can never fire for these ids, so
+        // without this the model stays uncached — and unregisterable — on
+        // every launch. Non-switchable providers (parse errors, unsupported
+        // api) gain nothing from models.dev, so they skip the refresh too.
+        if (isSwitchable(provider)) {
+          for (const id of ids) rt.scheduleModelsDevRefresh(id);
+        }
+        return { kind: "failed", error: result.error };
+      }
       // Fire-and-forget models.dev refresh after successful registration (issue #39).
       for (const id of result.modelIds) rt.scheduleModelsDevRefresh(id);
       return { kind: "registered" };
@@ -268,40 +350,79 @@ export function createSwitchLifecycle(
   };
 
   /**
-   * Prefer the session's last model when it is a known pi-switch provider
-   * (continue/resume continuity). Fall back to saved selection for new sessions
-   * or non-ps models. Session restore does not rewrite selection.
+   * Resolve target model for session_start events.
+   * Delegates to the exported pure function for testability.
    */
-  const resolveSessionTarget = (
+  const resolveSessionTargetsInternal = (
     ctx: PiSwitchCtx,
-  ): { provider: CcProvider; modelId: string; source: "session" | "selection" } | undefined => {
+  ): SessionTarget[] => {
     const providers = rt.lastGoodProviders;
+    const strategy = rt.config.sessionModelStrategy;
+    const selection = rt.state.readSelection();
     const sessionModel = sessionModelFromBranch(ctx.sessionManager?.getBranch?.());
-    if (sessionModel) {
-      const sessionProvider = matchProvider(providers, {
-        piName: sessionModel.provider,
-      });
-      if (sessionProvider && isSwitchable(sessionProvider)) {
-        return {
-          provider: sessionProvider,
-          modelId: resolveModelId(sessionProvider, sessionModel.modelId),
-          source: "session",
-        };
+
+    return resolveSessionTargets(strategy, providers, selection, sessionModel);
+  };
+
+  // Suppress model_select persistence for pi-switch-owned switches. Native
+  // user-driven switches are still persisted by the listener below.
+  let internalModelSwitchDepth = 0;
+
+  /**
+   * Shared register → find → setModel sequence for session_start and activate.
+   * Both paths used to hand-roll this trio with drifting error handling; the
+   * discriminated result lets each caller map outcomes to its own reporting
+   * (stage recorder in activate, ui.notify in session_start).
+   */
+  const ensureModelActive = async (
+    provider: CcProvider,
+    modelId: string,
+    ctx: PiSwitchCtx,
+    opts: {
+      register: (provider: CcProvider, modelIds: string[]) => RegistrationOutcome;
+      /** Short-circuit when ctx.model already matches (session restore). */
+      skipIfActive?: boolean;
+    },
+  ): Promise<
+    | { kind: "activated" }
+    | { kind: "already-active" }
+    | { kind: "registration-failed"; error: string }
+    | { kind: "model-not-found"; error: string }
+    | { kind: "switch-failed"; error: string }
+  > => {
+    const registration = opts.register(provider, [modelId]);
+    if (registration.kind !== "registered") {
+      return { kind: "registration-failed", error: registration.error };
+    }
+    const model = findRegisteredModel(ctx, provider.piName, modelId);
+    if (!model) {
+      return {
+        kind: "model-not-found",
+        error: `model not found after register: ${provider.piName} / ${modelId}`,
+      };
+    }
+    if (opts.skipIfActive) {
+      const active = ctx.model;
+      if (active?.provider === provider.piName && active?.id === modelId) {
+        return { kind: "already-active" };
       }
     }
-
-    const current = rt.state.readSelection();
-    if (!current) return undefined;
-    const provider = matchProvider(providers, {
-      dbId: current.dbId,
-      appType: current.appType,
-    });
-    if (!provider || !isSwitchable(provider)) return undefined;
-    return {
-      provider,
-      modelId: resolveModelId(provider, current.model),
-      source: "selection",
-    };
+    let activated = false;
+    internalModelSwitchDepth += 1;
+    try {
+      activated = await pi.setModel(model as never);
+    } catch (error) {
+      return { kind: "switch-failed", error: formatError(error) };
+    } finally {
+      internalModelSwitchDepth -= 1;
+    }
+    if (!activated) {
+      return {
+        kind: "switch-failed",
+        error: `setModel failed: ${provider.piName} / ${modelId}`,
+      };
+    }
+    return { kind: "activated" };
   };
 
   let installed = false;
@@ -325,12 +446,23 @@ export function createSwitchLifecycle(
     }
     // Fresh process install: replace any leftover tracking names.
     rt.registeredPsNames = [];
+    // Pre-registration is best-effort cache warming. Only the selection target
+    // deserves a launch-time warning — a stale recent entry (provider deleted
+    // or #63-unregisterable) would otherwise nag on every startup.
+    const selectionProviderId = selection
+      ? matchProvider(providers, {
+          dbId: selection.dbId,
+          appType: selection.appType,
+        })?.id
+      : undefined;
     for (const { provider, modelIds } of targets.values()) {
       const result = registerSessionModels(provider, [...modelIds]);
       if (result.kind === "failed") {
-        console.warn(
-          `[pi-switch] install registration failed: ${provider.piName}: ${result.error}`,
-        );
+        if (provider.id === selectionProviderId || rt.config.debug) {
+          console.warn(
+            `[pi-switch] install registration failed: ${provider.piName}: ${result.error}`,
+          );
+        }
       }
     }
     // Normalize selection model id if it still holds a filtered [1M] tag.
@@ -353,6 +485,26 @@ export function createSwitchLifecycle(
       }
     }
 
+    // Pi's native /model and cycle commands emit this event after a successful
+    // switch. Persist only user-driven changes; restore is intentionally
+    // ignored so session_start strategy resolution remains authoritative.
+    pi.on("model_select", (event, _ctx) => {
+      if (internalModelSwitchDepth > 0 || event.source === "restore") return;
+      const model = event.model;
+      const provider = rt.lastGoodProviders.find((item) => item.piName === model.provider);
+      if (!provider || !isSwitchable(provider)) return;
+      const persisted = rt.state.saveSelection({
+        dbId: provider.id,
+        model: model.id,
+        tab: provider.appType,
+        appType: provider.appType,
+        provider: provider.piName,
+      });
+      if (!persisted.ok && rt.config.debug) {
+        console.warn("[pi-switch] native model selection write failed:", persisted.error);
+      }
+    });
+
     pi.on("session_start", async (event, ctx) => {
       if (!SESSION_ACTIVATE_REASONS.has(event.reason)) return;
       if (rt.lastGoodProviders.length) {
@@ -362,8 +514,8 @@ export function createSwitchLifecycle(
         );
       }
 
-      const target = resolveSessionTarget(ctx as PiSwitchCtx);
-      if (!target) {
+      const targets = resolveSessionTargetsInternal(ctx as PiSwitchCtx);
+      if (!targets.length) {
         // Only warn when a selection exists but is unusable; bare new sessions
         // with no selection are fine.
         if (rt.state.readSelection()) {
@@ -372,52 +524,40 @@ export function createSwitchLifecycle(
         return;
       }
 
-      const { provider, modelId, source } = target;
-      const registration = registerSessionModels(provider, [modelId]);
-      if (registration.kind !== "registered") {
-        ctx.ui?.notify?.(
-          `pi-switch: provider registration failed: ${registration.error}`,
-          "error",
+      let lastFailure: string | undefined;
+      for (const { provider, modelId, source } of targets) {
+        const outcome = await ensureModelActive(
+          provider,
+          modelId,
+          ctx as PiSwitchCtx,
+          { register: registerSessionModels, skipIfActive: true },
         );
-        return;
-      }
-      const model = findRegisteredModel(ctx, provider.piName, modelId);
-      if (!model) return;
-
-      // Already on the desired model (Pi restore succeeded) — status only.
-      const active = (ctx as PiSwitchCtx).model;
-      if (
-        active?.provider === provider.piName &&
-        active?.id === modelId
-      ) {
-        ctx.ui?.setStatus?.(
-          "pi-switch",
-          `${modelId} @ ${provider.appType}/${provider.displayName}`,
-        );
-        return;
-      }
-
-      const activated = await pi.setModel(model as never);
-      if (!activated) return;
-
-      // Selection path may normalize [1M] tags; session path is runtime-only
-      // so continue/resume does not clobber the user's default selection.
-      if (source === "selection") {
-        const current = rt.state.readSelection();
-        if (current && modelId !== current.model) {
-          rt.state.saveSelection({
-            ...current,
-            model: modelId,
-            tab: current.tab ?? provider.appType,
-            appType: current.appType ?? provider.appType,
-            provider: provider.piName,
-          });
+        if (outcome.kind === "activated" || outcome.kind === "already-active") {
+          // Selection path may normalize [1M] tags; session path is runtime-only
+          // so continue/resume does not clobber the user's default selection.
+          if (outcome.kind === "activated" && source === "selection") {
+            const current = rt.state.readSelection();
+            if (current && modelId !== current.model) {
+              rt.state.saveSelection({
+                ...current,
+                model: modelId,
+                tab: current.tab ?? provider.appType,
+                appType: current.appType ?? provider.appType,
+                provider: provider.piName,
+              });
+            }
+          }
+          ctx.ui?.setStatus?.(
+            "pi-switch",
+            `${modelId} @ ${provider.appType}/${provider.displayName}`,
+          );
+          return;
         }
+        lastFailure = outcome.error;
       }
-      ctx.ui?.setStatus?.(
-        "pi-switch",
-        `${modelId} @ ${provider.appType}/${provider.displayName}`,
-      );
+      if (lastFailure) {
+        ctx.ui?.notify?.(`pi-switch: session model activation failed: ${lastFailure}`, "error");
+      }
     });
   };
 
@@ -428,30 +568,27 @@ export function createSwitchLifecycle(
     const { provider, modelId } = target;
     const stages = stageRecorder();
 
-    const registered = registerModels(provider, [modelId]);
-    if (registered.kind !== "registered") {
-      return stages.failure("providerRegistration", registered.error);
+    const outcome = await ensureModelActive(provider, modelId, ctx, {
+      register: registerModels,
+    });
+    // Map the shared sequence's outcome onto the stage recorder.
+    switch (outcome.kind) {
+      case "registration-failed":
+      case "model-not-found":
+        // Registered-but-unfindable also surfaces as a providerRegistration
+        // failure: callers only see stages, and "we couldn't hand Pi a usable
+        // model" is a registration problem regardless of which step tripped.
+        return stages.failure("providerRegistration", outcome.error);
+      case "switch-failed":
+        // Registration itself succeeded before setModel failed — record it,
+        // or the report claims skipped("not attempted") for a stage that ran.
+        stages.set("providerRegistration", SUCCEEDED);
+        return stages.failure("modelSwitch", outcome.error);
+      case "already-active":
+      case "activated":
+        break;
     }
     stages.set("providerRegistration", SUCCEEDED);
-
-    const model = findRegisteredModel(ctx, provider.piName, modelId);
-    if (!model) {
-      // Registered but unfindable - surface as a providerRegistration failure.
-      return stages.failure(
-        "providerRegistration",
-        `model not found after register: ${provider.piName} / ${modelId}`,
-      );
-    }
-
-    let activated = false;
-    try {
-      activated = await pi.setModel(model as never);
-    } catch (error) {
-      return stages.failure("modelSwitch", formatError(error));
-    }
-    if (!activated) {
-      return stages.failure("modelSwitch", `setModel failed: ${provider.piName} / ${modelId}`);
-    }
     stages.set("modelSwitch", SUCCEEDED);
 
     const previousNames = rt.registeredPsNames;

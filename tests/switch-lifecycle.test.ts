@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createSwitchLifecycle,
+  resolveSessionTarget,
   sessionModelFromBranch,
   type SwitchLifecycle,
 } from "../extensions/switch-lifecycle.ts";
-import { readPiSwitchConfig, readSelection, type FsLike } from "../src/settings.ts";
+import { readPiSwitchConfig, readSelection } from "../src/settings.ts";
+import type { FsLike } from "../src/json-file.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { CcProvider, PiSwitchConfig, RecentEntry } from "../src/types.ts";
 import type { Runtime } from "../extensions/runtime.ts";
@@ -78,7 +80,10 @@ function setup(options?: {
   providers?: CcProvider[];
   selection?: { dbId: string; model: string; appType?: string };
   recent?: RecentEntry[];
+  config?: PiSwitchConfig;
   setModelResult?: boolean;
+  setModelResultFor?: (model: unknown) => boolean;
+  emitModelSelectOnSet?: boolean;
   failSelectionWrite?: boolean;
   failRecentWrite?: boolean;
   failUnregister?: boolean;
@@ -89,15 +94,18 @@ function setup(options?: {
   branch?: Array<Record<string, unknown>>;
   /** Stub for Runtime.providerWireCompatFor (issue #62). */
   providerWireCompatFor?: Runtime["providerWireCompatFor"];
+  /** Stub for Runtime.modelMetaFor — return undefined to trigger a #63 skip. */
+  modelMetaFor?: Runtime["modelMetaFor"];
   findModel?: (providerName: string, modelId: string) => unknown;
   onRegister?: () => void;
 }) {
   const home = "/home/test";
   const settingsPath = `${home}/.pi/agent/settings.json`;
   const configPath = `${home}/.pi/agent/pi-switch.json`;
-  const configBody: Record<string, unknown> = options?.recent
-    ? { recent: options.recent }
-    : {};
+  const configBody: Record<string, unknown> = {
+    ...(options?.recent ? { recent: options.recent } : {}),
+    ...(options?.config ?? {}),
+  };
   const initial: Record<string, string> = {
     [configPath]: JSON.stringify(configBody),
     ...(options?.selection
@@ -118,6 +126,7 @@ function setup(options?: {
   const operations: Operation[] = [];
   const providers = options?.providers ?? [provider()];
   let sessionStart: SessionStartHandler | undefined;
+  let modelSelect: ((event: { model: { provider: string; id: string }; source: string }, ctx: PiSwitchCtx) => void | Promise<void>) | undefined;
 
   const pi = {
     registerProvider: (
@@ -134,12 +143,25 @@ function setup(options?: {
         supportsStore: config?.models?.[0]?.compat?.supportsStore,
       });
     },
-    setModel: async () => {
+    setModel: async (model: unknown) => {
       operations.push({ op: "setModel" });
-      return options?.setModelResult ?? true;
+      const activated = options?.setModelResultFor
+        ? options.setModelResultFor(model)
+        : (options?.setModelResult ?? true);
+      if (activated && options?.emitModelSelectOnSet) {
+        await modelSelect?.(
+          {
+            model: model as { provider: string; id: string },
+            source: "set",
+          },
+          ctx,
+        );
+      }
+      return activated;
     },
     on: (event: string, handler: SessionStartHandler) => {
       if (event === "session_start") sessionStart = handler;
+      if (event === "model_select") modelSelect = handler as unknown as typeof modelSelect;
     },
     ...(options?.hasUnregister === false
       ? {}
@@ -154,6 +176,7 @@ function setup(options?: {
   const config: PiSwitchConfig = {
     recentLimit: 5,
     recent: options?.recent,
+    ...options?.config,
   };
   const scheduleCalls: string[] = [];
   const runtime = completeFakeRuntime({
@@ -173,7 +196,8 @@ function setup(options?: {
     headerVars: () => ({}),
     rejectSink: () => undefined,
     // Trusted maxTokens so registration is eligible under issue #63.
-    modelMetaFor: () => ({ maxTokens: 32_000, reasoning: true }),
+    modelMetaFor:
+      options?.modelMetaFor ?? (() => ({ maxTokens: 32_000, reasoning: true })),
     modelsDevFor: () => undefined,
     providerWireCompatFor:
       options?.providerWireCompatFor ?? (() => undefined),
@@ -215,6 +239,7 @@ function setup(options?: {
     settingsPath,
     configPath,
     getSessionStart: () => sessionStart,
+    getModelSelect: () => modelSelect,
   };
 }
 
@@ -379,7 +404,12 @@ describe("switch lifecycle interface", () => {
     expect(result).toMatchObject({
       kind: "failed",
       failedStage: "modelSwitch",
-      stages: { modelSwitch: { status: "failed" } },
+      stages: {
+        // Registration ran and succeeded before setModel failed — the recorder
+        // must say so, not skipped("not attempted") (spec-review finding).
+        providerRegistration: { status: "succeeded" },
+        modelSwitch: { status: "failed" },
+      },
     });
     expect(state.operations.some((item) => item.op === "unregister")).toBe(false);
     expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
@@ -490,6 +520,32 @@ describe("switch lifecycle interface", () => {
     expect(readSelection(state.fs, state.settingsPath)).toBeUndefined();
   });
 
+  test("runtime-only activation ignores model_select emitted by its own setModel", async () => {
+    const saved = provider({
+      id: "saved",
+      piName: "xkool",
+      displayName: "xkool",
+      configModels: ["old-model", "new-model"],
+    });
+    const state = setup({
+      providers: [saved],
+      selection: { dbId: "saved", model: "old-model", appType: "codex" },
+      emitModelSelectOnSet: true,
+    });
+    state.lifecycle.install();
+
+    const result = await state.lifecycle.activate(
+      { provider: saved, modelId: "new-model", commit: "runtime-only" },
+      state.ctx,
+    );
+
+    expect(result.kind).toBe("activated");
+    expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
+      dbId: "saved",
+      model: "old-model",
+    });
+  });
+
   test("install registers saved provider and startup activates it", async () => {
     const saved = provider({ id: "saved", piName: "ps-codex-saved" });
     const state = setup({
@@ -541,7 +597,162 @@ describe("switch lifecycle interface", () => {
     ]);
   });
 
-  test("resume re-applies session model without rewriting selection", async () => {
+  test("install: #63-skipped recent entry is silent but still schedules models.dev refresh", () => {
+    const stale = provider({
+      id: "stale-id",
+      piName: "abrdns",
+      displayName: "abrdns",
+      configModels: ["mystery-model"],
+    });
+    const state = setup({
+      providers: [stale],
+      recent: [{ dbId: "stale-id", model: "mystery-model", appType: "codex", at: 1 }],
+      // No trusted maxTokens authority anywhere → registration skips (#63).
+      modelMetaFor: () => undefined,
+    });
+
+    const warns: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warns.push(args.join(" "));
+    try {
+      state.lifecycle.install();
+    } finally {
+      console.warn = origWarn;
+    }
+
+    // Recent-only pre-registration failure must not nag on every launch...
+    expect(warns).toEqual([]);
+    // ...but the refresh must fire anyway, or the model can never become
+    // registerable (the success-only #39 hook would deadlock the cold cache).
+    expect(state.runtime.scheduleCalls).toContain("mystery-model");
+  });
+
+  test("install: selection registration failure still warns at launch", () => {
+    const broken = provider({
+      id: "sel-id",
+      piName: "abrdns",
+      displayName: "abrdns",
+      configModels: ["mystery-model"],
+    });
+    const state = setup({
+      providers: [broken],
+      selection: { dbId: "sel-id", model: "mystery-model", appType: "codex" },
+      modelMetaFor: () => undefined,
+    });
+
+    const warns: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => warns.push(args.join(" "));
+    try {
+      state.lifecycle.install();
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(warns.some((w) => w.includes("install registration failed"))).toBe(true);
+  });
+
+  test("resume with selection-first (default) prefers ps-config selection", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      recent: [{ dbId: "zhipu-id", model: "glm-5.2", appType: "codex", at: 1 }],
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      // sessionModelStrategy defaults to "selection-first"
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    // selection-first uses ps-config selection (xkool), not session (zhipu)
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "xkool",
+    });
+    // Selection stays on the saved value
+    expect(readSelection(state.fs, state.settingsPath)).toEqual({
+      dbId: "saved",
+      model: "gpt-5",
+      appType: "codex",
+    });
+  });
+
+  test("selection-first falls back to session when selection registration fails", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [{ type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" }],
+      modelMetaFor: (candidate) =>
+        candidate.id === "saved" ? undefined : { maxTokens: 32_000, reasoning: true },
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+    await state.getSessionStart()?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    expect(state.operations[0]).toMatchObject({ name: "zhipu-glm-en" });
+  });
+
+  test("selection-first falls back to session when selection setModel fails", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [{ type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" }],
+      setModelResultFor: (model) => (model as { provider?: string }).provider !== "xkool",
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+    await state.getSessionStart()?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+      "register",
+      "find",
+      "setModel",
+    ]);
+    expect(state.operations[3]).toMatchObject({ name: "zhipu-glm-en" });
+  });
+
+  test("resume with session-first (legacy) prefers session model", async () => {
     const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
     const zhipu = provider({
       id: "zhipu-id",
@@ -556,6 +767,7 @@ describe("switch lifecycle interface", () => {
       branch: [
         { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
       ],
+      config: { sessionModelStrategy: "session-first" },
     });
 
     state.lifecycle.install();
@@ -569,6 +781,7 @@ describe("switch lifecycle interface", () => {
       "find",
       "setModel",
     ]);
+    // session-first uses session model (zhipu)
     expect(state.operations[0]).toMatchObject({
       op: "register",
       name: "zhipu-glm-en",
@@ -577,6 +790,206 @@ describe("switch lifecycle interface", () => {
     expect(readSelection(state.fs, state.settingsPath)).toEqual({
       dbId: "saved",
       model: "gpt-5",
+    });
+  });
+
+  test("session-first falls back to selection when session setModel fails", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [{ type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" }],
+      config: { sessionModelStrategy: "session-first" },
+      setModelResultFor: (model) => (model as { provider?: string }).provider !== "zhipu-glm-en",
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+    await state.getSessionStart()?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+      "register",
+      "find",
+      "setModel",
+    ]);
+    expect(state.operations[3]).toMatchObject({ name: "xkool" });
+  });
+
+  test("resume with selection-only ignores session model", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      recent: [{ dbId: "zhipu-id", model: "glm-5.2", appType: "codex", at: 1 }],
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      config: { sessionModelStrategy: "selection-only" },
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    // selection-only ONLY uses ps-config selection
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "xkool",
+    });
+  });
+
+  test("selection-only does not fall back to session after activation failure", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [{ type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" }],
+      config: { sessionModelStrategy: "selection-only" },
+      setModelResult: false,
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+    await state.getSessionStart()?.({ reason: "resume" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    expect(state.operations.some((item) => item.op === "register" && item.name === "zhipu-glm-en")).toBe(false);
+  });
+
+  test("fork (subagent) with selection-first uses ps-config selection", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      // Default strategy is selection-first
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "fork" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    // fork uses ps-config selection, ignoring parent session model
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "xkool",
+    });
+  });
+
+  test("fork (subagent) with session-first uses session model", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      config: { sessionModelStrategy: "session-first" },
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "fork" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    // session-first honors session model even for fork
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "zhipu-glm-en",
+    });
+  });
+
+  test("fork (subagent) with selection-only ignores parent session model", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const zhipu = provider({
+      id: "zhipu-id",
+      piName: "zhipu-glm-en",
+      displayName: "Zhipu GLM en",
+      configModels: ["glm-5.2"],
+    });
+    const state = setup({
+      providers: [saved, zhipu],
+      selection: { dbId: "saved", model: "gpt-5", appType: "codex" },
+      branch: [
+        { type: "model_change", provider: "zhipu-glm-en", modelId: "glm-5.2" },
+      ],
+      config: { sessionModelStrategy: "selection-only" },
+    });
+
+    state.lifecycle.install();
+    state.operations.length = 0;
+
+    const handler = state.getSessionStart();
+    await handler?.({ reason: "fork" }, state.ctx);
+
+    expect(state.operations.map((item) => item.op)).toEqual([
+      "register",
+      "find",
+      "setModel",
+    ]);
+    // selection-only: subagent gets the ps-config selection, never the parent's model
+    expect(state.operations[0]).toMatchObject({
+      op: "register",
+      name: "xkool",
     });
   });
 
@@ -602,6 +1015,34 @@ describe("switch lifecycle interface", () => {
     await state.getSessionStart()?.({ reason: "startup" }, state.ctx);
     expect(state.operations.map((item) => item.op)).toEqual(["register", "find"]);
     expect(state.operations.some((item) => item.op === "setModel")).toBe(false);
+  });
+
+  test("native model_select persists user changes but ignores restore", async () => {
+    const saved = provider({ id: "saved", piName: "xkool", displayName: "xkool" });
+    const state = setup({
+      providers: [saved],
+      selection: { dbId: "saved", model: "old-model", appType: "codex" },
+    });
+    state.lifecycle.install();
+
+    await state.getModelSelect()?.(
+      { model: { provider: "xkool", id: "new-model" }, source: "set" },
+      state.ctx,
+    );
+    expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
+      dbId: "saved",
+      model: "new-model",
+      provider: "xkool",
+    });
+
+    await state.getModelSelect()?.(
+      { model: { provider: "xkool", id: "restored-model" }, source: "restore" },
+      state.ctx,
+    );
+    expect(readSelection(state.fs, state.settingsPath)).toMatchObject({
+      dbId: "saved",
+      model: "new-model",
+    });
   });
 });
 
@@ -630,5 +1071,108 @@ describe("sessionModelFromBranch", () => {
   test("empty branch yields undefined", () => {
     expect(sessionModelFromBranch([])).toBeUndefined();
     expect(sessionModelFromBranch(undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveSessionTarget (pure function)", () => {
+  const providers: CcProvider[] = [
+    provider({ id: "p1", piName: "ps-codex-p1", appType: "codex", configModels: ["m1"] }),
+    provider({ id: "p2", piName: "ps-claude-p2", appType: "claude", configModels: ["m2"] }),
+  ];
+
+  test("selection-first (default): uses selection when available", () => {
+    const result = resolveSessionTarget(
+      "selection-first",
+      providers,
+      { dbId: "p1", model: "m1", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result?.provider.id).toBe("p1");
+    expect(result?.modelId).toBe("m1");
+    expect(result?.source).toBe("selection");
+  });
+
+  test("selection-first: falls back to session when selection unavailable", () => {
+    const result = resolveSessionTarget(
+      "selection-first",
+      providers,
+      { dbId: "missing", model: "m999", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result?.provider.id).toBe("p2");
+    expect(result?.modelId).toBe("m2");
+    expect(result?.source).toBe("session");
+  });
+
+  test("session-first: uses session when available", () => {
+    const result = resolveSessionTarget(
+      "session-first",
+      providers,
+      { dbId: "p1", model: "m1", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result?.provider.id).toBe("p2");
+    expect(result?.modelId).toBe("m2");
+    expect(result?.source).toBe("session");
+  });
+
+  test("session-first: falls back to selection when session unavailable", () => {
+    const result = resolveSessionTarget(
+      "session-first",
+      providers,
+      { dbId: "p1", model: "m1", appType: "codex" },
+      { provider: "ps-missing", modelId: "m999" },
+    );
+    expect(result?.provider.id).toBe("p1");
+    expect(result?.modelId).toBe("m1");
+    expect(result?.source).toBe("selection");
+  });
+
+  test("selection-only: ignores session entirely", () => {
+    const result = resolveSessionTarget(
+      "selection-only",
+      providers,
+      { dbId: "p1", model: "m1", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result?.provider.id).toBe("p1");
+    expect(result?.modelId).toBe("m1");
+    expect(result?.source).toBe("selection");
+  });
+
+  test("selection-only: returns undefined when selection unavailable", () => {
+    const result = resolveSessionTarget(
+      "selection-only",
+      providers,
+      { dbId: "missing", model: "m999", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result).toBeUndefined();
+  });
+
+  test("undefined strategy defaults to selection-first", () => {
+    const result = resolveSessionTarget(
+      undefined,
+      providers,
+      { dbId: "p1", model: "m1", appType: "codex" },
+      { provider: "ps-claude-p2", modelId: "m2" },
+    );
+    expect(result?.provider.id).toBe("p1");
+    expect(result?.source).toBe("selection");
+  });
+
+  test("no selection and no session returns undefined", () => {
+    const result = resolveSessionTarget("selection-first", providers, undefined, undefined);
+    expect(result).toBeUndefined();
+  });
+
+  test("matches provider by appType when provided", () => {
+    const result = resolveSessionTarget(
+      "selection-first",
+      providers,
+      { dbId: "p1", model: "m1", appType: "claude" }, // Wrong appType
+      undefined,
+    );
+    expect(result).toBeUndefined(); // Should not match p1 (codex) when appType is claude
   });
 });

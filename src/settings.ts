@@ -4,22 +4,19 @@ import type {
   ModelOverrideEntry,
   PiSwitchConfig,
   PiSwitchSelection,
+  SessionModelStrategy,
 } from "./types.ts";
 import {
   isThinkingFormat,
   isThinkingLevel,
   LEGACY_SETTINGS_KEY,
+  SESSION_MODEL_STRATEGIES,
   SETTINGS_KEY,
   THINKING_LEVELS,
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
 import { cleanModelMeta, matchExactModelOverride } from "./model-meta.ts";
 import { parsePins, parseRecent } from "./pins-recent.ts";
-import {
-  providerOverrideKeys,
-  resolveProviderOverride,
-  type ProviderOverrideEntry,
-} from "./provider-override.ts";
 import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
 import { parseGeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
 import {
@@ -41,16 +38,6 @@ import {
   editConfigWithResult,
   type ConfigEditResult,
   type ConfigWriteTarget,
-} from "./config-edit.ts";
-
-export { providerOverrideKeys, resolveProviderOverride };
-export type { ProviderOverrideEntry };
-export type { FsLike };
-export type { ConfigEditResult, ConfigWriteTarget };
-export {
-  configEditError,
-  editConfig,
-  editConfigWithResult,
 } from "./config-edit.ts";
 
 /**
@@ -280,6 +267,13 @@ function parseProviderOverrides(
   return parsed as PiSwitchConfig["providerOverrides"];
 }
 
+function parseSessionModelStrategy(v: unknown): SessionModelStrategy | undefined {
+  return typeof v === "string" &&
+    (SESSION_MODEL_STRATEGIES as readonly string[]).includes(v)
+    ? (v as SessionModelStrategy)
+    : undefined;
+}
+
 export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
   const raw = readJsonFile(fs, path);
   if (hasOwn(raw, "compat")) {
@@ -318,6 +312,7 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
     recentLimit: typeof raw.recentLimit === "number" && raw.recentLimit > 0
       ? Math.floor(raw.recentLimit)
       : undefined,
+    sessionModelStrategy: parseSessionModelStrategy(raw.sessionModelStrategy),
     debug: Boolean(raw.debug),
   };
 }

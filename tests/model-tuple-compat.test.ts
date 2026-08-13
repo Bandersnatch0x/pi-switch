@@ -13,8 +13,8 @@ import {
   readPiSwitchConfig,
   writeChatTupleCompat,
   writeModelTupleCompat,
-  type FsLike,
 } from "../src/settings.ts";
+import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 
 function memFs(files: Record<string, string> = {}): FsLike {
