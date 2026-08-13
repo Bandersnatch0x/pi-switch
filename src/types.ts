@@ -253,7 +253,30 @@ export interface PiSwitchConfig {
   debug?: boolean;
   /** Identity migration marker (issue #16); presence with version >= 1 skips migration. */
   piSwitchMigration?: PiSwitchMigrationMarker;
+  /**
+   * Session model resolution strategy for session_start (startup/resume/fork/reload).
+   * Why: the session branch used to win unconditionally, so a resumed session —
+   * and every subagent fork — silently ignored a newer /ps selection. Making
+   * the saved selection authoritative by default fixes both; "session-first"
+   * keeps the pre-0.3.4 behavior for continue/resume continuity.
+   * - "selection-first" (default): ps-config selection wins; session branch is the fallback
+   * - "session-first": session branch wins (legacy pre-0.3.4); selection is the fallback
+   * - "selection-only": ONLY ps-config selection; the session branch is never consulted
+   */
+  sessionModelStrategy?: SessionModelStrategy;
 }
+
+/** See PiSwitchConfig.sessionModelStrategy for semantics. */
+export type SessionModelStrategy =
+  | "selection-first"
+  | "session-first"
+  | "selection-only";
+
+export const SESSION_MODEL_STRATEGIES: readonly SessionModelStrategy[] = [
+  "selection-first",
+  "session-first",
+  "selection-only",
+];
 
 /** Pi SDK thinkingFormat literals (model-config.d.ts). Invalid values are rejected. */
 export const THINKING_FORMATS = [

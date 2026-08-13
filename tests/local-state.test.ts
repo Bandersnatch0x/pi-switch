@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createLocalState } from "../src/local-state.ts";
-import type { FsLike } from "../src/settings.ts";
+import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
 
 function memFs(initial: Record<string, string> = {}): FsLike & {

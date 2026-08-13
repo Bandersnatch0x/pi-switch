@@ -4,13 +4,13 @@ import {
   migrateLegacySelection,
   readPiSwitchConfig,
   readSelection,
-  resolveProviderOverride,
   writeModelMetaOverride,
   writeProviderModelMeta,
   writeProviderWireCompat,
   writeSelection,
-  type FsLike,
 } from "../src/settings.ts";
+import type { FsLike } from "../src/json-file.ts";
+import { resolveProviderOverride } from "../src/provider-override.ts";
 import {
   isPinned,
   pushRecentEntry,
@@ -565,6 +565,26 @@ describe("pin appType round-trip (/ps p duplicate bug)", () => {
     const cfg = readPiSwitchConfig(fs, "/c.json");
     expect(cfg.pins?.[0].appType).toBe("claude");
     expect(cfg.recent?.[0].appType).toBe("claude");
+  });
+
+  test("readPiSwitchConfig validates sessionModelStrategy", () => {
+    const fs1 = memFs({ "/c.json": JSON.stringify({ sessionModelStrategy: "selection-first" }) });
+    expect(readPiSwitchConfig(fs1, "/c.json").sessionModelStrategy).toBe("selection-first");
+
+    const fs2 = memFs({ "/c.json": JSON.stringify({ sessionModelStrategy: "session-first" }) });
+    expect(readPiSwitchConfig(fs2, "/c.json").sessionModelStrategy).toBe("session-first");
+
+    const fs3 = memFs({ "/c.json": JSON.stringify({ sessionModelStrategy: "selection-only" }) });
+    expect(readPiSwitchConfig(fs3, "/c.json").sessionModelStrategy).toBe("selection-only");
+
+    const fs4 = memFs({ "/c.json": JSON.stringify({ sessionModelStrategy: "invalid-value" }) });
+    expect(readPiSwitchConfig(fs4, "/c.json").sessionModelStrategy).toBeUndefined();
+
+    const fs5 = memFs({ "/c.json": JSON.stringify({ sessionModelStrategy: 123 }) });
+    expect(readPiSwitchConfig(fs5, "/c.json").sessionModelStrategy).toBeUndefined();
+
+    const fs6 = memFs({ "/c.json": "{}" });
+    expect(readPiSwitchConfig(fs6, "/c.json").sessionModelStrategy).toBeUndefined();
   });
 
   test("togglePinAndWrite second toggle unpins instead of duplicating", () => {
