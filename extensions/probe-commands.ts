@@ -36,10 +36,6 @@ import {
 import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
-import {
-  updateOverrideEntry,
-  type MutableOverrideEntry,
-} from "../src/settings.ts";
 import { piSwitchConfigPath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
@@ -47,6 +43,7 @@ import { tf } from "../src/ui/tui-locale.ts";
 import {
   REPAIR_CASE_DETAIL_CUSTOM_TYPE,
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
+  applyRepairCandidateToConfigDocument,
   buildRepairCaseLayers,
   buildRepairPlan,
   capabilitySoftCheck,
@@ -421,23 +418,10 @@ export function createRepairConfigStore(deps: {
         };
       }
 
-      const edited = editConfigStrict({ fs, configPath: path, pid }, source, (doc) =>
-        updateOverrideEntry(doc, provider, (entry: MutableOverrideEntry) => {
-          if (patch.kind === "modelMeta") {
-            const map = entry.modelOverrides
-              ? { ...entry.modelOverrides }
-              : {};
-            map[patch.modelId] = { ...patch.modelMeta };
-            entry.modelOverrides = map;
-            entry.label = entry.label ?? provider.displayName;
-          } else if (patch.kind === "fingerprint") {
-            entry.fingerprint = patch.fingerprint;
-            if (patch.claudeCodeCompat) entry.claudeCodeCompat = true;
-          } else if (patch.kind === "geminiToolCompat") {
-            entry.geminiToolCompat = true;
-          }
-          return entry;
-        }),
+      const edited = editConfigStrict(
+        { fs, configPath: path, pid },
+        source,
+        (doc) => applyRepairCandidateToConfigDocument(doc, provider, patch),
       );
       if (!edited.ok) {
         return edited.reason === "conflict"

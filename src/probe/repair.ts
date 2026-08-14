@@ -10,9 +10,9 @@
 
 import type { NormalizedProbeRunEvidence } from "./evidence.ts";
 import {
-  applyPatchToTarget,
+  applyRepairCandidateToProbeTarget,
   matchRepairRecipes,
-  type RepairPatch,
+  type RepairCandidate,
   type RepairRecipeId,
   type RepairRecipeMatch,
 } from "./recipes.ts";
@@ -91,7 +91,7 @@ export interface RepairConfigSnapshot {
 
 export interface RepairConfigCommitInput {
   expectedVersion: string;
-  patch: RepairPatch;
+  patch: RepairCandidate;
 }
 
 export type RepairConfigCommitResult =
@@ -244,7 +244,10 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
   const snapshot = await opts.configStore.read();
   const expectedVersion = snapshot.version;
 
-  const candidateTarget = applyPatchToTarget(plan.target, recipe.patch);
+  const candidateTarget = applyRepairCandidateToProbeTarget(
+    plan.target,
+    recipe.patch,
+  );
   // Budget follows the ORIGINAL target: the reasoning-false recipe flips the
   // very flag the budget keys off, and a model that still thinks would then be
   // truncated into a false verification failure (#83).
@@ -308,7 +311,10 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
     };
   }
 
-  const repairedTarget: ProbeTarget = applyPatchToTarget(plan.target, recipe.patch);
+  const repairedTarget: ProbeTarget = applyRepairCandidateToProbeTarget(
+    plan.target,
+    recipe.patch,
+  );
 
   return {
     status: "committed",
