@@ -1,7 +1,7 @@
 /**
  * Compatibility Probe pure engine (issue #42 / tickets 1–9).
  *
- * Recipe registry + evidence gate (#47) admit whitelist recipes only.
+ * Static first-party recipes admit normalized evidence only.
  * Recipe3 gemini tool compat (#49) enables per-provider geminiToolCompat.
  * Repair Case session context (#50) projects short summaries after Session Model switches.
  * Target pick + post-success switch action (#51) default/reselect without setModel;
@@ -71,29 +71,24 @@ export type {
 export {
   REPAIR_CASE_DETAIL_CUSTOM_TYPE,
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
-  buildRepairCaseLayers,
-  createCaseId,
-  createRepairCaseSession,
-  formatRepairCaseSummaryText,
-  projectRepairCaseIntoContext,
-  projectSessionModelContext,
-  recordRepairCase,
-  switchSessionModel,
+  createInMemoryRepairCaseWriteAdapter,
+  createRepairCaseRepairEvent,
+  createRepairCaseRecorder,
 } from "./repair-case.ts";
 export type {
-  CreateRepairCaseSessionOptions,
-  ProjectedSessionModelContext,
+  InMemoryRepairCaseWriteAdapter,
+  RepairCaseCancelledOutcome,
   RepairCaseDetailData,
-  RepairCaseDetailSessionEntry,
-  RepairCaseModelChangeEntry,
+  RepairCaseEvent,
+  RepairCaseRecorder,
   RepairCaseRepairRecord,
-  RepairCaseSession,
-  RepairCaseSessionLayers,
-  RepairCaseSessionTranscriptEntry,
-  RepairCaseSummaryData,
-  RepairCaseSummarySessionEntry,
+  RepairCaseRepairOutcome,
+  RepairCaseRecipePreview,
+  RepairCaseSwitchRecord,
   RepairCaseVerificationAttempt,
-  SessionModelRef,
+  RepairCaseVerificationAttemptInput,
+  RepairCaseWrite,
+  RepairCaseWriteAdapter,
 } from "./repair-case.ts";
 export {
   PROBE_TARGET_PRECHECK_DIMENSIONS,
@@ -111,41 +106,26 @@ export type {
 export { createProbeVerifier, runProbe } from "./engine.ts";
 export { formatProbeResultJson, formatProbeResultSummary } from "./format.ts";
 export {
-  applyPatchToTarget,
+  FIRST_PARTY_REPAIR_RECIPES,
+  applyRepairCandidateToConfigDocument,
+  applyRepairCandidateToProbeTarget,
   matchRepairRecipes,
 } from "./recipes.ts";
 export type {
-  RepairPatch,
-  RepairPatchModelMeta,
-  RepairPatchProviderFingerprint,
-  RepairPatchProviderGeminiToolCompat,
+  FirstPartyRepairRecipe,
+  ProtocolGenericRepairRecipe,
+  RecipeClass,
+  RecipeFixture,
+  RecipePatchScope,
+  RecipeSupportWindow,
+  RelaySpecificRepairRecipe,
+  RepairCandidate,
+  RepairCandidateModelMeta,
+  RepairCandidateProviderFingerprint,
+  RepairCandidateProviderGeminiToolCompat,
   RepairRecipeId,
   RepairRecipeMatch,
 } from "./recipes.ts";
-export {
-  CLIENT_FINGERPRINT_RECIPE_DEFINITION,
-  DEFAULT_RECIPE_DEFINITIONS,
-  GEMINI_TOOL_COMPAT_RECIPE_DEFINITION,
-  REASONING_FALSE_RECIPE_DEFINITION,
-  admitRecipes,
-  createRecipeRegistry,
-  evaluateRecipeGate,
-  getAdmittedRecipe,
-  isRecipeAdmitted,
-  listAdmittedRecipes,
-  registerRecipeDefinitions,
-  resetRecipeRegistry,
-} from "./recipe-registry.ts";
-export type {
-  RecipeAdmitResult,
-  RecipeClass,
-  RecipeFixture,
-  RecipeGateDecision,
-  RecipePatchScope,
-  RecipeRegistry,
-  RecipeSupportWindow,
-  RepairRecipeDefinition,
-} from "./recipe-registry.ts";
 export { buildRepairPlan, runRepair } from "./repair.ts";
 export type {
   RepairConfigCommitInput,

@@ -2,15 +2,13 @@
  * Recipe 3 — Gemini tool compat empty-args/schema (issue #49 / ticket 6).
  * External behavior only; transport + config store injected — zero network.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   buildRepairPlan,
   createProbeVerifier,
   evaluateContract,
-  isRecipeAdmitted,
   matchRepairRecipes,
   normalizeStageEvidence,
-  resetRecipeRegistry,
   resolveSignatureId,
   runRepair,
   type NormalizedProbeRunEvidence,
@@ -20,10 +18,6 @@ import {
   type RepairConfigStore,
 } from "../src/probe/index.ts";
 import emptyArgsFixture from "./fixtures/probe/gemini-tool-empty-args.json";
-
-afterEach(() => {
-  resetRecipeRegistry();
-});
 
 const target = {
   provider: "ps-gemini-relay",
@@ -258,10 +252,6 @@ describe("tool empty-args / schema evidence (ticket 6)", () => {
 });
 
 describe("matchRepairRecipes Recipe3 (ticket 6)", () => {
-  test("gemini-tool-compat recipe is gate-admitted (relay-specific with fixture)", () => {
-    expect(isRecipeAdmitted("gemini-tool-compat")).toBe(true);
-  });
-
   test("empty-args signature → provider-level geminiToolCompat=true candidate", () => {
     const evidence = geminiToolEmptyArgsEvidence();
     const matches = matchRepairRecipes(evidence);

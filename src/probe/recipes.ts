@@ -1,252 +1,380 @@
 /**
- * Repair Recipe matching (ticket 4 / #46, Recipe2 ticket 5 / #48,
- * Recipe3 ticket 6 / #49, registry gate ticket 9 / #47).
+ * Static first-party Repair Recipes.
  *
- * Whitelist only: exact evidence signatures → minimal Pi-side candidate.
- * Ambiguous evidence ("unknown") never matches. No LLM-generated recipes.
- * Only recipes admitted by the evidence gate (recipe-registry) may match.
- *
- * Recipe 1: reasoning/thinking param rejected → exact-model reasoning=false.
- * Recipe 2: unique client-gate signature → provider-level fingerprint/compat.
- * Recipe 3: tool empty-args / schema evidence → provider-level geminiToolCompat.
+ * Each recipe owns its admission metadata, normalized-evidence matcher,
+ * declarative candidate, and verification contract. The ordered collection is
+ * fixed at build time: unknown or ambiguous evidence never gains a runtime
+ * registration path.
  */
 
-import type { NormalizedProbeRunEvidence, NormalizedStageEvidence } from "./evidence.ts";
+import type { JsonObject } from "../json-file.ts";
+import {
+  updateOverrideEntry,
+  type MutableOverrideEntry,
+} from "../settings.ts";
+import type { CcProvider } from "../types.ts";
+import type {
+  NormalizedProbeRunEvidence,
+  NormalizedStageEvidence,
+} from "./evidence.ts";
 import {
   type ClientGateFingerprint,
   clientGateSignatureId,
 } from "./evidence.ts";
-import { isRecipeAdmitted } from "./recipe-registry.ts";
 import type { ProbeContractId, ProbeTarget } from "./types.ts";
 
-/** First-party recipe ids. */
 export type RepairRecipeId =
   | "reasoning-false"
   | "client-fingerprint"
   | "gemini-tool-compat";
 
-/**
- * Minimal Pi-side config candidate produced by a recipe.
- * Model-field patches always use exact model scope (never provider / global).
- * Fingerprint / compat flags use provider scope (never global).
- */
-export interface RepairPatchModelMeta {
+export type RecipeClass = "protocol-generic" | "relay-specific";
+export type RecipePatchScope = "model" | "provider";
+
+export interface RecipeSupportWindow {
+  min?: string;
+  max?: string;
+  note?: string;
+}
+
+export interface RecipeFixture {
+  id: string;
+  description: string;
+  path?: string;
+}
+
+export interface RepairCandidateModelMeta {
   kind: "modelMeta";
-  /** Exact model only — never provider-level or global. */
   scope: "model";
   provider: string;
   modelId: string;
   modelMeta: { reasoning: false };
 }
 
-/** Provider-level fingerprint (+ optional Claude Code compat) candidate. */
-export interface RepairPatchProviderFingerprint {
+export interface RepairCandidateProviderFingerprint {
   kind: "fingerprint";
-  /** Provider only — never global config. */
   scope: "provider";
   provider: string;
   fingerprint: ClientGateFingerprint;
-  /**
-   * When true, also force providerOverrides[provider].claudeCodeCompat=true
-   * (Claude Code request-shape gate; not set for codex/gemini).
-   */
   claudeCodeCompat?: true;
 }
 
-/**
- * Provider-level geminiToolCompat force-on candidate (Recipe3).
- * Never writes global geminiToolCompat config.
- */
-export interface RepairPatchProviderGeminiToolCompat {
+export interface RepairCandidateProviderGeminiToolCompat {
   kind: "geminiToolCompat";
-  /** Provider only — never global config. */
   scope: "provider";
   provider: string;
   geminiToolCompat: true;
 }
 
-export type RepairPatch =
-  | RepairPatchModelMeta
-  | RepairPatchProviderFingerprint
-  | RepairPatchProviderGeminiToolCompat;
+/** Closed, declarative candidate interpreted by both Repair adapters. */
+export type RepairCandidate =
+  | RepairCandidateModelMeta
+  | RepairCandidateProviderFingerprint
+  | RepairCandidateProviderGeminiToolCompat;
 
-/** One whitelist match from normalized evidence. */
 export interface RepairRecipeMatch {
   recipeId: RepairRecipeId;
   signatureId: string;
-  /** Contract stage that produced the matching evidence. */
   sourceContract: ProbeContractId;
-  /**
-   * Contracts to retest with the candidate applied in memory.
-   * Recipe1 disables reasoning on the target, so reasoning is not re-probed;
-   * basic (+ tool when claimed) prove the endpoint works without the param.
-   */
   verifyContracts: ProbeContractId[];
-  patch: RepairPatch;
+  /** Kept as `patch` in the observable Repair plan/case shape. */
+  patch: RepairCandidate;
   summary: string;
 }
 
-const RECIPE1_SIGNATURE = "reasoning_param_rejected";
+interface RecipeMatchInput {
+  stage: NormalizedStageEvidence;
+  target: ProbeTarget;
+  evidence: NormalizedProbeRunEvidence;
+}
 
-const RECIPE2_SIGNATURE_TO_FINGERPRINT: Record<string, ClientGateFingerprint> = {
-  [clientGateSignatureId("claude-code")]: "claude-code",
-  [clientGateSignatureId("codex")]: "codex",
-  [clientGateSignatureId("gemini")]: "gemini",
-};
+interface FirstPartyRepairRecipeBase {
+  readonly id: RepairRecipeId;
+  readonly class: RecipeClass;
+  readonly signatureIds: readonly string[];
+  readonly candidateSummary: string;
+  readonly patchScope: RecipePatchScope;
+  readonly supportWindow: Readonly<RecipeSupportWindow>;
+  readonly match: (input: RecipeMatchInput) => RepairRecipeMatch | undefined;
+}
 
-const RECIPE3_SIGNATURE = "gemini_tool_empty_args";
+export interface ProtocolGenericRepairRecipe
+  extends FirstPartyRepairRecipeBase {
+  readonly class: "protocol-generic";
+  readonly fixture?: Readonly<RecipeFixture>;
+  readonly rollbackTested?: boolean;
+}
 
-/**
- * Contracts to verify after applying Recipe1 (reasoning=false).
- * Reasoning is skipped on the candidate target; prove basic (+ tool if present
- * in evidence plan) still work.
- */
-function recipe1VerifyContracts(evidence: NormalizedProbeRunEvidence): ProbeContractId[] {
-  const hasToolStage = evidence.stages.some((s) => s.contract === "tool");
+export interface RelaySpecificRepairRecipe
+  extends FirstPartyRepairRecipeBase {
+  readonly class: "relay-specific";
+  readonly fixture: Readonly<RecipeFixture>;
+  readonly rollbackTested: true;
+}
+
+export type FirstPartyRepairRecipe =
+  | ProtocolGenericRepairRecipe
+  | RelaySpecificRepairRecipe;
+
+function isNonEmpty(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasSupportWindow(window: RecipeSupportWindow): boolean {
+  return (
+    isNonEmpty(window.min) ||
+    isNonEmpty(window.max) ||
+    isNonEmpty(window.note)
+  );
+}
+
+function assertRecipeAdmission(recipe: FirstPartyRepairRecipe): void {
+  const invalid = (reason: string): never => {
+    throw new Error(`invalid first-party Repair Recipe ${recipe.id}: ${reason}`);
+  };
+
+  if (!isNonEmpty(recipe.id)) invalid("recipe id is required");
+  if (recipe.signatureIds.length === 0) {
+    invalid("at least one evidence signatureId is required");
+  }
+  if (!isNonEmpty(recipe.candidateSummary)) {
+    invalid("candidateSummary is required");
+  }
+  if (!hasSupportWindow(recipe.supportWindow)) {
+    invalid("support window is required (min, max, or note)");
+  }
+  if (recipe.class === "relay-specific") {
+    if (
+      !isNonEmpty(recipe.fixture.id) ||
+      !isNonEmpty(recipe.fixture.description)
+    ) {
+      invalid("relay-specific recipe requires a reproduction fixture");
+    }
+    if (recipe.rollbackTested !== true) {
+      invalid("relay-specific recipe requires rollback test coverage");
+    }
+  }
+}
+
+function defineFirstPartyRecipe<T extends FirstPartyRepairRecipe>(recipe: T): T {
+  assertRecipeAdmission(recipe);
+  Object.freeze(recipe.signatureIds);
+  Object.freeze(recipe.supportWindow);
+  if (recipe.fixture) Object.freeze(recipe.fixture);
+  return Object.freeze(recipe);
+}
+
+function verificationContractsForReasoning(
+  evidence: NormalizedProbeRunEvidence,
+): ProbeContractId[] {
+  const hasToolStage = evidence.stages.some(
+    (stage) => stage.contract === "tool",
+  );
   return hasToolStage ? ["basic", "tool"] : ["basic"];
 }
 
-/**
- * Contracts to verify after applying Recipe2 (fingerprint).
- * Re-run every non-skipped contract from the original plan (fingerprint is
- * header-level; all contracts that were intended must pass under the candidate).
- */
-function recipe2VerifyContracts(evidence: NormalizedProbeRunEvidence): ProbeContractId[] {
-  const out: ProbeContractId[] = [];
-  for (const s of evidence.stages) {
-    if (s.status === "skip") continue;
-    if (!out.includes(s.contract)) out.push(s.contract);
-  }
-  // Always include basic as the minimum gate check.
-  if (!out.includes("basic")) out.unshift("basic");
-  return out;
-}
-
-/**
- * Contracts to verify after applying Recipe3 (geminiToolCompat).
- * Tool is the primary contract; always re-check basic as a smoke gate.
- */
-function recipe3VerifyContracts(evidence: NormalizedProbeRunEvidence): ProbeContractId[] {
-  const out: ProbeContractId[] = ["basic", "tool"];
-  for (const s of evidence.stages) {
-    if (s.status === "skip") continue;
-    if (s.contract === "reasoning" && !out.includes("reasoning")) {
-      // Only re-run reasoning when the original plan executed it.
-      if (s.status === "pass" || s.status === "fail") out.push("reasoning");
-    }
-  }
-  return out;
-}
-
-function matchRecipe1(
-  stage: NormalizedStageEvidence,
-  target: ProbeTarget,
+function verificationContractsForFingerprint(
   evidence: NormalizedProbeRunEvidence,
-): RepairRecipeMatch | undefined {
-  // Gate: only admitted registry entries may produce a match.
-  if (!isRecipeAdmitted("reasoning-false")) return undefined;
-  if (stage.status !== "fail") return undefined;
-  if (stage.signatureId !== RECIPE1_SIGNATURE) return undefined;
-  if (stage.unrepairable) return undefined;
-
-  const modelId = target.modelId;
-  return {
-    recipeId: "reasoning-false",
-    signatureId: RECIPE1_SIGNATURE,
-    sourceContract: stage.contract,
-    verifyContracts: recipe1VerifyContracts(evidence),
-    patch: {
-      kind: "modelMeta",
-      scope: "model",
-      provider: target.provider,
-      modelId,
-      modelMeta: { reasoning: false },
-    },
-    summary:
-      `Set modelOverrides["${modelId}"].reasoning=false ` +
-      `(exact model; upstream rejected reasoning/thinking parameter)`,
-  };
-}
-
-function matchRecipe2(
-  stage: NormalizedStageEvidence,
-  target: ProbeTarget,
-  evidence: NormalizedProbeRunEvidence,
-): RepairRecipeMatch | undefined {
-  if (!isRecipeAdmitted("client-fingerprint")) return undefined;
-  if (stage.status !== "fail") return undefined;
-  if (stage.unrepairable) return undefined;
-
-  const fingerprint = RECIPE2_SIGNATURE_TO_FINGERPRINT[stage.signatureId];
-  // Non-unique / unknown / non-mapped signatures never produce a candidate.
-  if (!fingerprint) return undefined;
-
-  const patch: RepairPatchProviderFingerprint = {
-    kind: "fingerprint",
-    scope: "provider",
-    provider: target.provider,
-    fingerprint,
-  };
-  // Claude Code gates often need request-shape compat in addition to UA preset.
-  if (fingerprint === "claude-code") {
-    patch.claudeCodeCompat = true;
+): ProbeContractId[] {
+  const contracts: ProbeContractId[] = [];
+  for (const stage of evidence.stages) {
+    if (stage.status === "skip") continue;
+    if (!contracts.includes(stage.contract)) contracts.push(stage.contract);
   }
-
-  return {
-    recipeId: "client-fingerprint",
-    signatureId: stage.signatureId,
-    sourceContract: stage.contract,
-    verifyContracts: recipe2VerifyContracts(evidence),
-    patch,
-    summary:
-      fingerprint === "claude-code"
-        ? `Set providerOverrides["${target.provider}"].fingerprint="claude-code" ` +
-          `and claudeCodeCompat=true (unique client-gate signature)`
-        : `Set providerOverrides["${target.provider}"].fingerprint="${fingerprint}" ` +
-          `(unique client-gate signature; provider scope only)`,
-  };
+  if (!contracts.includes("basic")) contracts.unshift("basic");
+  return contracts;
 }
 
-/**
- * Recipe 3: empty-args / schema evidence → provider geminiToolCompat=true.
- * When the switch is already enabled on the target, return undefined (report only;
- * no further parameter guessing).
- */
-function matchRecipe3(
-  stage: NormalizedStageEvidence,
-  target: ProbeTarget,
+function verificationContractsForGeminiTool(
   evidence: NormalizedProbeRunEvidence,
-): RepairRecipeMatch | undefined {
-  if (!isRecipeAdmitted("gemini-tool-compat")) return undefined;
-  if (stage.status !== "fail") return undefined;
-  if (stage.unrepairable) return undefined;
-  if (stage.signatureId !== RECIPE3_SIGNATURE) return undefined;
+): ProbeContractId[] {
+  const contracts: ProbeContractId[] = ["basic", "tool"];
+  const ranReasoning = evidence.stages.some(
+    (stage) =>
+      stage.contract === "reasoning" &&
+      (stage.status === "pass" || stage.status === "fail"),
+  );
+  if (ranReasoning) contracts.push("reasoning");
+  return contracts;
+}
 
-  // Already force-on for this provider: do not propose another write.
-  if (target.geminiToolCompat === true) return undefined;
+const REASONING_FALSE_SIGNATURE = "reasoning_param_rejected";
 
-  return {
-    recipeId: "gemini-tool-compat",
-    signatureId: RECIPE3_SIGNATURE,
-    sourceContract: stage.contract,
-    verifyContracts: recipe3VerifyContracts(evidence),
-    patch: {
-      kind: "geminiToolCompat",
+const REASONING_FALSE_RECIPE = defineFirstPartyRecipe({
+  id: "reasoning-false",
+  class: "protocol-generic",
+  signatureIds: [REASONING_FALSE_SIGNATURE],
+  candidateSummary:
+    "Set exact-model modelMeta.reasoning=false when upstream rejects reasoning/thinking parameter",
+  patchScope: "model",
+  supportWindow: {
+    note: "protocol-generic; applies when any Claude-compatible endpoint rejects reasoning/thinking",
+  },
+  match: ({ stage, target, evidence }) => {
+    if (stage.status !== "fail") return undefined;
+    if (stage.signatureId !== REASONING_FALSE_SIGNATURE) return undefined;
+    if (stage.unrepairable) return undefined;
+
+    return {
+      recipeId: "reasoning-false",
+      signatureId: REASONING_FALSE_SIGNATURE,
+      sourceContract: stage.contract,
+      verifyContracts: verificationContractsForReasoning(evidence),
+      patch: {
+        kind: "modelMeta",
+        scope: "model",
+        provider: target.provider,
+        modelId: target.modelId,
+        modelMeta: { reasoning: false },
+      },
+      summary:
+        `Set modelOverrides["${target.modelId}"].reasoning=false ` +
+        `(exact model; upstream rejected reasoning/thinking parameter)`,
+    };
+  },
+});
+
+const CLIENT_GATE_CANDIDATES = [
+  {
+    signatureId: clientGateSignatureId("claude-code"),
+    fingerprint: "claude-code",
+  },
+  {
+    signatureId: clientGateSignatureId("codex"),
+    fingerprint: "codex",
+  },
+  {
+    signatureId: clientGateSignatureId("gemini"),
+    fingerprint: "gemini",
+  },
+] as const satisfies readonly {
+  signatureId: string;
+  fingerprint: ClientGateFingerprint;
+}[];
+
+const CLIENT_FINGERPRINT_RECIPE = defineFirstPartyRecipe({
+  id: "client-fingerprint",
+  class: "relay-specific",
+  signatureIds: CLIENT_GATE_CANDIDATES.map((item) => item.signatureId),
+  candidateSummary:
+    "Set provider-level fingerprint preset (and claudeCodeCompat for Claude Code) when client-gate signature uniquely maps to Claude Code / Codex / Gemini",
+  patchScope: "provider",
+  supportWindow: {
+    min: "0.3.0",
+    note: "fingerprint presets validated against defaults/fingerprint-snapshot.json baselines",
+  },
+  fixture: {
+    id: "client-gate-unique-signature",
+    description:
+      "Distinctive client-gate rejection body uniquely maps to Claude Code, Codex, or Gemini fingerprint",
+    path: "tests/fixtures/probe/client-gate-claude-code.json",
+  },
+  rollbackTested: true,
+  match: ({ stage, target, evidence }) => {
+    if (stage.status !== "fail") return undefined;
+    if (stage.unrepairable) return undefined;
+
+    const matched = CLIENT_GATE_CANDIDATES.find(
+      (item) => item.signatureId === stage.signatureId,
+    );
+    if (!matched) return undefined;
+
+    const patch: RepairCandidateProviderFingerprint = {
+      kind: "fingerprint",
       scope: "provider",
       provider: target.provider,
-      geminiToolCompat: true,
-    },
-    summary:
-      `Set providerOverrides["${target.provider}"].geminiToolCompat=true ` +
-      `(provider scope only; empty-args/schema tool evidence)`,
-  };
+      fingerprint: matched.fingerprint,
+      ...(matched.fingerprint === "claude-code"
+        ? { claudeCodeCompat: true }
+        : {}),
+    };
+
+    return {
+      recipeId: "client-fingerprint",
+      signatureId: matched.signatureId,
+      sourceContract: stage.contract,
+      verifyContracts: verificationContractsForFingerprint(evidence),
+      patch,
+      summary:
+        matched.fingerprint === "claude-code"
+          ? `Set providerOverrides["${target.provider}"].fingerprint="claude-code" ` +
+            `and claudeCodeCompat=true (unique client-gate signature)`
+          : `Set providerOverrides["${target.provider}"].fingerprint="${matched.fingerprint}" ` +
+            `(unique client-gate signature; provider scope only)`,
+    };
+  },
+});
+
+const GEMINI_TOOL_EMPTY_ARGS_SIGNATURE = "gemini_tool_empty_args";
+
+const GEMINI_TOOL_COMPAT_RECIPE = defineFirstPartyRecipe({
+  id: "gemini-tool-compat",
+  class: "relay-specific",
+  signatureIds: [GEMINI_TOOL_EMPTY_ARGS_SIGNATURE],
+  candidateSummary:
+    "Set providerOverrides[provider].geminiToolCompat=true when tool probe shows empty-args/schema evidence",
+  patchScope: "provider",
+  supportWindow: {
+    min: "0.3.0",
+    note: "geminiToolCompat pure transforms in src/compat/gemini-tool-compat.ts; proxy empty-args repro",
+  },
+  fixture: {
+    id: "gemini-tool-empty-args",
+    description:
+      "Tool contract returns probe_echo with empty arguments when Gemini proxy does not enforce schema without toolConfig",
+    path: "tests/fixtures/probe/gemini-tool-empty-args.json",
+  },
+  rollbackTested: true,
+  match: ({ stage, target, evidence }) => {
+    if (stage.status !== "fail") return undefined;
+    if (stage.unrepairable) return undefined;
+    if (stage.signatureId !== GEMINI_TOOL_EMPTY_ARGS_SIGNATURE) {
+      return undefined;
+    }
+    if (target.geminiToolCompat === true) return undefined;
+
+    return {
+      recipeId: "gemini-tool-compat",
+      signatureId: GEMINI_TOOL_EMPTY_ARGS_SIGNATURE,
+      sourceContract: stage.contract,
+      verifyContracts: verificationContractsForGeminiTool(evidence),
+      patch: {
+        kind: "geminiToolCompat",
+        scope: "provider",
+        provider: target.provider,
+        geminiToolCompat: true,
+      },
+      summary:
+        `Set providerOverrides["${target.provider}"].geminiToolCompat=true ` +
+        `(provider scope only; empty-args/schema tool evidence)`,
+    };
+  },
+});
+
+function defineRecipeSet(
+  recipes: readonly FirstPartyRepairRecipe[],
+): readonly FirstPartyRepairRecipe[] {
+  const ids = new Set<RepairRecipeId>();
+  for (const recipe of recipes) {
+    if (ids.has(recipe.id)) {
+      throw new Error(`duplicate first-party Repair Recipe id: ${recipe.id}`);
+    }
+    ids.add(recipe.id);
+  }
+  return Object.freeze([...recipes]);
 }
 
+/** Fixed recipe order used for every Compatibility Repair run. */
+export const FIRST_PARTY_REPAIR_RECIPES = defineRecipeSet([
+  REASONING_FALSE_RECIPE,
+  CLIENT_FINGERPRINT_RECIPE,
+  GEMINI_TOOL_COMPAT_RECIPE,
+]);
+
 /**
- * Match whitelist Repair Recipes against durable normalized evidence.
- * Returns zero or more matches in stage order; callers try at most one per run.
- * Unknown / ambiguous signatures produce no match.
- * Recipes must be admitted by the evidence gate (ticket 9).
+ * Match static first-party recipes against durable normalized evidence.
+ * Stage order wins first, recipe order second; each recipe can match at most
+ * once per run. The Repair pipeline still attempts and commits at most one.
  */
 export function matchRepairRecipes(
   evidence: NormalizedProbeRunEvidence,
@@ -255,52 +383,95 @@ export function matchRepairRecipes(
   const seen = new Set<RepairRecipeId>();
 
   for (const stage of evidence.stages) {
-    const r1 = matchRecipe1(stage, evidence.target, evidence);
-    if (r1 && !seen.has(r1.recipeId)) {
-      matches.push(r1);
-      seen.add(r1.recipeId);
-    }
-    const r2 = matchRecipe2(stage, evidence.target, evidence);
-    if (r2 && !seen.has(r2.recipeId)) {
-      matches.push(r2);
-      seen.add(r2.recipeId);
-    }
-    const r3 = matchRecipe3(stage, evidence.target, evidence);
-    if (r3 && !seen.has(r3.recipeId)) {
-      matches.push(r3);
-      seen.add(r3.recipeId);
+    for (const recipe of FIRST_PARTY_REPAIR_RECIPES) {
+      if (seen.has(recipe.id)) continue;
+      const match = recipe.match({ stage, target: evidence.target, evidence });
+      if (!match) continue;
+      matches.push(match);
+      seen.add(recipe.id);
     }
   }
 
   return matches;
 }
 
-/**
- * Apply a recipe patch to an in-memory Probe Target (never persists).
- * Used only for candidate verification before CAS commit.
- */
-export function applyPatchToTarget(
+function failUnknownCandidate(candidate: never): never {
+  const kind = (candidate as { kind?: unknown }).kind;
+  throw new Error(`unknown Repair candidate kind: ${String(kind)}`);
+}
+
+/** Probe Target adapter used by candidate verification. */
+export function applyRepairCandidateToProbeTarget(
   target: ProbeTarget,
-  patch: RepairPatch,
+  candidate: RepairCandidate,
 ): ProbeTarget {
-  if (patch.kind === "modelMeta" && patch.modelMeta.reasoning === false) {
-    return {
-      ...target,
-      reasoning: false,
-    };
+  switch (candidate.kind) {
+    case "modelMeta":
+      return {
+        ...target,
+        reasoning: candidate.modelMeta.reasoning,
+      };
+    case "fingerprint":
+      return {
+        ...target,
+        fingerprint: candidate.fingerprint,
+        ...(candidate.claudeCodeCompat
+          ? { claudeCodeCompat: candidate.claudeCodeCompat }
+          : {}),
+      };
+    case "geminiToolCompat":
+      return {
+        ...target,
+        geminiToolCompat: candidate.geminiToolCompat,
+      };
+    default:
+      return failUnknownCandidate(candidate);
   }
-  if (patch.kind === "fingerprint") {
-    return {
-      ...target,
-      fingerprint: patch.fingerprint,
-      ...(patch.claudeCodeCompat ? { claudeCodeCompat: true } : {}),
-    };
+}
+
+function applyCandidateToOverrideEntry(
+  entry: MutableOverrideEntry,
+  providerDisplayName: string,
+  candidate: RepairCandidate,
+): MutableOverrideEntry {
+  switch (candidate.kind) {
+    case "modelMeta":
+      return {
+        ...entry,
+        modelOverrides: {
+          ...(entry.modelOverrides ?? {}),
+          [candidate.modelId]: { ...candidate.modelMeta },
+        },
+        label: entry.label ?? providerDisplayName,
+      };
+    case "fingerprint":
+      return {
+        ...entry,
+        fingerprint: candidate.fingerprint,
+        ...(candidate.claudeCodeCompat
+          ? { claudeCodeCompat: candidate.claudeCodeCompat }
+          : {}),
+      };
+    case "geminiToolCompat":
+      return {
+        ...entry,
+        geminiToolCompat: candidate.geminiToolCompat,
+      };
+    default:
+      return failUnknownCandidate(candidate);
   }
-  if (patch.kind === "geminiToolCompat") {
-    return {
-      ...target,
-      geminiToolCompat: true,
-    };
-  }
-  return { ...target };
+}
+
+/**
+ * Config document adapter. The strict-CAS envelope, provider lookup, and file
+ * I/O remain with the production RepairConfigStore.
+ */
+export function applyRepairCandidateToConfigDocument(
+  document: JsonObject,
+  provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
+  candidate: RepairCandidate,
+): JsonObject {
+  return updateOverrideEntry(document, provider, (entry) =>
+    applyCandidateToOverrideEntry(entry, provider.displayName, candidate),
+  );
 }

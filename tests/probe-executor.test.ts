@@ -10,6 +10,7 @@ import type {
   ProbeTarget,
   ProbeTransport,
   ProbeTransportResult,
+  RawProbeObservation,
 } from "../src/probe/index.ts";
 
 const provider = {
@@ -98,7 +99,7 @@ describe("Compatibility Probe Executor", () => {
     if (outcome.kind !== "precheck-stopped") return;
     expect(registrations).toBe(0);
     expect(transports).toBe(0);
-    expect(outcome.observations).toEqual([]);
+    expect(outcome).not.toHaveProperty("observations");
     expect(outcome.result).toMatchObject({
       ok: false,
       stages: [],
@@ -136,13 +137,14 @@ describe("Compatibility Probe Executor", () => {
     expect(events).toEqual(["precheck", "registry"]);
   });
 
-  test("completed execution exposes a verifier over the same run dependencies", async () => {
+  test("completed execution normalizes once and exposes a verifier over the same run dependencies", async () => {
     const events: string[] = [];
     const requests: ProbeRequest[] = [];
     const model = { id: "registry-model" };
     let precheckBuilds = 0;
     let registrations = 0;
     let transportBuilds = 0;
+    let normalizations = 0;
     const transport: ProbeTransport = async (request) => {
       events.push(`request:${request.contract}`);
       requests.push(request);
@@ -164,7 +166,10 @@ describe("Compatibility Probe Executor", () => {
         events.push("transport");
         return transport;
       },
-      capturedAt: () => "2026-08-10T00:00:00.000Z",
+      capturedAt: () => {
+        normalizations += 1;
+        return "2026-08-10T00:00:00.000Z";
+      },
     });
 
     const outcome = await executor.execute({ target, provider });
@@ -172,6 +177,8 @@ describe("Compatibility Probe Executor", () => {
     expect(events.slice(0, 3)).toEqual(["precheck", "registry", "transport"]);
     expect(outcome.result.ok).toBe(true);
     expect(outcome.evidence.target).toEqual(target);
+    expect(outcome).not.toHaveProperty("observations");
+    expect(normalizations).toBe(1);
 
     await outcome.verify({
       target: { ...target, claudeCodeCompat: true },
@@ -181,7 +188,33 @@ describe("Compatibility Probe Executor", () => {
     expect(precheckBuilds).toBe(1);
     expect(registrations).toBe(1);
     expect(transportBuilds).toBe(1);
+    expect(normalizations).toBe(1);
     expect(requests.every((request) => request.model === model)).toBe(true);
     expect(requests[requests.length - 1]!.target.claudeCodeCompat).toBe(true);
+  });
+
+  test("normalization failures reject the execution", async () => {
+    const executor = createCompatibilityProbeExecutor({
+      buildPrecheck: async () => precheckPass,
+      ensureProbeTarget: () => ({
+        kind: "ready",
+        source: "existing",
+        model: {},
+      }),
+      createTransport: (captureObservation) => async (request) => {
+        const observation = {} as RawProbeObservation;
+        Object.defineProperty(observation, "contract", {
+          get() {
+            throw new Error("evidence normalization failed");
+          },
+        });
+        captureObservation(observation);
+        return okResult(request);
+      },
+    });
+
+    await expect(executor.execute({ target, provider })).rejects.toThrow(
+      "evidence normalization failed",
+    );
   });
 });

@@ -2,15 +2,13 @@
  * Recipe 2 — client fingerprint unique signature (issue #48 / ticket 5).
  * External behavior only; transport + config store injected — zero network.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   buildRepairPlan,
   createProbeVerifier,
   detectUniqueClientGate,
-  isRecipeAdmitted,
   matchRepairRecipes,
   normalizeStageEvidence,
-  resetRecipeRegistry,
   runRepair,
   type NormalizedProbeRunEvidence,
   type ProbeRequest,
@@ -22,10 +20,6 @@ import claudeGateFixture from "./fixtures/probe/client-gate-claude-code.json";
 import codexGateFixture from "./fixtures/probe/client-gate-codex.json";
 import geminiGateFixture from "./fixtures/probe/client-gate-gemini.json";
 import ambiguousGateFixture from "./fixtures/probe/client-gate-ambiguous.json";
-
-afterEach(() => {
-  resetRecipeRegistry();
-});
 
 const target = {
   provider: "ps-fingerprint-relay",
@@ -296,10 +290,6 @@ describe("evidence signatures for client-gate (ticket 5)", () => {
 });
 
 describe("matchRepairRecipes Recipe2 (ticket 5)", () => {
-  test("client-fingerprint recipe is gate-admitted (relay-specific with fixture)", () => {
-    expect(isRecipeAdmitted("client-fingerprint")).toBe(true);
-  });
-
   test("unique Claude Code signature → provider-level fingerprint claude-code (+ compat)", () => {
     const evidence = clientGateEvidence(
       "client_gate_claude_code",

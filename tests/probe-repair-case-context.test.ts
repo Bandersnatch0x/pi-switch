@@ -1,83 +1,96 @@
-/**
- * Repair Case summary into session context (issue #50 / ticket 7).
- *
- * After a Session Model switch, the next model still sees short redacted
- * summaries (custom_message). Detailed normalized evidence (custom) never
- * enters model context, so repeated repairs cannot bloat context with details.
- * External behavior only; zero network.
- */
 import { describe, expect, test } from "bun:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createPiRepairCaseWriteAdapter } from "../extensions/repair-case-adapter.ts";
 import {
   REPAIR_CASE_DETAIL_CUSTOM_TYPE,
   REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
-  buildRepairCaseLayers,
-  createRepairCaseSession,
-  formatRepairCaseSummaryText,
-  normalizeProbeRun,
-  projectSessionModelContext,
-  recordRepairCase,
-  switchSessionModel,
+  buildRepairPlan,
+  createInMemoryRepairCaseWriteAdapter,
+  createRepairCaseRecorder,
+  createRepairCaseRepairEvent,
   type NormalizedProbeRunEvidence,
   type ProbeRunResult,
-  type RepairCaseSession,
+  type RepairCaseEvent,
+  type RepairCaseVerificationAttemptInput,
+  type RepairCaseWrite,
+  type RepairCaseWriteAdapter,
+  type RepairOutcome,
 } from "../src/probe/index.ts";
 
-const target = {
-  provider: "ps-claude-relay",
-  modelId: "claude-sonnet-probe",
-  reasoning: true as boolean | undefined,
-};
+const CASE_ID = "case_20260814010203_000000";
 
-function failAuthRun(): ProbeRunResult {
+function reasoningRejectedEvidence(): NormalizedProbeRunEvidence {
   return {
-    target: { ...target },
-    stages: [
-      {
-        contract: "basic",
-        status: "fail",
-        category: "auth",
-        unrepairable: true,
-        httpStatus: 401,
-        summary: "HTTP 401 authentication failed",
-        requestCount: 1,
-      },
-      {
-        contract: "reasoning",
-        status: "stopped",
-        summary: "stopped after hard failure",
-        requestCount: 0,
-      },
-      {
-        contract: "tool",
-        status: "stopped",
-        summary: "stopped after hard failure",
-        requestCount: 0,
-      },
-    ],
-    ok: false,
-    requestCount: 1,
-    stoppedReason: "unrepairable",
-    budget: { maxRequests: 9, used: 1, maxTokens: 32, timeoutMs: 15000 },
-  };
-}
-
-function passRun(modelId = target.modelId): ProbeRunResult {
-  return {
-    target: { ...target, modelId },
+    target: {
+      provider: "ps-claude-relay",
+      modelId: "claude-sonnet-probe",
+      reasoning: true,
+    },
     stages: [
       {
         contract: "basic",
         status: "pass",
+        category: "ok",
+        signatureId: "pass",
+        allowedHeaderNames: ["content-type"],
         summary: "basic text response received",
         requestCount: 1,
         httpStatus: 200,
       },
       {
         contract: "reasoning",
+        status: "fail",
+        category: "protocol",
+        signatureId: "reasoning_param_rejected",
+        allowedHeaderNames: ["x-request-id"],
+        summary: "reasoning parameter not supported",
+        requestCount: 1,
+        httpStatus: 400,
+      },
+      {
+        contract: "tool",
+        status: "stopped",
+        category: "unknown",
+        signatureId: "stopped",
+        allowedHeaderNames: [],
+        summary: "stopped after failure",
+        requestCount: 0,
+      },
+    ],
+    ok: false,
+    stoppedReason: "failure",
+    requestCount: 2,
+    budget: {
+      maxRequests: 9,
+      used: 2,
+      maxTokens: 2_048,
+      timeoutMs: 15_000,
+    },
+    capturedAt: "2026-08-14T01:00:00.000Z",
+  };
+}
+
+function verificationRun(): ProbeRunResult {
+  return {
+    target: {
+      provider: "ps-claude-relay",
+      modelId: "claude-sonnet-probe",
+      reasoning: false,
+    },
+    stages: [
+      {
+        contract: "basic",
         status: "pass",
-        summary: "reasoning request completed without error",
+        summary:
+          "verified at https://relay.example/v1?api_key=sk-live-VERIFY Authorization: Bearer sk-live-VERIFY",
         requestCount: 1,
         httpStatus: 200,
+      },
+      {
+        contract: "reasoning",
+        status: "skip",
+        summary: "reasoning disabled",
+        requestCount: 0,
       },
       {
         contract: "tool",
@@ -88,317 +101,274 @@ function passRun(modelId = target.modelId): ProbeRunResult {
       },
     ],
     ok: true,
-    requestCount: 3,
-    budget: { maxRequests: 9, used: 3, maxTokens: 32, timeoutMs: 15000 },
-  };
-}
-
-function fatFailEvidence(caseTag: string): NormalizedProbeRunEvidence {
-  // Intentionally large durable detail (headers + multi-stage signatures)
-  // so bloat assertions can distinguish summary vs detail payload size.
-  const run: ProbeRunResult = {
-    target: {
-      provider: "ps-claude-relay",
-      modelId: `model-${caseTag}`,
-      reasoning: true,
+    requestCount: 2,
+    budget: {
+      maxRequests: 9,
+      used: 2,
+      maxTokens: 2_048,
+      timeoutMs: 15_000,
     },
-    stages: [
-      {
-        contract: "basic",
-        status: "fail",
-        category: "protocol",
-        unrepairable: false,
-        httpStatus: 400,
-        summary: `protocol fail ${caseTag} with url https://relay.example/v1?api_key=sk-live-SECRET-${caseTag}`,
-        requestCount: 1,
-      },
-      {
-        contract: "reasoning",
-        status: "fail",
-        category: "protocol",
-        unrepairable: false,
-        httpStatus: 400,
-        summary: `reasoning rejected ${caseTag}`,
-        requestCount: 1,
-      },
-      {
-        contract: "tool",
-        status: "fail",
-        category: "tool",
-        unrepairable: false,
-        httpStatus: 200,
-        summary: `tool empty args ${caseTag}`,
-        requestCount: 1,
-      },
-    ],
-    ok: false,
-    requestCount: 3,
-    budget: { maxRequests: 9, used: 3, maxTokens: 32, timeoutMs: 15000 },
   };
-  return normalizeProbeRun({
-    result: run,
-    observations: [
-      {
-        contract: "basic",
-        request: {
-          messages: [{ role: "user", content: `probe body ${caseTag} do-not-leak` }],
-        },
-        response: {
-          httpStatus: 400,
-          responseHeaders: {
-            "x-request-id": `req-${caseTag}`,
-            "content-type": "application/json",
-            "set-cookie": `session=secret-${caseTag}`,
-            "cf-ray": `ray-${caseTag}`,
-            server: "relay",
-            "x-ratelimit-remaining": "0",
-          },
-          rawBody: `{"error":"sk-live-SECRET-${caseTag}","stack":"..."}`,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: `err sk-live-SECRET-${caseTag}` }],
-            stopReason: "error",
-          },
-        },
+}
+
+function committedOutcome(
+  evidence = reasoningRejectedEvidence(),
+): Extract<RepairOutcome, { status: "committed" }> {
+  const plan = buildRepairPlan(evidence);
+  const recipe = plan.recipes[0];
+  if (!recipe) throw new Error("fixture must match a Repair Recipe");
+  return {
+    status: "committed",
+    plan,
+    recipe,
+    attempts: [verificationRun()],
+    summary: "committed fixture",
+    persisted: true,
+    sessionModelUnchanged: true,
+    switchAction: {
+      kind: "switch-to-repaired-target",
+      target: {
+        provider: evidence.target.provider,
+        modelId: evidence.target.modelId,
+        reasoning: false,
       },
-    ],
+    },
+  };
+}
+
+function createRecorder(adapter: RepairCaseWriteAdapter) {
+  return createRepairCaseRecorder(adapter, {
+    now: () => new Date("2026-08-14T01:02:03.000Z"),
+    random: () => 0,
   });
 }
 
-function contextBlob(session: RepairCaseSession): string {
-  const projected = projectSessionModelContext(session);
-  return JSON.stringify(projected.contextMessages);
+interface AdapterHarness {
+  adapter: RepairCaseWriteAdapter;
+  writes: RepairCaseWrite[];
 }
 
-describe("Repair Case session context (ticket 7 / #50)", () => {
-  test("after Session Model switch, summary remains visible to the model", () => {
-    const session = createRepairCaseSession({
-      sessionModel: { provider: "anthropic", modelId: "claude-opus-session" },
-    });
-    const evidence = normalizeProbeRun({ result: failAuthRun() });
-    const layers = buildRepairCaseLayers({ caseId: "case_switch_1", evidence });
-    recordRepairCase(session, layers);
+function inMemoryHarness(): AdapterHarness {
+  const adapter = createInMemoryRepairCaseWriteAdapter();
+  return { adapter, writes: adapter.writes };
+}
 
-    // User switches Session Model mid-troubleshooting (does not touch Probe Target)
-    switchSessionModel(session, "openai", "gpt-session-switch");
+function piHarness(): AdapterHarness {
+  const writes: RepairCaseWrite[] = [];
+  const pi = {
+    sendMessage: (message: {
+      customType: typeof REPAIR_CASE_SUMMARY_CUSTOM_TYPE;
+      content: string;
+      display: true;
+      details: { caseId: string };
+    }) => {
+      writes.push({ kind: "summary", ...message });
+    },
+    appendEntry: (
+      customType: typeof REPAIR_CASE_DETAIL_CUSTOM_TYPE,
+      data: Extract<RepairCaseWrite, { kind: "detail" }>["data"],
+    ) => {
+      writes.push({ kind: "detail", customType, data });
+    },
+  } as unknown as Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
+  return { adapter: createPiRepairCaseWriteAdapter(pi), writes };
+}
 
-    const projected = projectSessionModelContext(session);
+const adapterFactories = [
+  ["in-memory", inMemoryHarness],
+  ["Pi", piHarness],
+] as const;
 
-    expect(projected.sessionModel).toEqual({
-      provider: "openai",
-      modelId: "gpt-session-switch",
-    });
-    expect(projected.contextMessages.length).toBeGreaterThanOrEqual(1);
+for (const [name, createHarness] of adapterFactories) {
+  describe(`${name} Repair Case adapter contract`, () => {
+    test("records summary then detail with one Case ID and stable field shapes", () => {
+      const harness = createHarness();
+      const evidence = reasoningRejectedEvidence();
 
-    const texts = projected.contextMessages.map((m) =>
-      typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-    );
-    const joined = texts.join("\n");
-    expect(joined).toContain("case_switch_1");
-    expect(joined).toContain(target.provider);
-    expect(joined).toContain(target.modelId);
-    expect(joined).toMatch(/FAIL|auth|fail/i);
+      createRecorder(harness.adapter).record(evidence, { kind: "probe" });
 
-    // Probe Target is independent of Session Model
-    expect(joined).not.toContain("gpt-session-switch");
-    expect(projected.sessionModel?.modelId).toBe("gpt-session-switch");
-  });
-
-  test("detailed evidence never enters model context (custom vs custom_message)", () => {
-    const session = createRepairCaseSession();
-    const evidence = fatFailEvidence("detail");
-    const layers = buildRepairCaseLayers({ caseId: "case_detail_x", evidence });
-    recordRepairCase(session, layers);
-
-    const projected = projectSessionModelContext(session);
-    const ctxJson = JSON.stringify(projected.contextMessages);
-    const entriesJson = JSON.stringify(session.entries);
-
-    // Dual-layer still present in session storage
-    expect(entriesJson).toContain(REPAIR_CASE_SUMMARY_CUSTOM_TYPE);
-    expect(entriesJson).toContain(REPAIR_CASE_DETAIL_CUSTOM_TYPE);
-    expect(entriesJson).toContain('"signatureId"');
-    expect(entriesJson).toContain("allowedHeaderNames");
-
-    // Context projection only carries custom_message content
-    expect(ctxJson).toContain("case_detail_x");
-    expect(ctxJson).not.toContain('"signatureId"');
-    expect(ctxJson).not.toContain("allowedHeaderNames");
-    expect(ctxJson).not.toContain('"budget"');
-    expect(ctxJson).not.toContain("rawBody");
-    expect(ctxJson).not.toContain("recipeAttempts");
-    expect(ctxJson).not.toContain("do-not-leak");
-    expect(ctxJson).not.toContain("set-cookie");
-    expect(ctxJson).not.toContain("sk-live-SECRET");
-
-    // Excluded details mirror pi buildSessionContext (custom → ignored)
-    expect(projected.excludedFromContext.length).toBe(1);
-    expect(projected.excludedFromContext[0]!.type).toBe("custom");
-    expect(projected.excludedFromContext[0]!.customType).toBe(
-      REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-    );
-    expect(projected.excludedFromContext[0]!.data.caseId).toBe("case_detail_x");
-  });
-
-  test("multiple Repair Cases do not bloat context with case details", () => {
-    const session = createRepairCaseSession({
-      sessionModel: { provider: "anthropic", modelId: "session-a" },
-    });
-
-    const caseIds: string[] = [];
-    for (let i = 0; i < 5; i++) {
-      const tag = `n${i}`;
-      const evidence = fatFailEvidence(tag);
-      const layers = buildRepairCaseLayers({ caseId: `case_multi_${tag}`, evidence });
-      caseIds.push(layers.caseId);
-      recordRepairCase(session, layers);
-    }
-
-    // Mid-run model switch must keep all prior summaries
-    switchSessionModel(session, "google", "gemini-session-b");
-
-    const projected = projectSessionModelContext(session);
-    const ctxJson = JSON.stringify(projected.contextMessages);
-
-    // All five short summaries remain visible
-    for (const id of caseIds) {
-      expect(ctxJson).toContain(id);
-    }
-    expect(projected.contextMessages.length).toBe(5);
-
-    // Context must not carry detail trees for any case
-    expect(ctxJson).not.toContain('"signatureId"');
-    expect(ctxJson).not.toContain("allowedHeaderNames");
-    expect(ctxJson).not.toContain('"budget"');
-    expect(ctxJson).not.toContain("rawBody");
-    expect(ctxJson).not.toContain("recipeAttempts");
-    expect(ctxJson).not.toContain("do-not-leak");
-    expect(ctxJson).not.toContain("sk-live-SECRET");
-
-    // Size bound: five short one-liners stay tiny vs full detail payload
-    const detailOnly = session.entries
-      .filter((e) => e.type === "custom")
-      .map((e) => JSON.stringify(e));
-    const detailBytes = detailOnly.join("").length;
-    const contextBytes = ctxJson.length;
-    expect(detailBytes).toBeGreaterThan(contextBytes * 2);
-    expect(contextBytes).toBeLessThan(4_000);
-
-    // Session still retains detail entries offline
-    expect(session.entries.filter((e) => e.type === "custom")).toHaveLength(5);
-    expect(session.entries.filter((e) => e.type === "custom_message")).toHaveLength(5);
-    expect(projected.excludedFromContext).toHaveLength(5);
-  });
-
-  test("summary includes target identity, contracts, conclusion; no secrets", () => {
-    const run: ProbeRunResult = {
-      ...failAuthRun(),
-      stages: [
-        {
-          contract: "basic",
-          status: "fail",
-          category: "auth",
-          unrepairable: true,
-          httpStatus: 401,
-          summary:
-            "HTTP 401 at https://relay.example/v1?api_key=sk-live-LEAK Authorization: Bearer sk-live-LEAK",
-          requestCount: 1,
+      expect(harness.writes.map((write) => write.kind)).toEqual([
+        "summary",
+        "detail",
+      ]);
+      const summary = harness.writes[0];
+      const detail = harness.writes[1];
+      expect(summary).toEqual({
+        kind: "summary",
+        customType: REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
+        content:
+          `ps-repair-case ${CASE_ID} FAIL ps-claude-relay/claude-sonnet-probe` +
+          " [basic=pass, reasoning=protocol, tool=stop] stop=failure",
+        display: true,
+        details: { caseId: CASE_ID },
+      });
+      expect(detail).toMatchObject({
+        kind: "detail",
+        customType: REPAIR_CASE_DETAIL_CUSTOM_TYPE,
+        data: {
+          caseId: CASE_ID,
+          target: evidence.target,
+          ok: false,
+          evidence,
+          recipeAttempts: [],
         },
-        ...failAuthRun().stages.slice(1),
-      ],
+      });
+      if (summary?.kind !== "summary" || detail?.kind !== "detail") {
+        throw new Error("adapter contract returned writes in the wrong order");
+      }
+      expect(summary.details.caseId).toBe(detail.data.caseId);
+    });
+  });
+}
+
+describe("Repair Case recorder contract", () => {
+  test("owns outcome, Recipe, attempt, and switch conversion with redaction", () => {
+    const adapter = createInMemoryRepairCaseWriteAdapter();
+    const evidence = reasoningRejectedEvidence();
+    const outcome = committedOutcome(evidence);
+    const event = createRepairCaseRepairEvent(outcome, {
+      status: "succeeded",
+      target: { ...outcome.switchAction.target },
+      summary:
+        "switched via https://relay.example/v1?token=sk-live-SWITCH Bearer sk-live-SWITCH",
+    });
+
+    createRecorder(adapter).record(evidence, event);
+
+    const summary = adapter.writes[0];
+    const detail = adapter.writes[1];
+    expect(summary?.kind).toBe("summary");
+    expect(detail?.kind).toBe("detail");
+    if (summary?.kind !== "summary" || detail?.kind !== "detail") return;
+
+    expect(summary.content).toContain("repair=committed");
+    expect(summary.content).toContain("switch=succeeded");
+    expect(JSON.stringify(summary)).not.toContain("signatureId");
+    expect(JSON.stringify(summary)).not.toContain("allowedHeaderNames");
+    expect(JSON.stringify(summary)).not.toContain("budget");
+
+    expect(detail.data.repair).toMatchObject({
+      status: "committed",
+      persisted: true,
+      recipe: {
+        recipeId: "reasoning-false",
+        signatureId: "reasoning_param_rejected",
+        scope: "exact-model",
+        affectedModels: ["claude-sonnet-probe"],
+      },
+      switch: {
+        status: "succeeded",
+        target: outcome.switchAction.target,
+      },
+    });
+    const repair = detail.data.repair;
+    if (!repair) throw new Error("missing Repair Case repair record");
+    expect(repair.verificationAttempts).toHaveLength(1);
+    expect(detail.data.recipeAttempts).toBe(repair.verificationAttempts);
+    const serialized = JSON.stringify(detail.data);
+    expect(serialized).not.toContain("sk-live-");
+    expect(serialized).not.toContain("Bearer sk-");
+    expect(serialized).not.toMatch(/[?&](api_key|token)=/i);
+    expect(serialized).not.toContain("rawBody");
+    expect(serialized).not.toContain("observations");
+  });
+
+  test("projects full RepairOutcome into a narrow event without changing it", () => {
+    const outcome = committedOutcome();
+    const originalAttempt = outcome.attempts[0];
+    expect(originalAttempt?.target.modelId).toBe("claude-sonnet-probe");
+    expect(originalAttempt?.budget.maxRequests).toBe(9);
+
+    const event = createRepairCaseRepairEvent(outcome, {
+      status: "not-offered",
+    });
+    const eventJson = JSON.stringify(event);
+
+    expect(eventJson).not.toContain('"target"');
+    expect(eventJson).not.toContain('"budget"');
+    expect(eventJson).not.toContain('"precheck"');
+    expect(outcome.attempts[0]).toBe(originalAttempt);
+    expect(outcome.attempts[0]?.budget.maxRequests).toBe(9);
+  });
+
+  test("maps provider-wide Recipe scope inside the recorder module", () => {
+    const evidence = reasoningRejectedEvidence();
+    evidence.stages[1] = {
+      contract: "reasoning",
+      status: "stopped",
+      category: "unknown",
+      signatureId: "stopped",
+      allowedHeaderNames: [],
+      summary: "stopped after client gate",
+      requestCount: 0,
     };
-    const evidence = normalizeProbeRun({ result: run });
-    const text = formatRepairCaseSummaryText("case_sum_1", evidence);
+    evidence.stages[0] = {
+      contract: "basic",
+      status: "fail",
+      category: "client-gate",
+      signatureId: "client_gate_claude_code",
+      allowedHeaderNames: [],
+      summary: "Claude Code identity required",
+      requestCount: 1,
+      httpStatus: 403,
+    };
+    const outcome = committedOutcome(evidence);
+    const adapter = createInMemoryRepairCaseWriteAdapter();
 
-    // Target identity
-    expect(text).toContain("ps-claude-relay");
-    expect(text).toContain("claude-sonnet-probe");
-    // Case id
-    expect(text).toContain("case_sum_1");
-    // Contracts
-    expect(text).toMatch(/basic/i);
-    expect(text).toMatch(/reasoning|tool/i);
-    // Conclusion
-    expect(text).toMatch(/FAIL|auth|unrepairable/i);
-    // No secrets
-    expect(text.toLowerCase()).not.toContain("sk-live-");
-    expect(text).not.toMatch(/[?&]api_key=/i);
-    expect(text).not.toMatch(/Bearer\s+\S+/i);
-
-    // When recorded into session, projection preserves the same constraints
-    const session = createRepairCaseSession();
-    recordRepairCase(
-      session,
-      buildRepairCaseLayers({ caseId: "case_sum_1", evidence }),
+    createRecorder(adapter).record(
+      evidence,
+      createRepairCaseRepairEvent(outcome, { status: "not-offered" }),
     );
-    const blob = contextBlob(session);
-    expect(blob).toContain("case_sum_1");
-    expect(blob).toContain("ps-claude-relay");
-    expect(blob.toLowerCase()).not.toContain("sk-live-");
-    expect(blob).not.toMatch(/[?&]api_key=/i);
+
+    const detail = adapter.writes[1];
+    if (detail?.kind !== "detail") throw new Error("missing detail write");
+    expect(detail.data.repair?.recipe).toEqual({
+      recipeId: "client-fingerprint",
+      signatureId: "client_gate_claude_code",
+      scope: "provider-wide",
+      provider: "ps-claude-relay",
+    });
   });
 
-  test("session model change never mutates Probe Target in recorded cases", () => {
-    const session = createRepairCaseSession({
-      sessionModel: { provider: "a", modelId: "m1" },
-    });
-    const evidence = normalizeProbeRun({ result: passRun() });
-    const layers = buildRepairCaseLayers({ caseId: "case_pt", evidence });
-    recordRepairCase(session, layers);
-    switchSessionModel(session, "b", "m2");
-    switchSessionModel(session, "c", "m3");
+  test("propagates first and second adapter failures without retry or compensation", () => {
+    const evidence = reasoningRejectedEvidence();
+    let firstCalls = 0;
+    const firstFailure = new Error("summary write failed");
+    const firstAdapter: RepairCaseWriteAdapter = {
+      write: () => {
+        firstCalls += 1;
+        throw firstFailure;
+      },
+    };
+    expect(() =>
+      createRecorder(firstAdapter).record(evidence, { kind: "probe" }),
+    ).toThrow(firstFailure);
+    expect(firstCalls).toBe(1);
 
-    const detail = session.entries.find(
-      (e) => e.type === "custom" && e.customType === REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-    );
-    expect(detail).toBeDefined();
-    if (detail?.type === "custom") {
-      expect(detail.data.target.provider).toBe(target.provider);
-      expect(detail.data.target.modelId).toBe(target.modelId);
-    }
-
-    const projected = projectSessionModelContext(session);
-    expect(projected.sessionModel).toEqual({ provider: "c", modelId: "m3" });
-    // Summary still names the Probe Target, not the latest session model
-    const joined = projected.contextMessages.map((m) => m.content).join(" ");
-    expect(joined).toContain(target.provider);
-    expect(joined).toContain(target.modelId);
-    expect(joined).not.toContain("m3");
+    let secondCalls = 0;
+    const completed: RepairCaseWrite[] = [];
+    const secondFailure = new Error("detail write failed");
+    const secondAdapter: RepairCaseWriteAdapter = {
+      write: (write) => {
+        secondCalls += 1;
+        if (secondCalls === 2) throw secondFailure;
+        completed.push(write);
+      },
+    };
+    expect(() =>
+      createRecorder(secondAdapter).record(evidence, { kind: "probe" }),
+    ).toThrow(secondFailure);
+    expect(secondCalls).toBe(2);
+    expect(completed.map((write) => write.kind)).toEqual(["summary"]);
   });
+});
 
-  test("summary entries use custom_message; detail entries use custom", () => {
-    const session = createRepairCaseSession();
-    const layers = buildRepairCaseLayers({
-      caseId: "case_types",
-      evidence: normalizeProbeRun({ result: failAuthRun() }),
-    });
-    recordRepairCase(session, layers);
+type ProbeRunCanCrossRecorderSeam =
+  ProbeRunResult extends RepairCaseVerificationAttemptInput ? true : false;
+const probeRunCanCrossRecorderSeam: ProbeRunCanCrossRecorderSeam = false;
 
-    const summary = session.entries.find((e) => e.type === "custom_message");
-    const detail = session.entries.find((e) => e.type === "custom");
-    expect(summary).toMatchObject({
-      type: "custom_message",
-      customType: REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
-      display: true,
-      details: { caseId: "case_types" },
-    });
-    expect(detail).toMatchObject({
-      type: "custom",
-      customType: REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-    });
-    if (detail?.type === "custom") {
-      expect(detail.data.caseId).toBe("case_types");
-      expect(detail.data.evidence.stages.length).toBeGreaterThan(0);
-    }
-  });
-
-  test("empty session projects empty context", () => {
-    const session = createRepairCaseSession({
-      sessionModel: { provider: "x", modelId: "y" },
-    });
-    const projected = projectSessionModelContext(session);
-    expect(projected.contextMessages).toEqual([]);
-    expect(projected.excludedFromContext).toEqual([]);
-    expect(projected.sessionModel).toEqual({ provider: "x", modelId: "y" });
-  });
+test("type contract rejects ProbeRunResult at the recorder seam", () => {
+  expect(probeRunCanCrossRecorderSeam).toBe(false);
+  const event: RepairCaseEvent = { kind: "probe" };
+  expect(event.kind).toBe("probe");
 });
