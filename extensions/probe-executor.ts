@@ -21,7 +21,10 @@ export interface CompatibilityProbeExecutorDeps {
     provider: CcProvider,
     modelId: string,
   ) => ProbeTargetResult;
-  createTransport: (observations: RawProbeObservation[]) => ProbeTransport;
+  /** Raw observations are accepted only while the initial Probe is running. */
+  createTransport: (
+    captureObservation: (observation: RawProbeObservation) => void,
+  ) => ProbeTransport;
   capturedAt?: () => string;
 }
 
@@ -32,7 +35,6 @@ export interface CompatibilityProbeExecutionInput {
 
 interface ProbeExecutionArtifacts {
   result: ProbeRunResult;
-  observations: RawProbeObservation[];
   evidence: NormalizedProbeRunEvidence;
 }
 
@@ -72,14 +74,11 @@ export function createCompatibilityProbeExecutor(
       const precheck = await deps.buildPrecheck(target);
       if (precheck && !precheck.allowProbe) {
         const result = precheckStopResult(target, precheck);
-        const observations: RawProbeObservation[] = [];
         return {
           kind: "precheck-stopped",
           result,
-          observations,
           evidence: normalizeProbeRun({
             result,
-            observations,
             capturedAt: capturedAt(),
           }),
         };
@@ -91,27 +90,37 @@ export function createCompatibilityProbeExecutor(
       }
 
       const observations: RawProbeObservation[] = [];
-      const transport = deps.createTransport(observations);
-      const shared = {
-        model: registration.model,
-        transport,
-        ...(precheck ? { precheck } : {}),
+      let captureEnabled = true;
+      const captureObservation = (observation: RawProbeObservation): void => {
+        if (captureEnabled) observations.push(observation);
       };
-      const result = await runProbe({ target, ...shared });
-      const evidence = normalizeProbeRun({
-        result,
-        observations,
-        capturedAt: capturedAt(),
-      });
-      const verify: ProbeVerifier = createProbeVerifier(shared);
 
-      return {
-        kind: "completed",
-        result,
-        observations,
-        evidence,
-        verify,
-      };
+      try {
+        const transport = deps.createTransport(captureObservation);
+        const shared = {
+          model: registration.model,
+          transport,
+          ...(precheck ? { precheck } : {}),
+        };
+        const result = await runProbe({ target, ...shared });
+        const evidence = normalizeProbeRun({
+          result,
+          observations,
+          capturedAt: capturedAt(),
+        });
+        const verify: ProbeVerifier = createProbeVerifier(shared);
+
+        return {
+          kind: "completed",
+          result,
+          evidence,
+          verify,
+        };
+      } finally {
+        // The verifier reuses this transport without extending raw-data lifetime.
+        captureEnabled = false;
+        observations.length = 0;
+      }
     },
   };
 }

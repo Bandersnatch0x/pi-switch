@@ -53,7 +53,6 @@ import {
   formatProbeResultJson,
   formatProbeResultSummary,
   hasRepairSwitchAction,
-  normalizeProbeRun,
   redactProbeText,
   resolveProbeTarget,
   selectProbeTarget,
@@ -147,7 +146,7 @@ export interface ProbeTransportDeps {
   };
   /** Effective Gemini compat payload settings used by normal provider hooks. */
   geminiCompat?: GeminiToolCompatConfig;
-  /** Optional per-request observation capture for durable evidence. */
+  /** Optional per-request observation sink for in-memory evidence normalization. */
   onObservation?: (obs: RawProbeObservation) => void;
 }
 
@@ -638,8 +637,8 @@ function buildProbeExecutor(
         : buildPrecheck(rt, providers, providersError, target),
     ensureProbeTarget: (provider, modelId) =>
       lifecycle.ensureProbeTarget(ctx, provider, modelId),
-    createTransport: (observations) =>
-      deps.transport ?? buildTransport(rt, ctx, observations),
+    createTransport: (captureObservation) =>
+      deps.transport ?? buildTransport(rt, ctx, captureObservation),
   });
 }
 
@@ -677,12 +676,7 @@ export async function runProbeCommand(
     if (ctx.mode === "json" || ctx.mode === "print") {
       console.log(formatProbeResultJson(execution.result));
     }
-    recordProbeCase(
-      pi,
-      execution.result,
-      execution.observations,
-      execution.evidence,
-    );
+    recordProbeCase(pi, execution.evidence);
     return;
   }
   if (execution.kind === "registration-failed") {
@@ -700,12 +694,7 @@ export async function runProbeCommand(
   if (ctx.mode === "json" || ctx.mode === "print") {
     console.log(formatProbeResultJson(execution.result));
   }
-  recordProbeCase(
-    pi,
-    execution.result,
-    execution.observations,
-    execution.evidence,
-  );
+  recordProbeCase(pi, execution.evidence);
 }
 
 // ── Repair command ──────────────────────────────────────────────────────────
@@ -754,16 +743,11 @@ export async function runRepairCommand(
   }
   if (execution.kind === "precheck-stopped") {
     reportPrecheckStop(ctx, "ps-repair", execution.result);
-    recordProbeCase(
-      pi,
-      execution.result,
-      execution.observations,
-      execution.evidence,
-    );
+    recordProbeCase(pi, execution.evidence);
     return;
   }
 
-  const { result: probeResult, observations, evidence, verify } = execution;
+  const { result: probeResult, evidence, verify } = execution;
 
   reportProbeResult(ctx, probeResult);
   const plan = buildRepairPlan(evidence);
@@ -772,7 +756,7 @@ export async function runRepairCommand(
       `ps-repair: no whitelist recipe matched ${plan.preview.target}`,
       "warning",
     );
-    recordProbeCase(pi, probeResult, observations, evidence, {
+    recordProbeCase(pi, evidence, {
       status: "no-recipe",
       persisted: false,
       verificationAttempts: [],
@@ -785,7 +769,7 @@ export async function runRepairCommand(
   const confirmed = await ctx.ui.confirm("确认执行修复？", previewText);
   if (!confirmed) {
     // Keep this probe run's evidence even though no patch was committed.
-    recordProbeCase(pi, probeResult, observations, evidence, {
+    recordProbeCase(pi, evidence, {
       status: "cancelled",
       persisted: false,
       verificationAttempts: [],
@@ -852,8 +836,6 @@ export async function runRepairCommand(
 
   recordProbeCase(
     pi,
-    probeResult,
-    observations,
     evidence,
     buildRepairCaseRecord(outcome, switchRecord),
   );
@@ -869,7 +851,7 @@ export async function runRepairCommand(
 function buildTransport(
   rt: Runtime,
   ctx: PiSwitchCtx,
-  observations: RawProbeObservation[],
+  captureObservation: (observation: RawProbeObservation) => void,
 ): ProbeTransport {
   const claudeConfig = rt.config.claudeCodeCompat ?? {};
   const deviceFs = rt.fsLike();
@@ -911,7 +893,7 @@ function buildTransport(
       }
       return { ok: true, apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
     },
-    onObservation: (obs) => observations.push(obs),
+    onObservation: captureObservation,
   });
 }
 
@@ -1031,18 +1013,9 @@ function buildRepairCaseRecipeRecord(
 
 function recordProbeCase(
   pi: ExtensionAPI,
-  result: ProbeRunResult,
-  observations: RawProbeObservation[],
-  evidenceOverride?: NormalizedProbeRunEvidence,
+  evidence: NormalizedProbeRunEvidence,
   repair?: RepairCaseRepairRecord,
 ): void {
-  const evidence =
-    evidenceOverride ??
-    normalizeProbeRun({
-      result,
-      observations,
-      capturedAt: new Date().toISOString(),
-    });
   const layers = buildRepairCaseLayers({ evidence, repair });
   pi.sendMessage({
     customType: REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
