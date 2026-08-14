@@ -3,9 +3,9 @@
  * Isolated end-to-end smoke for every /ps-repair whitelist recipe.
  *
  * Each scenario gets a temporary HOME, minimal cc-switch DB, local faux relay,
- * and real Pi RPC subprocess. Expected repair plans are confirmed, the
- * post-repair Session Model switch is declined, and only temporary config may
- * change. Real cc-switch data, credentials, and pi-switch.json stay untouched.
+ * and real Pi RPC subprocess. Expected repair plans are confirmed, the repair
+ * switch prompt is declined, then RPC switches to a second temporary provider
+ * to verify context continuity. Real user state stays untouched.
  */
 
 import fs from "node:fs";
@@ -35,7 +35,8 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function createMinimalDb(sqlite3, dbPath, scenario, relayOrigin) {
-  const settings = scenario.settings(relayOrigin);
+  const settings = scenario.settings(relayOrigin, scenario.modelId);
+  const switchSettings = scenario.settings(relayOrigin, scenario.switchModelId);
   const sql = `
 PRAGMA user_version = 16;
 CREATE TABLE providers (
@@ -61,6 +62,16 @@ INSERT INTO providers (
   ${sqlQuote(`isolated pi-switch ${scenario.recipeId} smoke`)},
   '{}',
   0,
+  0
+), (
+  ${sqlQuote(scenario.switchProviderId)},
+  ${sqlQuote(scenario.appType)},
+  ${sqlQuote(scenario.switchProviderName)},
+  ${sqlQuote(JSON.stringify(switchSettings))},
+  NULL,
+  ${sqlQuote(`isolated pi-switch ${scenario.recipeId} session-switch smoke`)},
+  '{}',
+  1,
   0
 );
 `;
@@ -379,14 +390,69 @@ function countKinds(requests) {
   }, {});
 }
 
+function messageText(message) {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content
+    .filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("");
+}
+
+function inspectRepairCaseContext(entriesResponse, messagesResponse, label) {
+  assert(entriesResponse.success === true, `${label}: failed to read RPC session entries`);
+  assert(messagesResponse.success === true, `${label}: failed to read RPC messages`);
+
+  const entries = entriesResponse.data?.entries ?? [];
+  const summaryEntry = entries
+    .filter((entry) => entry.customType === "ps-repair-case-summary")
+    .at(-1);
+  const detailEntry = entries
+    .filter((entry) => entry.customType === "ps-repair-case-detail")
+    .at(-1);
+  assert(summaryEntry, `${label}: Repair Case summary entry missing`);
+  assert(detailEntry, `${label}: Repair Case detail entry missing`);
+
+  const caseId = detailEntry.data?.caseId;
+  assert(typeof caseId === "string" && caseId.length > 0, `${label}: detail Case ID missing`);
+  assert(summaryEntry.details?.caseId === caseId, `${label}: summary/detail Case ID mismatch`);
+
+  const messages = messagesResponse.data?.messages ?? [];
+  const summaryMessage = messages
+    .filter((message) => message.customType === "ps-repair-case-summary")
+    .at(-1);
+  assert(summaryMessage, `${label}: Repair Case summary message missing`);
+  const summaryText = messageText(summaryMessage);
+  assert(summaryText === summaryEntry.content, `${label}: entry/message summary mismatch`);
+  assert(summaryMessage.details?.caseId === caseId, `${label}: message/detail Case ID mismatch`);
+
+  const messageBlob = JSON.stringify(messages);
+  for (const detailOnlyToken of [
+    "ps-repair-case-detail",
+    "signatureId",
+    "recipeAttempts",
+    "verificationAttempts",
+  ]) {
+    assert(
+      !messageBlob.includes(detailOnlyToken),
+      `${label}: messages leaked detail-only token ${detailOnlyToken}`,
+    );
+  }
+
+  return { caseId, summaryText, detail: detailEntry.data };
+}
+
 const scenarios = [
   {
     recipeId: "reasoning-false",
     appType: "codex",
     providerId: "repair-smoke-reasoning",
     providerName: "probe-repair-reasoning",
+    switchProviderId: "repair-smoke-reasoning-session",
+    switchProviderName: "probe-repair-reasoning-session",
     modelId: "gpt-5.6-reasoning-smoke",
-    settings: (origin) => codexSettings(origin, "gpt-5.6-reasoning-smoke"),
+    switchModelId: "gpt-5.6-reasoning-session-switch",
+    settings: (origin, modelId) => codexSettings(origin, modelId),
     initialOverride: {
       label: "Reasoning Repair Smoke",
       modelOverrides: {
@@ -412,8 +478,11 @@ const scenarios = [
     appType: "codex",
     providerId: "repair-smoke-fingerprint",
     providerName: "probe-repair-fingerprint",
+    switchProviderId: "repair-smoke-fingerprint-session",
+    switchProviderName: "probe-repair-fingerprint-session",
     modelId: "gpt-5.6-fingerprint-smoke",
-    settings: (origin) => codexSettings(origin, "gpt-5.6-fingerprint-smoke"),
+    switchModelId: "gpt-5.6-fingerprint-session-switch",
+    settings: (origin, modelId) => codexSettings(origin, modelId),
     initialOverride: {
       label: "Fingerprint Repair Smoke",
       fingerprint: "none",
@@ -437,8 +506,11 @@ const scenarios = [
     appType: "gemini",
     providerId: "repair-smoke-gemini-tool",
     providerName: "probe-repair-gemini-tool",
+    switchProviderId: "repair-smoke-gemini-tool-session",
+    switchProviderName: "probe-repair-gemini-tool-session",
     modelId: "gemini-2.5-pro-repair-smoke",
-    settings: (origin) => geminiSettings(origin, "gemini-2.5-pro-repair-smoke"),
+    switchModelId: "gemini-2.5-pro-session-switch",
+    settings: (origin, modelId) => geminiSettings(origin, modelId),
     initialOverride: {
       label: "Gemini Tool Repair Smoke",
       geminiToolCompat: false,
@@ -466,6 +538,7 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realState }) {
   const agentDir = path.join(tempHome, ".pi", "agent");
   const dbPath = path.join(dbDir, "cc-switch.db");
   const tempConfig = path.join(agentDir, "pi-switch.json");
+  const tempSettings = path.join(agentDir, "settings.json");
   const relay = await startRelay(scenario);
   let rpc;
   let success = false;
@@ -480,14 +553,46 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realState }) {
     const relayOrigin = `http://127.0.0.1:${relay.port}`;
     createMinimalDb(sqlite3, dbPath, scenario, relayOrigin);
     fs.writeFileSync(
+      tempSettings,
+      `${JSON.stringify(
+        {
+          piSwitchSelection: {
+            dbId: scenario.providerId,
+            model: scenario.modelId,
+            tab: scenario.appType,
+            appType: scenario.appType,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
       tempConfig,
       `${JSON.stringify(
         {
           providerOverrides: {
             [scenario.appType]: {
               [scenario.providerId]: scenario.initialOverride,
+              [scenario.switchProviderId]: {
+                modelOverrides: {
+                  [scenario.switchModelId]: { reasoning: false, maxTokens: 8192 },
+                },
+              },
             },
           },
+          // Keep the live-session switch on a separate provider. Probe may
+          // re-register the target provider after repair; a second provider
+          // keeps this RPC check independent of that registration.
+          recent: [
+            {
+              dbId: scenario.switchProviderId,
+              appType: scenario.appType,
+              model: scenario.switchModelId,
+              at: 1,
+            },
+          ],
         },
         null,
         2,
@@ -512,7 +617,67 @@ async function runScenario({ scenario, sqlite3, piCli, extension, realState }) {
     const response = await rpc.send("prompt", { message: "/ps-repair" });
     assert(response.success === true, `ps-repair RPC failed: ${response.error ?? "unknown"}`);
     const entriesResponse = await rpc.send("get_entries");
-    assert(entriesResponse.success === true, "failed to read RPC session entries");
+    const messagesBeforeResponse = await rpc.send("get_messages");
+    const contextBefore = inspectRepairCaseContext(
+      entriesResponse,
+      messagesBeforeResponse,
+      `${scenario.recipeId}: before model switch`,
+    );
+
+    const modelsResponse = await rpc.send("get_available_models");
+    assert(modelsResponse.success === true, `${scenario.recipeId}: failed to list models`);
+    const stateBeforeResponse = await rpc.send("get_state");
+    assert(stateBeforeResponse.success === true, `${scenario.recipeId}: failed to read state`);
+    assert(
+      stateBeforeResponse.data?.model?.id === scenario.modelId,
+      `${scenario.recipeId}: unexpected pre-switch Session Model`,
+    );
+
+    const switchModel = (modelsResponse.data?.models ?? []).find(
+      (model) =>
+        model.provider === scenario.switchProviderName && model.id === scenario.switchModelId,
+    );
+    assert(
+      switchModel,
+      `${scenario.recipeId}: switch model was not registered; available=${JSON.stringify(
+        (modelsResponse.data?.models ?? []).map((model) => ({
+          provider: model.provider,
+          id: model.id,
+        })),
+      )}`,
+    );
+    const relayRequestCountBeforeSwitch = relay.requests.length;
+    const setModelResponse = await rpc.send("set_model", {
+      provider: switchModel.provider,
+      modelId: switchModel.id,
+    });
+    assert(setModelResponse.success === true, `${scenario.recipeId}: set_model failed`);
+
+    const stateAfterResponse = await rpc.send("get_state");
+    assert(stateAfterResponse.success === true, `${scenario.recipeId}: failed to re-read state`);
+    assert(
+      stateAfterResponse.data?.model?.provider === switchModel.provider &&
+        stateAfterResponse.data?.model?.id === switchModel.id,
+      `${scenario.recipeId}: Session Model did not switch`,
+    );
+    const messagesAfterResponse = await rpc.send("get_messages");
+    const contextAfter = inspectRepairCaseContext(
+      entriesResponse,
+      messagesAfterResponse,
+      `${scenario.recipeId}: after model switch`,
+    );
+    assert(
+      contextAfter.caseId === contextBefore.caseId,
+      `${scenario.recipeId}: Repair Case ID changed after model switch`,
+    );
+    assert(
+      contextAfter.summaryText === contextBefore.summaryText,
+      `${scenario.recipeId}: Repair Case summary changed after model switch`,
+    );
+    assert(
+      relay.requests.length === relayRequestCountBeforeSwitch,
+      `${scenario.recipeId}: model switch unexpectedly contacted the relay`,
+    );
 
     const written = JSON.parse(fs.readFileSync(tempConfig, "utf8"));
     const tempConfigAfter = sha256IfExists(tempConfig);
@@ -633,7 +798,7 @@ async function main() {
   assertFileStatesUnchanged(realState, "real state after smoke suite");
   console.log(`summary: ${results.length}/${selected.length} recipes committed in isolated temp state`);
   console.log("candidate verification: 2 consecutive passes per recipe");
-  console.log("session switches: declined");
+  console.log("repair switch prompts: declined; RPC context switches: verified");
   console.log("real settings/config/DB state: unchanged");
 }
 

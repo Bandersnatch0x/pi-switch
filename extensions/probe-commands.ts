@@ -41,19 +41,17 @@ import type { CcProvider } from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import { tf } from "../src/ui/tui-locale.ts";
 import {
-  REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-  REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
   applyRepairCandidateToConfigDocument,
-  buildRepairCaseLayers,
   buildRepairPlan,
   capabilitySoftCheck,
+  createRepairCaseRepairEvent,
+  createRepairCaseRecorder,
   defaultProbeTargetHighlight,
   executeRepairSwitchAction,
   findProviderForProbeTarget,
   formatProbeResultJson,
   formatProbeResultSummary,
   hasRepairSwitchAction,
-  redactProbeText,
   resolveProbeTarget,
   selectProbeTarget,
   runRepair,
@@ -70,12 +68,14 @@ import {
   type ProbeTransportResult,
   type RawProbeObservation,
   type RepairConfigStore,
-  type RepairCaseRepairRecord,
+  type RepairCaseRecorder,
+  type RepairCaseSwitchRecord,
   type RepairOutcome,
   type RepairPlanPreview,
   type RepairPlanPreviewPatch,
   type ResolveProbeTargetResult,
 } from "../src/probe/index.ts";
+import { createPiRepairCaseWriteAdapter } from "./repair-case-adapter.ts";
 import type { Runtime } from "./runtime.ts";
 import {
   createSwitchLifecycle,
@@ -648,6 +648,7 @@ export async function runProbeCommand(
   ctx: PiSwitchCtx,
   deps: ProbeCommandDeps = {},
 ): Promise<void> {
+  const recorder = createRepairCaseRecorder(createPiRepairCaseWriteAdapter(pi));
   rt.reloadConfig();
 
   const { providers, error } = rt.refreshSnapshot();
@@ -676,7 +677,7 @@ export async function runProbeCommand(
     if (ctx.mode === "json" || ctx.mode === "print") {
       console.log(formatProbeResultJson(execution.result));
     }
-    recordProbeCase(pi, execution.evidence);
+    recordProbeCase(recorder, execution.evidence);
     return;
   }
   if (execution.kind === "registration-failed") {
@@ -694,7 +695,7 @@ export async function runProbeCommand(
   if (ctx.mode === "json" || ctx.mode === "print") {
     console.log(formatProbeResultJson(execution.result));
   }
-  recordProbeCase(pi, execution.evidence);
+  recordProbeCase(recorder, execution.evidence);
 }
 
 // ── Repair command ──────────────────────────────────────────────────────────
@@ -710,6 +711,8 @@ export async function runRepairCommand(
     ctx.ui.notify("ps-repair requires interactive confirmation; headless is not allowed", "error");
     return;
   }
+
+  const recorder = createRepairCaseRecorder(createPiRepairCaseWriteAdapter(pi));
 
   rt.reloadConfig();
 
@@ -743,7 +746,7 @@ export async function runRepairCommand(
   }
   if (execution.kind === "precheck-stopped") {
     reportPrecheckStop(ctx, "ps-repair", execution.result);
-    recordProbeCase(pi, execution.evidence);
+    recordProbeCase(recorder, execution.evidence);
     return;
   }
 
@@ -756,12 +759,19 @@ export async function runRepairCommand(
       `ps-repair: no whitelist recipe matched ${plan.preview.target}`,
       "warning",
     );
-    recordProbeCase(pi, evidence, {
-      status: "no-recipe",
-      persisted: false,
-      verificationAttempts: [],
-      switch: { status: "not-offered" },
-    });
+    recordRepairCase(
+      recorder,
+      evidence,
+      createRepairCaseRepairEvent(
+        {
+          status: "no-recipe",
+          plan,
+          summary: "no whitelist Repair Recipe matched probe evidence",
+          persisted: false,
+        },
+        { status: "not-offered" },
+      ),
+    );
     return;
   }
 
@@ -769,12 +779,14 @@ export async function runRepairCommand(
   const confirmed = await ctx.ui.confirm("确认执行修复？", previewText);
   if (!confirmed) {
     // Keep this probe run's evidence even though no patch was committed.
-    recordProbeCase(pi, evidence, {
-      status: "cancelled",
-      persisted: false,
-      verificationAttempts: [],
-      switch: { status: "not-offered" },
-    });
+    recordRepairCase(
+      recorder,
+      evidence,
+      createRepairCaseRepairEvent(
+        { status: "cancelled", persisted: false },
+        { status: "not-offered" },
+      ),
+    );
     ctx.ui.notify("ps-repair cancelled (no config write)", "info");
     return;
   }
@@ -797,7 +809,7 @@ export async function runRepairCommand(
   notifyRepairOutcome(ctx, outcome);
 
   // Post-success explicit switch (only path that may setModel after repair).
-  let switchRecord: NonNullable<RepairCaseRepairRecord["switch"]> = {
+  let switchRecord: RepairCaseSwitchRecord = {
     status: "not-offered",
   };
   if (hasRepairSwitchAction(outcome)) {
@@ -821,23 +833,23 @@ export async function runRepairCommand(
         switchRecord = {
           status: "succeeded",
           target: { ...t },
-          summary: redactProbeText(sw.summary),
+          summary: sw.summary,
         };
       } else {
         ctx.ui.notify(sw.message, "error");
         switchRecord = {
           status: "failed",
           target: { ...t },
-          summary: redactProbeText(sw.message),
+          summary: sw.message,
         };
       }
     }
   }
 
-  recordProbeCase(
-    pi,
+  recordRepairCase(
+    recorder,
     evidence,
-    buildRepairCaseRecord(outcome, switchRecord),
+    createRepairCaseRepairEvent(outcome, switchRecord),
   );
 }
 
@@ -949,79 +961,17 @@ function notifyRepairOutcome(ctx: PiSwitchCtx, outcome: RepairOutcome): void {
   ctx.ui.notify(`ps-repair ${outcome.status}: ${outcome.summary}`, level);
 }
 
-function buildRepairCaseRecord(
-  outcome: RepairOutcome,
-  switchRecord: NonNullable<RepairCaseRepairRecord["switch"]>,
-): RepairCaseRepairRecord {
-  const attempts = "attempts" in outcome ? outcome.attempts : [];
-  const recipePreview =
-    "recipe" in outcome
-      ? outcome.plan.preview.patches.find(
-          (item) => item.recipeId === outcome.recipe.recipeId,
-        )
-      : undefined;
-  const recipeRecord =
-    recipePreview && "recipe" in outcome
-      ? buildRepairCaseRecipeRecord(outcome.recipe, recipePreview)
-      : undefined;
-  return {
-    status: outcome.status,
-    persisted: outcome.persisted,
-    ...(recipeRecord ? { recipe: recipeRecord } : {}),
-    verificationAttempts: attempts.map((attempt, index) => ({
-      pass: index + 1,
-      ok: attempt.ok,
-      requestCount: attempt.requestCount,
-      ...(attempt.stoppedReason
-        ? { stoppedReason: attempt.stoppedReason }
-        : {}),
-      stages: attempt.stages.map((stage) => ({
-        contract: stage.contract,
-        status: stage.status,
-        ...(stage.category ? { category: stage.category } : {}),
-        ...(stage.httpStatus !== undefined
-          ? { httpStatus: stage.httpStatus }
-          : {}),
-        summary: redactProbeText(stage.summary),
-      })),
-    })),
-    switch: switchRecord,
-  };
-}
-
-function buildRepairCaseRecipeRecord(
-  recipe: { recipeId: string; signatureId: string },
-  preview: RepairPlanPreviewPatch,
-): NonNullable<RepairCaseRepairRecord["recipe"]> {
-  const base = {
-    recipeId: recipe.recipeId,
-    signatureId: recipe.signatureId,
-  };
-  if (preview.scope === "exact-model") {
-    return {
-      ...base,
-      scope: preview.scope,
-      affectedModels: [...preview.affectedModels],
-    };
-  }
-  return {
-    ...base,
-    scope: preview.scope,
-    provider: preview.provider,
-  };
-}
-
 function recordProbeCase(
-  pi: ExtensionAPI,
+  recorder: RepairCaseRecorder,
   evidence: NormalizedProbeRunEvidence,
-  repair?: RepairCaseRepairRecord,
 ): void {
-  const layers = buildRepairCaseLayers({ evidence, repair });
-  pi.sendMessage({
-    customType: REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
-    content: layers.summaryEntry.content,
-    display: layers.summaryEntry.display,
-    details: layers.summaryEntry.details,
-  });
-  pi.appendEntry(REPAIR_CASE_DETAIL_CUSTOM_TYPE, layers.detailEntry.data);
+  recorder.record(evidence, { kind: "probe" });
+}
+
+function recordRepairCase(
+  recorder: RepairCaseRecorder,
+  evidence: NormalizedProbeRunEvidence,
+  event: Extract<Parameters<RepairCaseRecorder["record"]>[1], { kind: "repair" }>,
+): void {
+  recorder.record(evidence, event);
 }

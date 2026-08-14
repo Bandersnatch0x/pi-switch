@@ -4,20 +4,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-  REPAIR_CASE_SUMMARY_CUSTOM_TYPE,
-  buildRepairCaseLayers,
-  createCaseId,
   normalizeProbeRun,
   normalizeStageEvidence,
-  projectRepairCaseIntoContext,
   redactProbeText,
-  type NormalizedProbeRunEvidence,
   type ProbeRunResult,
   type ProbeTransportResult,
   type RawProbeObservation,
-  type RepairCaseDetailData,
-  type RepairCaseSessionLayers,
 } from "../src/probe/index.ts";
 
 const target = {
@@ -456,161 +448,5 @@ describe("normalizeProbeRun / normalizeStageEvidence (ticket 2)", () => {
       expect(s.category).toBe("ok");
       expect(s.signatureId).toBe("pass");
     }
-  });
-});
-
-describe("Repair Case dual-layer (ticket 2)", () => {
-  test("summary and detail share the same Case ID", () => {
-    const evidence = normalizeProbeRun({
-      result: failAuthRun(),
-      capturedAt: "2026-08-04T12:00:00.000Z",
-    });
-    const caseId = createCaseId(() => new Date("2026-08-04T12:00:00.000Z"));
-    const layers = buildRepairCaseLayers({ caseId, evidence });
-
-    expect(layers.caseId).toBe(caseId);
-    expect(layers.summary.caseId).toBe(caseId);
-    expect(layers.detail.caseId).toBe(caseId);
-    expect(layers.summaryEntry.customType).toBe(REPAIR_CASE_SUMMARY_CUSTOM_TYPE);
-    expect(layers.detailEntry.customType).toBe(REPAIR_CASE_DETAIL_CUSTOM_TYPE);
-    expect(layers.summaryEntry.type).toBe("custom_message");
-    expect(layers.detailEntry.type).toBe("custom");
-  });
-
-  test("summary enters model context; detail does not (session structure)", () => {
-    const evidence = normalizeProbeRun({ result: failAuthRun() });
-    const layers = buildRepairCaseLayers({
-      caseId: "case_test_1",
-      evidence,
-    });
-
-    const ctx = projectRepairCaseIntoContext(layers);
-
-    // Summary content is projected into context as text
-    expect(ctx.contextMessages.length).toBe(1);
-    expect(ctx.contextMessages[0]!.role).toBe("user");
-    const text =
-      typeof ctx.contextMessages[0]!.content === "string"
-        ? ctx.contextMessages[0]!.content
-        : JSON.stringify(ctx.contextMessages[0]!.content);
-    expect(text).toContain("case_test_1");
-    expect(text).toContain(target.provider);
-    expect(text).toContain(target.modelId);
-
-    // Detail custom entry is recorded but excluded from context projection
-    expect(ctx.excludedFromContext).toHaveLength(1);
-    expect(ctx.excludedFromContext[0]!.type).toBe("custom");
-    expect(ctx.excludedFromContext[0]!.customType).toBe(
-      REPAIR_CASE_DETAIL_CUSTOM_TYPE,
-    );
-    expect(ctx.excludedFromContext[0]!.data.caseId).toBe("case_test_1");
-
-    // Full context serialization must not include detailed normalized stage signatures
-    // beyond the short summary (detail payload stays out)
-    const ctxJson = JSON.stringify(ctx.contextMessages);
-    const detailJson = JSON.stringify(layers.detail);
-    expect(detailJson).toContain("signatureId");
-    // context has only the short summary string, not the detail object tree
-    expect(ctxJson).not.toContain('"signatureId"');
-    expect(ctxJson).not.toContain('"allowedHeaderNames"');
-    expect(ctxJson).not.toContain('"budget"');
-  });
-
-  test("summary is redacted: target identity + contracts + conclusion, no secrets", () => {
-    const run: ProbeRunResult = {
-      ...failAuthRun(),
-      stages: [
-        {
-          contract: "basic",
-          status: "fail",
-          category: "auth",
-          unrepairable: true,
-          httpStatus: 401,
-          summary:
-            "HTTP 401 at https://relay.example/v1?api_key=sk-live-LEAK Authorization: Bearer sk-live-LEAK",
-          requestCount: 1,
-        },
-        ...failAuthRun().stages.slice(1),
-      ],
-    };
-    const evidence = normalizeProbeRun({ result: run });
-    const layers = buildRepairCaseLayers({ caseId: "case_redact", evidence });
-
-    const summaryText = layers.summaryEntry.content;
-    expect(typeof summaryText).toBe("string");
-    const s = summaryText as string;
-    expect(s.toLowerCase()).not.toContain("sk-live-");
-    expect(s).not.toMatch(/[?&]api_key=/i);
-    expect(s).toContain("case_redact");
-    expect(s).toMatch(/basic/i);
-    expect(s).toMatch(/fail|auth|unrepairable|FAIL/i);
-    expect(s).toContain(target.provider);
-
-    assertNoSensitivePayload(JSON.stringify(layers));
-  });
-
-  test("raw body never lands on durable Repair Case detail (persistence shape)", () => {
-    const observations: RawProbeObservation[] = [
-      {
-        contract: "basic",
-        request: {
-          messages: [{ role: "user", content: "probe_basic: do not persist" }],
-        },
-        response: {
-          httpStatus: 401,
-          rawBody: '{"error":"secret-api-key"}',
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "body text secret-api-key" }],
-            stopReason: "error",
-          },
-        },
-      },
-    ];
-    const evidence = normalizeProbeRun({
-      result: failAuthRun(),
-      observations,
-    });
-    const layers = buildRepairCaseLayers({ caseId: "case_disk", evidence });
-
-    // Simulate "write to session / disk" of both layers
-    const persisted = JSON.stringify({
-      summaryEntry: layers.summaryEntry,
-      detailEntry: layers.detailEntry,
-    });
-    assertNoSensitivePayload(persisted);
-    expect(persisted).not.toContain("rawBody");
-    expect(persisted).not.toContain("probe_basic:");
-    expect(persisted).not.toContain("do not persist");
-
-    const detail = layers.detailEntry.data as RepairCaseDetailData;
-    expect(detail.evidence.stages[0]).not.toHaveProperty("rawBody");
-    expect(detail.evidence).not.toHaveProperty("observations");
-  });
-
-  test("createCaseId produces non-empty stable-format ids", () => {
-    const a = createCaseId(() => new Date("2026-01-01T00:00:00.000Z"), () => 0.123456);
-    const b = createCaseId(() => new Date("2026-01-01T00:00:00.000Z"), () => 0.123456);
-    expect(a).toBe(b);
-    expect(a.length).toBeGreaterThan(8);
-    expect(a).toMatch(/^case_/);
-  });
-
-  test("layers expose dual customType constants for session scanners", () => {
-    expect(REPAIR_CASE_SUMMARY_CUSTOM_TYPE).toBe("ps-repair-case-summary");
-    expect(REPAIR_CASE_DETAIL_CUSTOM_TYPE).toBe("ps-repair-case-detail");
-  });
-
-  test("multiple cases keep independent case ids on both layers", () => {
-    const e1 = normalizeProbeRun({ result: passRun() }) as NormalizedProbeRunEvidence;
-    const e2 = normalizeProbeRun({ result: failAuthRun() });
-    const l1 = buildRepairCaseLayers({ caseId: "case_a", evidence: e1 });
-    const l2 = buildRepairCaseLayers({ caseId: "case_b", evidence: e2 });
-    expect(l1.caseId).not.toBe(l2.caseId);
-    expect(l1.summary.caseId).toBe("case_a");
-    expect(l2.detail.caseId).toBe("case_b");
-    const ctx = projectRepairCaseIntoContext(l1 as RepairCaseSessionLayers);
-    expect(JSON.stringify(ctx.contextMessages)).toContain("case_a");
-    expect(JSON.stringify(ctx.contextMessages)).not.toContain("case_b");
   });
 });
