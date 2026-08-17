@@ -31,6 +31,7 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 - Parse and map common API protocols: Anthropic Messages, OpenAI Responses, OpenAI Chat Completions, and Google Generative AI.
 - Inject CLI-like fingerprints by default (Codex UA + `originator` + `X-Codex-Window-ID`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
 - Override model parameters via presets or a native dialog (`/ps-override` or picker key `o`) — e.g. **中转兼容** sets `reasoning=false` when a relay rejects thinking.
+- For an exact model whose provider profile advertises `ultra`, `/ps-override` offers an explicit lossy `Pi max -> provider ultra` opt-in; it is never inferred globally.
 - Run structured health checks with `/ps-doctor` (PASS/WARN/FAIL + fix hints).
 - Run a read-only compatibility probe with `/ps-probe` (basic / reasoning / tool contracts, structured evidence, JSON in headless/CI).
 - Repair evidence-driven with `/ps-repair` (interactive only): re-probe → whitelist Recipe → confirm → in-memory candidate verify → CAS commit, without switching the Session Model.
@@ -236,6 +237,7 @@ Parameter override · elysiver-claude · model glm-4.6 ✱
   contextWindow      override 200k           ▸   § 200k 256k 500k 1M / custom
   maxTokens          default 64k             ▸   § 4k 8k 16k 32k 64k 128k / custom
   thinkingFormat     override deepseek     ∘   inline-cycle enum
+  Provider ultra     available (Pi max -> provider ultra)  § exact-model opt-in
   — clear this layer                  ▸
   — clear all for provider           ▸
   save                                   ✱ save (Title shows ✱ when dirty)
@@ -312,14 +314,16 @@ Use the popup dialog (`/ps-override` or picker key `o`) to set `modelMeta.reason
 ```json
 {
   "providerOverrides": {
-    "dooongai-1775180253543": {
-      "label": "elysiver-claude",
-      "modelMeta": {
-        "reasoning": false
-      },
-      "modelOverrides": {
-        "glm-4.6": { "reasoning": false, "maxTokens": 8192 },
-        "gpt-5*":  { "reasoning": true }
+    "claude": {
+      "dooongai-1775180253543": {
+        "label": "elysiver-claude",
+        "modelMeta": {
+          "reasoning": false
+        },
+        "modelOverrides": {
+          "glm-4.6": { "reasoning": false, "maxTokens": 8192 },
+          "gpt-5*":  { "reasoning": true }
+        }
       }
     }
   }
@@ -329,10 +333,10 @@ Use the popup dialog (`/ps-override` or picker key `o`) to set `modelMeta.reason
 Layering (later wins per field, unset fields never clobber a lower layer):
 
 ```text
-defaultModelMeta  ⊕  providerOverrides[dbId].modelMeta  ⊕  providerOverrides[dbId].modelOverrides[modelId]
+defaultModelMeta  ⊕  providerOverrides[appType][dbId].modelMeta  ⊕  providerOverrides[appType][dbId].modelOverrides[modelId]
 ```
 
-`modelOverrides` keys may be exact ids or globs (`gpt-5*` / `*sonnet*`). Match order: exact → case-insensitive → most specific glob.
+The canonical override path is `providerOverrides.<appType>.<dbId>`; legacy top-level dbId entries remain readable and are absorbed into the canonical layer on write. `modelOverrides` keys may be exact ids or globs (`gpt-5*` / `*sonnet*`). Match order: exact → case-insensitive → most specific glob.
 
 Optional `fingerprint` field forces a CLI disguise preset regardless of protocol:
 
@@ -358,7 +362,47 @@ Supported `modelMeta` fields (stored flat in `pi-switch.json`; registration resh
 | `requiresReasoningContentOnAssistantMessages` | OpenAI-compat: require empty `reasoning_content` on assistant turns → registered under `compat` |
 | `useBuiltInCompat` | pi-switch only (not sent to Pi): `false` disables the whole built-in compat profile; unset/`true` keeps the default (apply when id matches) |
 
-The UI edits the common scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`) plus the **内置compat** toggle. Object fields such as `thinkingLevelMap` are config-only (edit `pi-switch.json` or call the write APIs). Each form row shows **override / inherit / built-in / default** (built-in = matched profile and not opted out).
+The UI edits the common scalar fields (`reasoning` / `thinkingFormat` / `contextWindow` / `maxTokens`) plus the **内置compat** toggle. A full arbitrary `thinkingLevelMap` editor is intentionally not exposed. The only UI map operation is `Provider ultra`: it appears at exact-model scope only when the shared provider profile advertises `ultra`, writes `{ "max": "ultra" }` through a tuple-validated writer, and warns that provider-native `max` becomes unavailable. `ultracode` is not treated as an alias. Other object-map edits remain config/API-only for backwards compatibility. Each form row shows **override / inherit / built-in / default** (built-in = matched profile and not opted out).
+
+`/ps-doctor` and `/ps-info` render the same registration-time thinking projection, including exact/lossy status, collisions, provider-default behavior, unrepresented native values, unsupported runtime controls, and stale last-good evidence. A reviewed Pi release with an unsupported tuple/control is shown as `unsupported-runtime`; an unreviewed release is `unverified`. Pi `0.84.2` is in the reviewed payload-fixture matrix. Neither display reconstructs a profile from the model name.
+
+An advanced exact-model profile can describe custom/relay reasoning controls that are not in the reviewed built-in table. It is accepted only at this path (no provider/default/glob scope):
+
+```json
+{
+  "providerOverrides": {
+    "hermes": {
+      "<provider-db-id>": {
+        "modelOverrides": {
+          "<exact-model-id>": {
+            "reasoningProfile": {
+              "profileVersion": "relay-contract/v1",
+              "control": { "type": "toggle" },
+              "variants": [
+                {
+                  "name": "off",
+                  "native": { "type": "toggle", "enabled": false },
+                  "piLevel": "off",
+                  "effectiveLevel": "off"
+                },
+                {
+                  "name": "high",
+                  "native": { "type": "toggle", "enabled": true },
+                  "piLevel": "high",
+                  "effectiveLevel": "high"
+                }
+              ],
+              "observedAt": "2026-08-18T00:00:00.000Z"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Profile authority is `exact user > provider snapshot metadata/catalog > reviewed built-in`. pi-switch derives the full provider tuple and `source=user` from the exact config scope. Provider metadata may express complete effort, toggle, token-budget, or composite native variants; Codex catalog `{ "value": "high" }` remains an effort-only shorthand.
 
 Advanced fields such as `supportsDeveloperRole` (exact-model tuple / flat meta) are config-only (edit `pi-switch.json` or call the write APIs).
 
@@ -393,12 +437,14 @@ Thinking compat for `deepseek*` is **already supplied by the built-in profile**.
 ```json
 {
   "providerOverrides": {
-    "<dbId>": {
-      "modelOverrides": {
-        "deepseek-v4-flash": {
-          "reasoning": true,
-          "contextWindow": 1000000,
-          "maxTokens": 384000
+    "hermes": {
+      "<dbId>": {
+        "modelOverrides": {
+          "deepseek-v4-flash": {
+            "reasoning": true,
+            "contextWindow": 1000000,
+            "maxTokens": 384000
+          }
         }
       }
     }

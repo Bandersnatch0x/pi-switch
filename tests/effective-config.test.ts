@@ -11,6 +11,10 @@ import {
 import type { BuiltProviderConfig } from "../src/register.ts";
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
+import {
+  resolveThinkingProjection,
+  type ProviderReasoningProfile,
+} from "../src/capabilities/thinking-projection.ts";
 import type { CcProvider } from "../src/types.ts";
 import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
 
@@ -63,6 +67,54 @@ function builtConfig(): BuiltProviderConfig {
 }
 
 describe("effective config summary", () => {
+  test("shows the shared thinking projection without endpoint details", () => {
+    const tuple = {
+      appType: "codex",
+      providerId: "provider-1",
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5",
+    };
+    const profile: ProviderReasoningProfile = {
+      tuple,
+      profileVersion: "catalog@1",
+      control: { type: "effort" },
+      variants: [
+        { name: "max", native: { type: "effort", value: "max" } },
+        { name: "ultra", native: { type: "effort", value: "ultra" } },
+      ],
+      source: "codex-model-catalog",
+      observedAt: "2026-08-17T00:00:00.000Z",
+    };
+    const thinkingProjection = resolveThinkingProjection({
+      tuple,
+      profile,
+      runtime: {
+        version: "0.84.2",
+        runtimeVerified: true,
+        payloadVerified: true,
+        supportedControls: ["effort"],
+        providerDefault: "supported",
+        off: "indistinguishable-from-provider-default",
+      },
+      userMapScope: "none",
+    });
+
+    const text = formatEffectiveConfigSummary(
+      createEffectiveConfigSummary({
+        source: "active",
+        provider: provider(),
+        modelId: "gpt-5",
+        config: builtConfig(),
+        thinkingProjection,
+      }),
+    );
+
+    expect(text).toContain("thinkingProjection: thinking=exact");
+    expect(text).toContain("ultra advertised but not selectable");
+    expect(text).not.toContain("relay.example");
+  });
+
   test("shows effective fields without secret values or endpoint credentials", () => {
     const summary = createEffectiveConfigSummary({
       source: "active",

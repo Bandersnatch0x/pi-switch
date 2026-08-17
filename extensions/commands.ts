@@ -42,6 +42,8 @@ import type {
 } from "./switch-lifecycle.ts";
 import { runProbeCommand, runRepairCommand } from "./probe-commands.ts";
 import { t, tf } from "../src/ui/tui-locale.ts";
+import type { ExactModelThinkingOptInRequest } from "../src/capabilities/thinking-opt-in.ts";
+import type { ThinkingProjectionDecision } from "../src/capabilities/thinking-projection.ts";
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -100,6 +102,22 @@ function maxTokensHintsFor(
   return Object.keys(out).length ? out : undefined;
 }
 
+function thinkingProjectionsFor(
+  rt: Runtime,
+  provider: CcProvider,
+  modelIds: string[],
+): Record<string, ThinkingProjectionDecision> | undefined {
+  const out: Record<string, ThinkingProjectionDecision> = {};
+  for (const modelId of modelIds) {
+    const projection = rt.registrationDecisionFor(
+      provider,
+      modelId,
+    ).thinkingProjection;
+    if (projection) out[modelId] = projection;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /**
  * Actionable next step when the #63 maxTokens gate is what blocked the model.
  * Undefined when maxTokens resolved, so unrelated failures stay unannotated.
@@ -126,8 +144,21 @@ async function persistAndMaybeReapplyMeta(
   provider: CcProvider,
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
+  thinkingOptIn?: {
+    decision: ThinkingProjectionDecision | undefined;
+    request: ExactModelThinkingOptInRequest;
+  },
 ): Promise<boolean> {
-  const written = rt.state.saveModelMetaOverride(provider, scope, modelMeta);
+  const written =
+    thinkingOptIn && modelMeta
+      ? rt.state.saveExactModelThinkingOptIn(
+          provider,
+          scope,
+          modelMeta,
+          thinkingOptIn.decision,
+          thinkingOptIn.request,
+        )
+      : rt.state.saveModelMetaOverride(provider, scope, modelMeta);
   if (!written.ok) {
     ctx.ui?.notify?.(
       tf("overrideSaveFailed", { error: written.error ?? "unknown" }),
@@ -234,6 +265,7 @@ async function openProviderOverride(
     base: rt.config.defaultModelMeta,
     tier: tierMeta(provider),
     maxTokensHints: maxTokensHintsFor(rt, provider, models),
+    thinkingProjections: thinkingProjectionsFor(rt, provider, models),
     models,
   };
 
@@ -261,6 +293,12 @@ async function openProviderOverride(
     provider,
     result.scope,
     result.kind === "clear" ? null : result.modelMeta,
+    result.kind === "save" && result.thinkingOptIn && result.scope.kind === "model"
+      ? {
+          request: result.thinkingOptIn,
+          decision: dialogInput.thinkingProjections?.[result.scope.modelId],
+        }
+      : undefined,
   );
 }
 
@@ -393,6 +431,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     fingerprint,
     providerWireCompat,
     reasoningConservative: decision.reasoningConservative,
+    thinkingProjection: decision.thinkingProjection,
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {

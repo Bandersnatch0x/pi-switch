@@ -1,5 +1,9 @@
 /** @see src/compat/gemini-tool-compat.ts — single source of truth */
 import type { GeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
+import type {
+  ProviderReasoningCatalog,
+  UserReasoningProfileOverride,
+} from "./capabilities/thinking-projection.ts";
 import type { ProviderWireCompat } from "./provider-wire-compat.ts";
 import type {
   AnthropicTupleCompat,
@@ -45,6 +49,10 @@ export interface CcProvider {
   apiKey: string;
   authHeader: boolean;
   configModels: string[];
+  /** Snapshot-owned provider reasoning facts; never keyed globally by model id. */
+  reasoningCatalog?: ProviderReasoningCatalog;
+  /** Non-fatal capability ingestion issues visible to doctor/UI consumers. */
+  capabilityWarnings?: string[];
   apiFormat?: string;
   meta: Record<string, unknown>;
   /** CC Switch category (official/third_party/custom/…); informational for tier/doctor. */
@@ -144,6 +152,8 @@ export interface ModelMetaOverride {
  */
 export type ModelOverrideEntry = ModelMetaOverride & {
   compat?: ModelTupleCompat;
+  /** Exact-model provider reasoning authority; tuple/source derive from this scope. */
+  reasoningProfile?: UserReasoningProfileOverride;
 };
 
 

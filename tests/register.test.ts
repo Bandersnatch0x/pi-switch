@@ -7,6 +7,7 @@ import {
 import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
 import type { CcProvider } from "../src/types.ts";
 import type { ModelsDevCapabilities } from "../src/capabilities/models-dev.ts";
+import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
 
 function mk(partial: Partial<CcProvider> & Pick<CcProvider, "id" | "appType">): CcProvider {
   return {
@@ -116,6 +117,43 @@ describe("buildProviderConfig", () => {
     expect(cfg?.baseUrl).toBe("https://example.com");
     expect((cfg?.models as any[]).length).toBe(1);
     expect((cfg?.models as any[])[0].id).toBe("gpt");
+  });
+
+  test("consumes a pre-resolved registration decision as the model truth", () => {
+    const target = mk({
+      id: "decision",
+      appType: "codex",
+      api: "openai-responses",
+    });
+    const decision = resolveRegistrationCapability({
+      modelId: "gpt-5",
+      api: target.api,
+      baseUrl: target.baseUrl,
+      userMeta: {
+        maxTokens: 32_000,
+        reasoning: true,
+        thinkingLevelMap: { high: "decision-high" },
+      },
+    });
+    let calls = 0;
+
+    const cfg = buildProviderConfig(target, ["gpt-5"], {
+      rules: [],
+      modelMeta: {
+        maxTokens: 1,
+        thinkingLevelMap: { high: "legacy-wrong" },
+      },
+      registrationDecisionFor: () => {
+        calls += 1;
+        return decision;
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(cfg?.models[0]?.maxTokens).toBe(32_000);
+    expect(cfg?.models[0]?.thinkingLevelMap).toEqual({
+      high: "decision-high",
+    });
   });
 
   test("non-switchable provider yields undefined", () => {

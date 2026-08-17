@@ -5,6 +5,10 @@ import {
   runModelMetaDialog,
   type ModelMetaDialogInput,
 } from "../src/ui/model-meta-dialog.ts";
+import {
+  canonicalProviderEndpointTuple,
+  type ThinkingProjectionDecision,
+} from "../src/capabilities/thinking-projection.ts";
 
 const provider = { id: "abc", displayName: "elysiver-claude", piName: "elysiver-claude" };
 
@@ -45,6 +49,45 @@ function baseInput(over?: Partial<ModelMetaDialogInput>): ModelMetaDialogInput {
     scope: { kind: "provider" },
     tier: { reasoning: true, contextWindow: 200_000, maxTokens: 64_000 },
     models: ["glm-4.6", "claude-sonnet-4"],
+    ...over,
+  };
+}
+
+function ultraDecision(
+  over: Partial<ThinkingProjectionDecision> = {},
+): ThinkingProjectionDecision {
+  return {
+    tuple: canonicalProviderEndpointTuple({
+      appType: "codex",
+      providerId: "abc",
+      api: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5.6-sol",
+    }),
+    tupleKey: "codex:abc:gpt-5.6-sol",
+    profileVersion: "catalog@1",
+    control: { type: "effort" },
+    map: { max: "max" },
+    advertised: [
+      { type: "effort", value: "max" },
+      { type: "effort", value: "ultra" },
+    ],
+    unrepresented: [{ type: "effort", value: "ultra" }],
+    projections: [],
+    collisions: [],
+    source: "codex-model-catalog",
+    observedAt: "2026-08-17T00:00:00.000Z",
+    stale: false,
+    status: "exact",
+    runtime: {
+      version: "0.84.2",
+      runtimeVerified: true,
+      payloadVerified: true,
+      supportedControls: ["effort"],
+      providerDefault: "supported",
+      off: "indistinguishable-from-provider-default",
+    },
+    warnings: [],
     ...over,
   };
 }
@@ -218,6 +261,55 @@ describe("runModelMetaDialog · provider scope", () => {
 });
 
 describe("runModelMetaDialog · model scope", () => {
+  test("advertised exact-model ultra opt-in writes max -> ultra", async () => {
+    const { ui } = scriptedUi([
+      find(/^Provider ultra · /),
+      find(/^保存/),
+    ]);
+    const result = await runModelMetaDialog(
+      ui,
+      baseInput({
+        scope: { kind: "model", modelId: "gpt-5.6-sol" },
+        models: ["gpt-5.6-sol"],
+        thinkingProjections: { "gpt-5.6-sol": ultraDecision() },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "save",
+      scope: { kind: "model", modelId: "gpt-5.6-sol" },
+      modelMeta: { thinkingLevelMap: { max: "ultra" } },
+      thinkingOptIn: { piLevel: "max", nativeValue: "ultra" },
+    });
+  });
+
+  test("ultra opt-in stays hidden for provider, glob, and unadvertised scopes", async () => {
+    for (const input of [
+      baseInput({
+        thinkingProjections: { "gpt-5.6-sol": ultraDecision() },
+      }),
+      baseInput({
+        scope: { kind: "model", modelId: "gpt-*" },
+        thinkingProjections: { "gpt-5.6-sol": ultraDecision() },
+      }),
+      baseInput({
+        scope: { kind: "model", modelId: "gpt-5.6-sol" },
+        thinkingProjections: {
+          "gpt-5.6-sol": ultraDecision({
+            advertised: [{ type: "effort", value: "max" }],
+          }),
+        },
+      }),
+    ]) {
+      const seen: string[][] = [];
+      const { ui } = scriptedUi([() => null], {
+        onSelect: (_title, options) => seen.push(options),
+      });
+      await runModelMetaDialog(ui, input);
+      expect(seen[0]?.some((row) => row.startsWith("Provider ultra · "))).toBe(false);
+    }
+  });
+
   test("model scope save writes model scope result", async () => {
     const { ui } = scriptedUi([find(/^maxTokens · /), find(/^16k · /), find(/^保存/)]);
     const result = await runModelMetaDialog(

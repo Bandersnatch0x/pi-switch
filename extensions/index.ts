@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { findOwningPackageVersion } from "../src/host-package-version.ts";
 import { resolveSqlitePath } from "../src/sqlite-path.ts";
 import { Runtime } from "./runtime.ts";
 import { registerCommands } from "./commands.ts";
@@ -18,12 +19,11 @@ import { installGeminiToolCompat } from "./gemini-tool-compat.ts";
 import { installDeveloperRoleCompat } from "./developer-role-compat.ts";
 
 export default async function (pi: ExtensionAPI) {
-  const [cp, cryptoMod, fs, osMod, moduleMod, pathMod, urlMod, httpMod] = await Promise.all([
+  const [cp, cryptoMod, fs, osMod, pathMod, urlMod, httpMod] = await Promise.all([
     import("node:child_process"),
     import("node:crypto"),
     import("node:fs"),
     import("node:os"),
-    import("node:module"),
     import("node:path"),
     import("node:url"),
     import("node:http"),
@@ -42,15 +42,26 @@ export default async function (pi: ExtensionAPI) {
       req.on("error", () => resolve(false));
     });
 
-  const require = moduleMod.createRequire(import.meta.url);
   const extensionDir = pathMod.dirname(urlMod.fileURLToPath(import.meta.url));
   const snapshotPath = pathMod.join(extensionDir, "..", "defaults", "fingerprint-snapshot.json");
+  const packageVersionDeps = {
+    existsSync: fs.existsSync,
+    readFileSync: fs.readFileSync,
+    dirname: pathMod.dirname,
+    join: pathMod.join,
+    resolve: pathMod.resolve,
+  };
   const resolvePackageVersion = (name: string): string | undefined => {
+    const hostVersion = findOwningPackageVersion(
+      process.argv[1],
+      name,
+      packageVersionDeps,
+    );
+    if (hostVersion) return hostVersion;
+
     try {
-      const entry = require.resolve(name);
-      const pkgPath = pathMod.join(pathMod.dirname(entry), "..", "package.json");
-      const version = JSON.parse(fs.readFileSync(pkgPath, "utf8")).version;
-      return typeof version === "string" && version.trim() ? version.trim() : undefined;
+      const entry = urlMod.fileURLToPath(import.meta.resolve(name));
+      return findOwningPackageVersion(entry, name, packageVersionDeps);
     } catch {
       return undefined;
     }

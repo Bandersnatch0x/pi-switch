@@ -7,7 +7,10 @@ import type { HeaderRule } from "./types.ts";
 import { isSwitchable } from "./parse/index.ts";
 import type { ModelsDevCapabilities } from "./capabilities/models-dev.ts";
 import { ccMetaFrom } from "./capabilities/layers.ts";
-import { resolveRegistrationCapability } from "./capabilities/registration.ts";
+import {
+  resolveRegistrationCapability,
+  type RegistrationCapabilityDecision,
+} from "./capabilities/registration.ts";
 import {
   resolveModelTupleCompat,
   tupleCompatForRegistration,
@@ -108,10 +111,14 @@ export interface ProviderRegistrationOpts {
   vars?: Record<string, string>;
   debug?: boolean;
   onReject?: (name: string, reason: string) => void;
-  /** Per-provider model meta overrides (reasoning/thinkingFormat/...). */
+  /** Preferred deep seam: registration and diagnostics share this decision. */
+  registrationDecisionFor?: (
+    modelId: string,
+  ) => RegistrationCapabilityDecision;
+  /** Legacy direct-build fallback when registrationDecisionFor is absent. */
   modelMeta?: ModelMetaOverride;
   /**
-   * Per-model resolver; wins over `modelMeta` when it returns a value.
+   * Legacy per-model resolver; wins over `modelMeta` when it returns a value.
    * Lets one provider register models with different reasoning/ctx settings.
    */
   modelMetaFor?: (modelId: string) => ModelMetaOverride | undefined;
@@ -153,15 +160,19 @@ export function buildProviderConfig(
     .filter(Boolean)
     .map((raw) => raw.trim())
     .flatMap((id) => {
-      const userMeta = opts.modelMetaFor?.(id) ?? opts.modelMeta;
-      const decision = resolveRegistrationCapability({
-        modelId: id,
-        api: provider.api,
-        baseUrl: provider.baseUrl,
-        userMeta,
-        modelsDev: opts.modelsDevFor?.(id),
-        ccMeta: ccMetaFrom(provider.meta),
-      });
+      const userMeta = opts.registrationDecisionFor
+        ? undefined
+        : opts.modelMetaFor?.(id) ?? opts.modelMeta;
+      const decision =
+        opts.registrationDecisionFor?.(id) ??
+        resolveRegistrationCapability({
+          modelId: id,
+          api: provider.api,
+          baseUrl: provider.baseUrl,
+          userMeta,
+          modelsDev: opts.modelsDevFor?.(id),
+          ccMeta: ccMetaFrom(provider.meta),
+        });
       // Issue #63: skip models with no trusted maxTokens authority.
       if (decision.maxTokensUnresolved || !decision.meta) return [];
       const tupleInput = opts.tupleCompatFor?.(id);

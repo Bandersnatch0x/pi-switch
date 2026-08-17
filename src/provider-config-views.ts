@@ -5,7 +5,13 @@
  * `() => this.config` so reloads are visible without reconstruction.
  */
 
-import type { CcProvider, PiSwitchConfig } from "./types.ts";
+import {
+  THINKING_LEVELS,
+  type CcProvider,
+  type ModelMetaOverride,
+  type PiSwitchConfig,
+  type ThinkingLevel,
+} from "./types.ts";
 import { resolveProviderOverride } from "./provider-override.ts";
 import {
   resolveProviderWireCompat,
@@ -19,10 +25,13 @@ import {
   resolveEffectiveModelMeta,
   resolveModelMetaLayers,
   cleanModelMeta,
+  matchExactModelOverrideEntry,
 } from "./model-meta.ts";
 import { withBuiltInCompatUnderUser } from "./compat/built-in-compat-profile.ts";
 import type { ModelTupleCompat } from "./model-tuple-compat.ts";
-import type { ModelMetaOverride } from "./types.ts";
+import type { RegistrationModelMetaFacts } from "./capabilities/registration.ts";
+import type { UserThinkingMapScope } from "./capabilities/thinking-projection.ts";
+import type { UserReasoningProfileOverride } from "./capabilities/thinking-projection.ts";
 
 /** Exact-model tuple pick: the tuple plus legacy flat dialect fields (#64/#67). */
 export interface TupleCompatSelection {
@@ -85,9 +94,10 @@ export class ProviderConfigViews {
   }
 
   /**
-   * Registration/display effective modelMeta:
+   * Display-facing effective modelMeta:
    *   built-in compat < defaultModelMeta < provider.modelMeta < modelOverrides
-   * (user wins per field).
+   * (user wins per field). Registration uses registrationModelMetaFor so it
+   * retains user-map provenance before built-in compat is applied.
    */
   modelMetaFor(
     provider: Pick<CcProvider, "id" | "piName" | "displayName">,
@@ -97,6 +107,64 @@ export class ProviderConfigViews {
       modelId,
       resolveEffectiveModelMeta(this.getConfig(), provider, modelId),
     );
+  }
+
+  /**
+   * Registration facts before built-in compat is applied. Keeping provenance
+   * here prevents registration/runtime callers from guessing map scope from a
+   * flattened ModelMetaOverride.
+   */
+  registrationModelMetaFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+    modelId: string,
+  ): RegistrationModelMetaFacts {
+    const layers = this.modelMetaLayers(provider, modelId);
+    const userMapScopes: Partial<
+      Record<ThinkingLevel, UserThinkingMapScope>
+    > = {};
+    const modelScope = layers.modelKey?.includes("*")
+      ? "model-glob"
+      : "exact-model";
+    for (const level of THINKING_LEVELS) {
+      if (
+        Object.prototype.hasOwnProperty.call(
+          layers.model?.thinkingLevelMap ?? {},
+          level,
+        )
+      ) {
+        userMapScopes[level] = modelScope;
+      } else if (
+        Object.prototype.hasOwnProperty.call(
+          layers.provider?.thinkingLevelMap ?? {},
+          level,
+        )
+      ) {
+        userMapScopes[level] = "provider";
+      } else if (
+        Object.prototype.hasOwnProperty.call(
+          layers.base?.thinkingLevelMap ?? {},
+          level,
+        )
+      ) {
+        userMapScopes[level] = "default";
+      }
+    }
+    return { userMeta: layers.effective, userMapScopes };
+  }
+
+  /** Exact user profile only; globs/provider/default scopes are never authoritative. */
+  reasoningProfileFor(
+    provider: Pick<CcProvider, "id" | "piName" | "displayName"> & {
+      appType?: string;
+    },
+    modelId: string,
+  ): UserReasoningProfileOverride | undefined {
+    const entry = resolveProviderOverride(
+      this.getConfig().providerOverrides,
+      provider,
+    );
+    return matchExactModelOverrideEntry(entry?.modelOverrides, modelId)?.entry
+      .reasoningProfile;
   }
 
   /**

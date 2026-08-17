@@ -36,8 +36,8 @@ export function completeFakeRuntime<T extends object>(partial: T): Runtime & T {
       vars: rt.headerVars(),
       debug: rt.config?.debug,
       onReject: rt.rejectSink?.(),
-      modelMetaFor: (id) => rt.modelMetaFor(provider, id),
-      modelsDevFor: (id) => rt.modelsDevFor(id),
+      registrationDecisionFor: (id) =>
+        rt.registrationDecisionFor(provider, id),
       providerWireCompat: rt.providerWireCompatFor(provider),
       tupleCompatFor: (id) => rt.tupleCompatFor(provider, id),
     });

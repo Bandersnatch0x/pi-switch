@@ -22,17 +22,48 @@ import {
 import {
   resolveRegistrationCapability,
   type RegistrationCapabilityDecision,
+  type RegistrationModelMetaFacts,
 } from "../src/capabilities/registration.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
 import type { EffectiveProviderCompatibility } from "../src/provider-config-views.ts";
+import type {
+  PiThinkingRuntimeCapability,
+  ProviderReasoningProfile,
+} from "../src/capabilities/thinking-projection.ts";
 
 /**
  * Narrow interface for registration decision resolution.
- * Tests can mock just these 2 methods instead of the full Runtime.
+ * Tests can supply tuple-scoped profile/runtime evidence without faking Runtime.
  */
 export interface RegistrationDecisionDeps {
-  modelMetaFor(provider: CcProvider, modelId: string): ModelMetaOverride | undefined;
+  modelMetaFactsFor(
+    provider: CcProvider,
+    modelId: string,
+  ): RegistrationModelMetaFacts;
   modelsDevFor(modelId: string): ModelsDevCapabilities | undefined;
+  piVersion?(): string | undefined;
+  thinkingFor?(
+    provider: CcProvider,
+    modelId: string,
+  ):
+    | {
+        profile?: ProviderReasoningProfile;
+        runtime: PiThinkingRuntimeCapability;
+      }
+    | undefined;
+}
+
+function diagnosticThinkingRuntime(
+  version: string | undefined,
+): PiThinkingRuntimeCapability {
+  return {
+    version: version?.trim() || "unknown",
+    runtimeVerified: false,
+    payloadVerified: false,
+    supportedControls: [],
+    providerDefault: "supported",
+    off: "unsupported",
+  };
 }
 
 /**
@@ -101,21 +132,41 @@ export interface SessionCompatibilityDeps {
 /**
  * Pure function: resolve registration capability decision for a provider/model.
  *
- * This is the registration-facing capability decision — same inputs buildProviderConfig
- * resolves when it registers this model. Extracted from Runtime.registrationDecisionFor().
+ * buildProviderConfig consumes this registration-facing decision directly
+ * instead of re-resolving the same capability facts.
  */
 export function resolveRegistrationDecisionFor(
   provider: CcProvider,
   modelId: string,
   deps: RegistrationDecisionDeps,
 ): RegistrationCapabilityDecision {
+  const metaFacts = deps.modelMetaFactsFor(provider, modelId);
+  const thinking = deps.thinkingFor?.(provider, modelId);
   return resolveRegistrationCapability({
     modelId,
     api: provider.api,
     baseUrl: provider.baseUrl,
-    userMeta: deps.modelMetaFor(provider, modelId),
+    userMeta: metaFacts.userMeta,
     modelsDev: deps.modelsDevFor(modelId),
     ccMeta: ccMetaFrom(provider.meta),
+    ...(provider.api
+      ? {
+          thinking: {
+            tuple: {
+              appType: provider.appType,
+              providerId: provider.id,
+              api: provider.api,
+              baseUrl: provider.baseUrl,
+              modelId,
+            },
+            profile: thinking?.profile,
+            runtime:
+              thinking?.runtime ?? diagnosticThinkingRuntime(deps.piVersion?.()),
+            userMapScope: "none" as const,
+            userMapScopes: metaFacts.userMapScopes,
+          },
+        }
+      : {}),
   });
 }
 

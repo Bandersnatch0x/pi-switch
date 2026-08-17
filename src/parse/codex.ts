@@ -10,24 +10,39 @@ import {
 } from "./common.ts";
 import { resolveApi } from "./api-format.ts";
 import type { ParsedCore } from "./claude.ts";
+import { parseCodexReasoningCatalog } from "../capabilities/reasoning-profile-registry.ts";
 
-export function parseCodex(config: unknown, apiFormat?: string): ParsedCore {
+export function parseCodex(
+  config: unknown,
+  apiFormat?: string,
+  observedAt = new Date().toISOString(),
+): ParsedCore {
   const root = asRecord(config) ?? {};
   const auth = asRecord(root.auth) ?? {};
   const apiKey = asString(auth.OPENAI_API_KEY) ?? "";
   const toml = typeof root.config === "string" ? root.config : "";
+  const catalogResult = parseCodexReasoningCatalog(config, observedAt);
+  const catalogFacts = {
+    ...(catalogResult.catalog ? { reasoningCatalog: catalogResult.catalog } : {}),
+    ...(catalogResult.warnings.length
+      ? { capabilityWarnings: catalogResult.warnings }
+      : {}),
+  };
 
-  const models = uniqueModels(extractCodexModels(root, toml));
+  const models = uniqueModels([
+    ...extractCodexModels(root, toml),
+    ...Object.keys(catalogResult.catalog?.models ?? {}),
+  ]);
   const baseUrl = stripTrailingSlash(extractCodexBaseUrl(toml));
 
   if (!apiKey) {
-    return err("missing auth.OPENAI_API_KEY", baseUrl, models);
+    return err("missing auth.OPENAI_API_KEY", baseUrl, models, catalogFacts);
   }
   if (!toml) {
-    return err("missing config TOML", baseUrl, models);
+    return err("missing config TOML", baseUrl, models, catalogFacts);
   }
   if (!baseUrl) {
-    return err("missing base_url in TOML", "", models);
+    return err("missing base_url in TOML", "", models, catalogFacts);
   }
 
   const rawWire = extractTomlValue(toml, "wire_api") ?? "responses";
@@ -45,6 +60,7 @@ export function parseCodex(config: unknown, apiFormat?: string): ParsedCore {
       authHeader: true,
       configModels: models,
       parseError: resolved.reason,
+      ...catalogFacts,
     };
   }
 
@@ -54,6 +70,7 @@ export function parseCodex(config: unknown, apiFormat?: string): ParsedCore {
     apiKey,
     authHeader: true,
     configModels: models,
+    ...catalogFacts,
   };
 }
 
@@ -79,13 +96,19 @@ function extractCodexModels(config: Record<string, unknown>, toml: string): stri
   if (Array.isArray(models)) {
     for (const m of models) {
       const rec = asRecord(m);
-      if (typeof rec?.model === "string") out.push(rec.model);
+      const id = asString(rec?.slug) ?? asString(rec?.model);
+      if (id) out.push(id);
     }
   }
   return out;
 }
 
-function err(reason: string, baseUrl: string, models: string[]): ParsedCore {
+function err(
+  reason: string,
+  baseUrl: string,
+  models: string[],
+  facts: Pick<ParsedCore, "reasoningCatalog" | "capabilityWarnings"> = {},
+): ParsedCore {
   return {
     api: null,
     baseUrl,
@@ -93,6 +116,7 @@ function err(reason: string, baseUrl: string, models: string[]): ParsedCore {
     authHeader: true,
     configModels: models,
     parseError: reason,
+    ...facts,
   };
 }
 

@@ -6,6 +6,10 @@ import {
   trustedMaxTokensHint,
 } from "../src/capabilities/registration.ts";
 import { resolveModelCapabilities } from "../src/capabilities/resolve.ts";
+import type {
+  PiThinkingRuntimeCapability,
+  ProviderReasoningProfile,
+} from "../src/capabilities/thinking-projection.ts";
 
 describe("resolveRegistrationCapability (#63)", () => {
   test("unknown model: maxTokens unresolved, reasoning conservative false", () => {
@@ -62,6 +66,194 @@ describe("resolveRegistrationCapability (#63)", () => {
     expect(decision.meta?.reasoning).toBe(true);
     expect(decision.resolved.maxTokens.source).toBe("models-dev");
     expect(decision.reasoningConservative).toBe(false);
+  });
+
+  test("carries thinking projection and registers only its projected map", () => {
+    const tuple = {
+      appType: "codex",
+      providerId: "relay-primary",
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5.6-sol",
+    };
+    const profile: ProviderReasoningProfile = {
+      tuple,
+      profileVersion: "catalog@1",
+      control: { type: "effort" },
+      variants: [
+        { name: "max", native: { type: "effort", value: "max" } },
+        { name: "ultra", native: { type: "effort", value: "ultra" } },
+      ],
+      source: "codex-model-catalog",
+      observedAt: "2026-08-17T00:00:00.000Z",
+    };
+    const runtime: PiThinkingRuntimeCapability = {
+      version: "0.81.1",
+      runtimeVerified: true,
+      payloadVerified: true,
+      supportedControls: ["effort"],
+      providerDefault: "supported",
+      off: "indistinguishable-from-provider-default",
+    };
+
+    const decision = resolveRegistrationCapability({
+      modelId: tuple.modelId,
+      api: tuple.api,
+      baseUrl: tuple.baseUrl,
+      userMeta: {
+        maxTokens: 128_000,
+        reasoning: true,
+        thinkingLevelMap: { max: "ultra" },
+      },
+      thinking: {
+        tuple,
+        profile,
+        runtime,
+        userMapScope: "exact-model",
+      },
+    });
+
+    expect(decision.thinkingProjection).toBeDefined();
+    expect(decision.thinkingProjection?.status).toBe("lossy");
+    expect(decision.thinkingProjection?.tupleKey).toContain("relay-primary");
+    expect(decision.meta?.thinkingLevelMap).toEqual(
+      decision.thinkingProjection?.map,
+    );
+    expect(decision.meta?.thinkingLevelMap?.max).toBe("ultra");
+    expect(decision.thinkingProjection?.unrepresented).toEqual([
+      { type: "effort", value: "max" },
+    ]);
+  });
+
+  test("reasoning false prevents every automatic and user thinking projection", () => {
+    const tuple = {
+      appType: "codex",
+      providerId: "relay-primary",
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5.6-sol",
+    };
+    const profile: ProviderReasoningProfile = {
+      tuple,
+      profileVersion: "catalog@1",
+      control: { type: "effort" },
+      variants: [{ name: "high", native: { type: "effort", value: "high" } }],
+      source: "codex-model-catalog",
+      observedAt: "2026-08-17T00:00:00.000Z",
+    };
+
+    const decision = resolveRegistrationCapability({
+      modelId: tuple.modelId,
+      api: tuple.api,
+      baseUrl: tuple.baseUrl,
+      userMeta: {
+        maxTokens: 32_000,
+        reasoning: false,
+        thinkingLevelMap: { high: "high" },
+      },
+      thinking: {
+        tuple,
+        profile,
+        runtime: {
+          version: "0.84.2",
+          runtimeVerified: true,
+          payloadVerified: true,
+          supportedControls: ["effort"],
+          providerDefault: "supported",
+          off: "supported",
+        },
+        userMapScope: "exact-model",
+      },
+    });
+
+    expect(decision.meta?.reasoning).toBeFalse();
+    expect(decision.meta?.thinkingLevelMap).toBeUndefined();
+    expect(decision.thinkingProjection).toBeUndefined();
+  });
+
+  test("built-in opt-out suppresses reviewed profiles but keeps catalog evidence", () => {
+    const tuple = {
+      appType: "codex",
+      providerId: "relay-primary",
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5.6-sol",
+    };
+    const profile: ProviderReasoningProfile = {
+      tuple,
+      profileVersion: "profile@1",
+      control: { type: "effort" },
+      variants: [{ name: "high", native: { type: "effort", value: "high" } }],
+      source: "built-in",
+      observedAt: "2026-08-17T00:00:00.000Z",
+    };
+    const input = {
+      modelId: tuple.modelId,
+      api: tuple.api,
+      baseUrl: tuple.baseUrl,
+      userMeta: {
+        maxTokens: 32_000,
+        reasoning: true,
+        useBuiltInCompat: false,
+      },
+      thinking: {
+        tuple,
+        profile,
+        runtime: {
+          version: "0.84.2",
+          runtimeVerified: true,
+          payloadVerified: true,
+          supportedControls: ["effort"] as const,
+          providerDefault: "supported" as const,
+          off: "supported" as const,
+        },
+        userMapScope: "none" as const,
+      },
+    };
+
+    const optedOut = resolveRegistrationCapability(input);
+    const catalog = resolveRegistrationCapability({
+      ...input,
+      thinking: {
+        ...input.thinking,
+        profile: { ...profile, source: "codex-model-catalog" },
+      },
+    });
+
+    expect(optedOut.thinkingProjection).toBeUndefined();
+    expect(optedOut.meta?.thinkingLevelMap).toBeUndefined();
+    expect(catalog.thinkingProjection?.status).toBe("exact");
+    expect(catalog.meta?.thinkingLevelMap?.high).toBe("high");
+  });
+
+  test("does not canonicalize an unrelated endpoint without thinking facts", () => {
+    const decision = resolveRegistrationCapability({
+      modelId: "plain-chat-model",
+      api: "openai-completions",
+      baseUrl: "https://relay.example/v1?api-version=legacy",
+      userMeta: { maxTokens: 16_384 },
+      thinking: {
+        tuple: {
+          appType: "custom",
+          providerId: "legacy-relay",
+          api: "openai-completions",
+          baseUrl: "https://relay.example/v1?api-version=legacy",
+          modelId: "plain-chat-model",
+        },
+        runtime: {
+          version: "unknown",
+          runtimeVerified: false,
+          payloadVerified: false,
+          supportedControls: [],
+          providerDefault: "supported",
+          off: "unsupported",
+        },
+        userMapScope: "none",
+      },
+    });
+
+    expect(decision.meta?.maxTokens).toBe(16_384);
+    expect(decision.thinkingProjection).toBeUndefined();
   });
 
   test("all four APIs refuse protocol maxTokens floors", () => {
