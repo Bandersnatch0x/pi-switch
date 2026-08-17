@@ -512,6 +512,29 @@ describe("runRepair pipeline (ticket 4)", () => {
     }
   });
 
+  test("blank config errors use an explicit fallback summary", async () => {
+    const plan = buildRepairPlan(reasoningRejectedEvidence());
+    const outcome = await runRepair({
+      mode: "interactive",
+      confirmed: true,
+      plan,
+      verify: async () => {
+        throw new Error("verification must not run when the snapshot fails");
+      },
+      configStore: {
+        read: () => {
+          throw new Error("   ");
+        },
+        commit: () => {
+          throw new Error("commit must not run when the snapshot fails");
+        },
+      },
+    });
+
+    expect(outcome.status).toBe("commit-error");
+    expect(outcome.summary).toBe("failed to persist repair candidate");
+  });
+
   test("candidate only affects in-memory probe target during verify (reasoning off)", async () => {
     const evidence = reasoningRejectedEvidence();
     evidence.target = {

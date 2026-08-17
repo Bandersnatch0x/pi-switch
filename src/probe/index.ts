@@ -127,6 +127,21 @@ export type {
   RepairRecipeMatch,
 } from "./recipes.ts";
 export { buildRepairPlan, runRepair } from "./repair.ts";
+export {
+  advance,
+  createInvestigation,
+  createRepairInvestigation,
+  InvalidInvestigationTransitionError,
+} from "./investigation.ts";
+export type {
+  InvestigationEffect,
+  InvestigationInput,
+  InvestigationIntent,
+  InvestigationOptions,
+  InvestigationState,
+  InvestigationTerminalStatus,
+  InvestigationTransition,
+} from "./investigation.ts";
 export type {
   RepairConfigCommitInput,
   RepairConfigCommitResult,
