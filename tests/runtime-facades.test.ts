@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   resolveCapabilitiesFor,
-  resolveRegistrationDecisionFor,
   resolveSessionCompatibilityTarget,
   type SessionCompatibilityDeps,
 } from "../extensions/runtime-facades.ts";
@@ -81,27 +80,6 @@ describe("resolveSessionCompatibilityTarget (pure)", () => {
     );
     // ?? fallback fires only on null/undefined (empty string is preserved as-is)
     expect(result.modelId).toBe("m-a");
-  });
-});
-
-describe("resolveRegistrationDecisionFor (pure)", () => {
-  test("trusted user maxTokens resolves registration meta", () => {
-    const decision = resolveRegistrationDecisionFor(provider(), "gpt-5", {
-      modelMetaFor: () => ({ maxTokens: 32_000, reasoning: true }),
-      modelsDevFor: () => undefined,
-    });
-    expect(decision.maxTokensUnresolved).toBe(false);
-    expect(decision.meta?.maxTokens).toBe(32_000);
-    expect(decision.meta?.reasoning).toBe(true);
-  });
-
-  test("no trusted authority flags maxTokens unresolved (issue #63)", () => {
-    const decision = resolveRegistrationDecisionFor(provider(), "unknown-model", {
-      modelMetaFor: () => undefined,
-      modelsDevFor: () => undefined,
-    });
-    expect(decision.maxTokensUnresolved).toBe(true);
-    expect(decision.meta).toBeUndefined();
   });
 });
 

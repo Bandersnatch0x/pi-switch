@@ -33,11 +33,16 @@ import {
   fingerprintHeaderTemplates,
   isFingerprintPreset,
 } from "../src/headers/fingerprints.ts";
+import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import { piSwitchConfigPath } from "../src/paths.ts";
-import type { CcProvider } from "../src/types.ts";
+import type {
+  CcProvider,
+  PiSwitchConfig,
+  PiSwitchSelection,
+} from "../src/types.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import { tf } from "../src/ui/tui-locale.ts";
 import {
@@ -76,15 +81,38 @@ import {
   type ResolveProbeTargetResult,
 } from "../src/probe/index.ts";
 import { createPiRepairCaseWriteAdapter } from "./repair-case-adapter.ts";
-import type { Runtime } from "./runtime.ts";
 import {
   createSwitchLifecycle,
   type SwitchLifecycle,
+  type SwitchLifecycleRuntime,
 } from "./switch-lifecycle.ts";
 import {
   createCompatibilityProbeExecutor,
   type CompatibilityProbeExecutor,
 } from "./probe-executor.ts";
+
+export interface ProbeCommandRuntime extends SwitchLifecycleRuntime {
+  readonly home: string;
+  io: {
+    existsSync(path: string): boolean;
+  };
+  fsLike(): FsLike;
+  headerVars(): Record<string, string>;
+  overridesFor(provider: CcProvider): ResolvedOverrideHeaders | undefined;
+  readSelectionCached(ttlMs?: number): PiSwitchSelection | undefined;
+  reloadConfig(): PiSwitchConfig;
+  routingProbe(): Promise<{ url: string; reachable: boolean } | undefined>;
+}
+
+type ProbeTargetEnrichmentRuntime = Pick<
+  ProbeCommandRuntime,
+  "config" | "registration"
+>;
+
+type ProbePrecheckRuntime = Pick<
+  ProbeCommandRuntime,
+  "config" | "home" | "io" | "registration" | "routingProbe"
+>;
 
 // ── Transport (production) ──────────────────────────────────────────────────
 
@@ -442,7 +470,7 @@ export function createRepairConfigStore(deps: {
 // ── Target enrichment from config ───────────────────────────────────────────
 
 function enrichTarget(
-  rt: Runtime,
+  rt: ProbeTargetEnrichmentRuntime,
   provider: CcProvider,
   modelId: string,
 ): ProbeTargetEnrichment | undefined {
@@ -450,7 +478,7 @@ function enrichTarget(
   const out: ProbeTargetEnrichment = {};
   // Registration's truth: user layer included, conservative-default excluded.
   // A relay's reasoning model must reach the probe as reasoning (#83).
-  const decision = rt.registrationDecisionFor(provider, modelId);
+  const decision = rt.registration.decisionFor(provider, modelId);
   const reasoning = decision.resolved.reasoning;
   if (!decision.reasoningConservative && reasoning.value !== undefined) {
     out.reasoning = reasoning.value;
@@ -498,7 +526,7 @@ function enrichTarget(
 }
 
 async function chooseProbeTarget(
-  rt: Runtime,
+  rt: ProbeCommandRuntime,
   ctx: PiSwitchCtx,
   providers: CcProvider[],
 ): Promise<ResolveProbeTargetResult | undefined> {
@@ -554,7 +582,7 @@ async function chooseProbeTarget(
 // ── Precheck facts (production) ─────────────────────────────────────────────
 
 async function buildPrecheck(
-  rt: Runtime,
+  rt: ProbePrecheckRuntime,
   providers: CcProvider[],
   providersError: string | undefined,
   target: ProbeTarget,
@@ -577,7 +605,7 @@ async function buildPrecheck(
   // network — judged with registration's decision, formatted in one place.
   const capabilities = provider
     ? capabilitySoftCheck({
-        decision: rt.registrationDecisionFor(provider, target.modelId),
+        decision: rt.registration.decisionFor(provider, target.modelId),
         providerLabel: `${provider.appType}/${provider.displayName}`,
         modelId: target.modelId,
       })
@@ -613,7 +641,7 @@ export interface ProbeCommandDeps {
   configStore?: RepairConfigStore;
   /** Doctor precheck builder (default: production buildPrecheck). */
   buildPrecheck?: (
-    rt: Runtime,
+    rt: ProbePrecheckRuntime,
     providers: CcProvider[],
     providersError: string | undefined,
     target: ProbeTarget,
@@ -623,7 +651,7 @@ export interface ProbeCommandDeps {
 }
 
 function buildProbeExecutor(
-  rt: Runtime,
+  rt: ProbeCommandRuntime,
   lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   providers: CcProvider[],
@@ -644,7 +672,7 @@ function buildProbeExecutor(
 
 export async function runProbeCommand(
   pi: ExtensionAPI,
-  rt: Runtime,
+  rt: ProbeCommandRuntime,
   ctx: PiSwitchCtx,
   deps: ProbeCommandDeps = {},
 ): Promise<void> {
@@ -702,7 +730,7 @@ export async function runProbeCommand(
 
 export async function runRepairCommand(
   pi: ExtensionAPI,
-  rt: Runtime,
+  rt: ProbeCommandRuntime,
   lifecycle: SwitchLifecycle,
   ctx: PiSwitchCtx,
   deps: ProbeCommandDeps = {},
@@ -861,7 +889,7 @@ export async function runRepairCommand(
  * local cause), never silently downgraded to an anonymous 401/403.
  */
 function buildTransport(
-  rt: Runtime,
+  rt: ProbeCommandRuntime,
   ctx: PiSwitchCtx,
   captureObservation: (observation: RawProbeObservation) => void,
 ): ProbeTransport {

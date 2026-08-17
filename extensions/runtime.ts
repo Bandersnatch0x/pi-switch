@@ -39,8 +39,6 @@ import type {
   ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
-import type { RegistrationCapabilityDecision } from "../src/capabilities/registration.ts";
-import type { ProviderRegistrationOpts } from "../src/register.ts";
 import type { ModelMetaLayers } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
@@ -58,10 +56,13 @@ import { SelectionCache } from "../src/selection-cache.ts";
 import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 import {
-  resolveRegistrationDecisionFor,
   resolveCapabilitiesFor,
   resolveSessionCompatibilityTarget,
 } from "./runtime-facades.ts";
+import {
+  createRegistrationOperations,
+  type RegistrationOperations,
+} from "./registration-operations.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -97,6 +98,7 @@ export type SessionCompatibilityTarget = {
 export class Runtime {
   readonly io: NodeIo;
   readonly state: LocalState;
+  readonly registration: RegistrationOperations;
   registeredPsNames: string[] = [];
   warnedMissingDbId = false;
   headerRules: HeaderRule[] = [];
@@ -138,6 +140,17 @@ export class Runtime {
       home: io.home,
       execFileSync: io.execFileSync as DbReaderDeps["execFileSync"],
       existsSync: io.existsSync,
+    });
+    this.registration = createRegistrationOperations({
+      headerRules: () => this.headerRules,
+      headerOverrideOpts: (provider) => this.headerOverrideOpts(provider),
+      headerVars: () => this.headerVars(),
+      debug: () => this.config.debug,
+      rejectSink: () => this.rejectSink(),
+      modelMetaFor: (provider, modelId) => this.modelMetaFor(provider, modelId),
+      modelsDevFor: (modelId) => this.modelsDevFor(modelId),
+      providerWireCompatFor: (provider) => this.providerWireCompatFor(provider),
+      tupleCompatFor: (provider, modelId) => this.tupleCompatFor(provider, modelId),
     });
   }
 
@@ -352,42 +365,6 @@ export class Runtime {
   }
 
   /**
-   * The registration-facing capability decision — same inputs buildProviderConfig
-   * resolves when it registers this model, so doctor / precheck / ps-info /
-   * notifications judge and display with registration's truth instead of
-   * re-deriving it from lower-level facts (three hand-rolled respellings of
-   * "maxTokens unresolved" disagreed on value:0 before this existed).
-   */
-  registrationDecisionFor(
-    provider: CcProvider,
-    modelId: string,
-  ): RegistrationCapabilityDecision {
-    return resolveRegistrationDecisionFor(provider, modelId, {
-      modelMetaFor: (p, m) => this.modelMetaFor(p, m),
-      modelsDevFor: (m) => this.modelsDevFor(m),
-    });
-  }
-
-  /**
-   * The full option bundle buildProviderConfig/registerProvider need for this
-   * provider. Lives here because Runtime owns every ingredient; call sites
-   * used to hand-copy these nine fields (four verbatim copies, one drifted).
-   */
-  registrationOptsFor(provider: CcProvider): ProviderRegistrationOpts {
-    return {
-      rules: this.headerRules,
-      ...this.headerOverrideOpts(provider),
-      vars: this.headerVars(),
-      debug: this.config.debug,
-      onReject: this.rejectSink(),
-      modelMetaFor: (id) => this.modelMetaFor(provider, id),
-      modelsDevFor: (id) => this.modelsDevFor(id),
-      providerWireCompat: this.providerWireCompatFor(provider),
-      tupleCompatFor: (id) => this.tupleCompatFor(provider, id),
-    };
-  }
-
-  /**
    * Collect the full DoctorInput fact set: reload config/rules, force a
    * fingerprint re-probe, refresh the selected model's capability fact when
    * missing/stale (W4), and read routing/cache/migration state. runDoctor
@@ -419,7 +396,7 @@ export class Runtime {
       }
       capabilities = {
         modelId: sel.model,
-        decision: this.registrationDecisionFor(selMatch, sel.model),
+        decision: this.registration.decisionFor(selMatch, sel.model),
       };
       // Issue #39: surface cache state after on-demand refresh.
       const entry = this.rawCacheEntry(sel.model);

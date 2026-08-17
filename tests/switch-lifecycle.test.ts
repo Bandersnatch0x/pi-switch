@@ -4,16 +4,24 @@ import {
   createSwitchLifecycle,
   resolveSessionTarget,
   sessionModelFromBranch,
+  type SwitchLifecycleRuntime,
   type SwitchLifecycle,
 } from "../extensions/switch-lifecycle.ts";
+import { createRegistrationOperations } from "../extensions/registration-operations.ts";
 import { readPiSwitchConfig, readSelection } from "../src/settings.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
-import type { CcProvider, PiSwitchConfig, RecentEntry } from "../src/types.ts";
-import type { Runtime } from "../extensions/runtime.ts";
-import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
+import type {
+  CcProvider,
+  ModelMetaOverride,
+  PiSwitchConfig,
+  RecentEntry,
+} from "../src/types.ts";
 import { createLocalState } from "../src/local-state.ts";
-import { resolveProviderWireCompat } from "../src/provider-wire-compat.ts";
+import {
+  resolveProviderWireCompat,
+  type ResolvedProviderWireCompat,
+} from "../src/provider-wire-compat.ts";
 
 type Operation =
   | {
@@ -93,9 +101,16 @@ function setup(options?: {
   /** Session branch for getBranch (continue/resume model recovery). */
   branch?: Array<Record<string, unknown>>;
   /** Stub for Runtime.providerWireCompatFor (issue #62). */
-  providerWireCompatFor?: Runtime["providerWireCompatFor"];
+  providerWireCompatFor?: (
+    provider: Pick<CcProvider, "id" | "piName" | "displayName" | "api" | "baseUrl"> & {
+      appType?: string;
+    },
+  ) => ResolvedProviderWireCompat | undefined;
   /** Stub for Runtime.modelMetaFor — return undefined to trigger a #63 skip. */
-  modelMetaFor?: Runtime["modelMetaFor"];
+  modelMetaFor?: (
+    provider: Pick<CcProvider, "id" | "piName" | "displayName">,
+    modelId?: string,
+  ) => ModelMetaOverride | undefined;
   findModel?: (providerName: string, modelId: string) => unknown;
   onRegister?: () => void;
 }) {
@@ -179,34 +194,36 @@ function setup(options?: {
     ...options?.config,
   };
   const scheduleCalls: string[] = [];
-  const runtime = completeFakeRuntime({
-    home,
+  const modelMetaFor =
+    options?.modelMetaFor ??
+    (() => ({ maxTokens: 32_000, reasoning: true }));
+  const registration = createRegistrationOperations({
+    headerRules: () => [],
+    headerOverrideOpts: () => ({}),
+    headerVars: () => ({}),
+    debug: () => false,
+    rejectSink: () => undefined,
+    // Trusted maxTokens so registration is eligible under issue #63.
+    modelMetaFor: (provider, modelId) => modelMetaFor(provider, modelId),
+    modelsDevFor: () => undefined,
+    providerWireCompatFor: (provider) =>
+      options?.providerWireCompatFor?.(provider),
+    tupleCompatFor: () => undefined,
+  });
+  const runtime: SwitchLifecycleRuntime & { scheduleCalls: string[] } = {
     state: createLocalState({ fs, home, pid: 1 }),
     config,
-    headerRules: [],
     registeredPsNames: ["ps-claude-old"],
     warnedMissingDbId: false,
     lastGoodProviders: providers,
-    fsLike: () => fs,
     refreshSnapshot: () => ({ providers }),
     migrateIdentity: () => undefined,
-    migrationSummary: undefined,
-    reloadConfig: () => config,
-    headerOverrideOpts: () => ({}),
-    headerVars: () => ({}),
-    rejectSink: () => undefined,
-    // Trusted maxTokens so registration is eligible under issue #63.
-    modelMetaFor:
-      options?.modelMetaFor ?? (() => ({ maxTokens: 32_000, reasoning: true })),
-    modelsDevFor: () => undefined,
-    providerWireCompatFor:
-      options?.providerWireCompatFor ?? (() => undefined),
-    tupleCompatFor: () => undefined,
+    registration,
     scheduleModelsDevRefresh: (modelId: string) => {
       scheduleCalls.push(modelId);
     },
     scheduleCalls,
-  }) as unknown as Runtime & { scheduleCalls: string[] };
+  };
 
   const ctx = {
     modelRegistry: {
@@ -318,7 +335,7 @@ describe("switch lifecycle interface", () => {
       { provider: provider(), modelId: "gpt-5", commit: "selection" },
       state.ctx,
     );
-    const calls = (state.runtime as unknown as { scheduleCalls: string[] }).scheduleCalls;
+    const calls = state.runtime.scheduleCalls;
     expect(calls).toEqual(["gpt-5"]);
   });
 
@@ -364,7 +381,7 @@ describe("switch lifecycle interface", () => {
       },
       state.ctx,
     );
-    const calls = (state.runtime as unknown as { scheduleCalls: string[] }).scheduleCalls;
+    const calls = state.runtime.scheduleCalls;
     expect(calls).toEqual([]);
   });
 
