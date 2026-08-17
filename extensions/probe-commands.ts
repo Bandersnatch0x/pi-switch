@@ -13,29 +13,28 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import {
-  applyClaudeCodeCompatHeaders,
-  applyClaudeCodeCompatToPayload,
   resolveDeviceId,
   resolveSystemPrefixText,
   shouldApplyClaudeCodeCompat,
   type ClaudeCodeCompatConfig,
 } from "../src/compat/claude-code.ts";
 import {
-  applyGeminiToolCompatToPayload,
-  isGeminiPayload,
   shouldApplyGeminiToolCompat,
-  type GeminiToolCompatConfig,
 } from "../src/compat/gemini-tool-compat.ts";
+import {
+  applyCompatibilityPlan,
+  buildCompatibilityPlan,
+  type CompatibilityPlan,
+} from "../src/compat/plan.ts";
 import { defaultDbPath } from "../src/db.ts";
 import { fetchRemoteModels } from "../src/models-fetch.ts";
 import { threeLevelPick } from "../src/ui/three-level-pick.ts";
 import {
-  fingerprintHeaderTemplates,
   isFingerprintPreset,
 } from "../src/headers/fingerprints.ts";
-import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
+import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import { piSwitchConfigPath } from "../src/paths.ts";
 import type {
@@ -116,21 +115,6 @@ type ProbePrecheckRuntime = Pick<
 
 // ── Transport (production) ──────────────────────────────────────────────────
 
-function expandHeaderTemplates(
-  templates: Record<string, string>,
-  vars: Record<string, string>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(templates)) {
-    // Any referenced variable missing → skip the header entirely. Never send
-    // a literal `{sessionId}`-style placeholder or an empty-value header.
-    const refs = Array.from(v.matchAll(/\{(\w+)\}/g), (m) => m[1]);
-    if (refs.some((key) => !(key in vars))) continue;
-    out[k] = v.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? "");
-  }
-  return out;
-}
-
 function mapAssistantMessage(m: {
   content: Array<
     | { type: "text"; text: string }
@@ -172,10 +156,75 @@ export interface ProbeTransportDeps {
     deviceId: string;
     systemPrefix: string | null;
   };
-  /** Effective Gemini compat payload settings used by normal provider hooks. */
-  geminiCompat?: GeminiToolCompatConfig;
+  /** Effective Gemini compat settings used by normal provider requests. */
+  geminiCompat?: import("../src/compat/gemini-tool-compat.ts").GeminiToolCompatConfig;
   /** Optional per-request observation sink for in-memory evidence normalization. */
   onObservation?: (obs: RawProbeObservation) => void;
+}
+
+function prepareCompatibilityRequest(
+  request: ProbeRequest,
+  model: Model<Api>,
+  authHeaders: Record<string, string> | undefined,
+  deps: Pick<
+    ProbeTransportDeps,
+    "claudeCompat" | "geminiCompat" | "headerVars"
+  >,
+): { plan: CompatibilityPlan; headers: Record<string, string> } {
+  const plan = buildCompatibilityPlan({
+    target: request.target,
+    api: model.api,
+    headerVars: (deps.headerVars ?? (() => ({})))(),
+    claudeCompat: deps.claudeCompat,
+    geminiCompat: deps.geminiCompat,
+  });
+  const applied = applyCompatibilityPlan({
+    plan,
+    headers: authHeaders,
+    payload: undefined,
+    claudeDeviceId: deps.claudeCompat?.deviceId,
+  });
+  return { plan, headers: applied.headers as Record<string, string> };
+}
+
+function createCompatibilityPayloadHook(
+  plan: CompatibilityPlan,
+  headers: Record<string, string>,
+  claudeDeviceId: string | undefined,
+): ((payload: unknown) => unknown) | undefined {
+  if (!plan.claude && !plan.gemini) return undefined;
+
+  return (payload: unknown) => {
+    const next = applyCompatibilityPlan({
+      plan,
+      headers,
+      payload,
+      claudeDeviceId,
+    }).payload;
+    return next === payload ? undefined : next;
+  };
+}
+
+function toSimpleContext(request: ProbeRequest) {
+  return {
+    ...(request.context.systemPrompt
+      ? { systemPrompt: request.context.systemPrompt }
+      : {}),
+    messages: request.context.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp,
+    })),
+    ...(request.context.tools?.length
+      ? {
+          tools: request.context.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters as never,
+          })),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -236,7 +285,6 @@ export function createProbeTransport(deps: ProbeTransportDeps): ProbeTransport {
 
   return async (request: ProbeRequest) => {
     const model = request.model as Model<Api>;
-    const target = request.target;
 
     let auth: Awaited<ReturnType<ProbeTransportDeps["resolveAuth"]>>;
     try {
@@ -250,53 +298,28 @@ export function createProbeTransport(deps: ProbeTransportDeps): ProbeTransport {
       return fail(request, `local auth resolution failed: ${auth.error}`);
     }
 
-    // fingerprint preset + claudeCodeCompat headers
-    let headers: Record<string, string> = { ...(auth.headers ?? {}) };
-    if (target.fingerprint && target.fingerprint !== "none") {
-      headers = {
-        ...headers,
-        ...expandHeaderTemplates(
-          fingerprintHeaderTemplates(target.fingerprint),
-          (deps.headerVars ?? (() => ({})))(),
-        ),
-      };
-    }
-    if (target.claudeCodeCompat && model.api === "anthropic-messages") {
-      applyClaudeCodeCompatHeaders(headers);
+    let compatibility: ReturnType<typeof prepareCompatibilityRequest>;
+    try {
+      compatibility = prepareCompatibilityRequest(
+        request,
+        model,
+        auth.headers,
+        deps,
+      );
+    } catch (err) {
+      // Compatibility plan construction/application is local transport setup;
+      // return the same explicit failure shape as auth/provider failures.
+      return fail(request, `local compatibility setup failed: ${errText(err)}`);
     }
 
-    // Compat payload hooks do not fire on isolated completeSimple(), so mirror
-    // the same transforms and settings used by normal provider requests.
-    const claudeCompat =
-      target.claudeCodeCompat === true && model.api === "anthropic-messages";
-    const geminiCompat =
-      target.geminiToolCompat === true && model.api === "google-generative-ai";
-    const onPayload = claudeCompat || geminiCompat
-      ? (payload: unknown) => {
-          let next = payload;
-          if (claudeCompat && deps.claudeCompat) {
-            next = applyClaudeCodeCompatToPayload(next, {
-              deviceId: deps.claudeCompat.deviceId,
-              systemPrefix: deps.claudeCompat.systemPrefix,
-              injectMetadata: deps.claudeCompat.config.injectMetadata,
-              injectSystemPrefix: deps.claudeCompat.config.injectSystemPrefix,
-              injectToolFingerprint:
-                deps.claudeCompat.config.injectToolFingerprint,
-            });
-          }
-          if (geminiCompat && isGeminiPayload(next)) {
-            next = applyGeminiToolCompatToPayload(next, {
-              forceToolConfigMode: deps.geminiCompat?.forceToolConfigMode,
-              convertSchema: deps.geminiCompat?.convertSchema,
-            });
-          }
-          return next === payload ? undefined : next;
-        }
-      : undefined;
-
+    const { plan, headers } = compatibility;
+    const onPayload = createCompatibilityPayloadHook(
+      plan,
+      headers,
+      deps.claudeCompat?.deviceId,
+    );
     let httpStatus: number | undefined;
     let responseHeaders: Record<string, string> | undefined;
-
     const options: SimpleStreamOptions = {
       ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
       ...(Object.keys(headers).length ? { headers } : {}),
@@ -317,32 +340,8 @@ export function createProbeTransport(deps: ProbeTransportDeps): ProbeTransport {
     const completeFn = deps.completeFn ?? completeSimple;
     let message: Awaited<ReturnType<typeof completeSimple>>;
     try {
-      message = await completeFn(
-        model,
-        {
-          ...(request.context.systemPrompt
-            ? { systemPrompt: request.context.systemPrompt }
-            : {}),
-          messages: request.context.messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-            timestamp: m.timestamp,
-          })),
-          ...(request.context.tools?.length
-            ? {
-                tools: request.context.tools.map((t) => ({
-                  name: t.name,
-                  description: t.description,
-                  parameters: t.parameters as never,
-                })),
-              }
-            : {}),
-        },
-        options,
-      );
+      message = await completeFn(model, toSimpleContext(request), options);
     } catch (err) {
-      // Network / serialization / parse failure — surface as a stage error
-      // instead of rejecting runProbe and losing the probe run.
       return fail(request, `provider request failed: ${errText(err)}`, {
         httpStatus: httpStatus ?? statusFromError(err),
         responseHeaders,

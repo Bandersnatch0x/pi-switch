@@ -168,6 +168,11 @@ describe("createProbeTransport reads request.target (issue #42 fix)", () => {
     const transport = createProbeTransport({
       resolveAuth: async () => ({ ok: true }),
       completeFn: comp.fn as never,
+      claudeCompat: {
+        config: {},
+        deviceId: "a".repeat(64),
+        systemPrefix: "You are a Claude agent.",
+      },
     });
 
     await transport(
@@ -239,6 +244,59 @@ describe("createProbeTransport reads request.target (issue #42 fix)", () => {
     expect(opts.onPayload).toBeUndefined();
   });
 
+  test("claudeCodeCompat applies complete Claude settings", async () => {
+    const comp = fakeComplete();
+    const transport = createProbeTransport({
+      resolveAuth: async () => ({ ok: true }),
+      completeFn: comp.fn as never,
+      claudeCompat: {
+        config: {},
+        deviceId: "a".repeat(64),
+        systemPrefix: "You are a Claude agent.",
+      },
+    });
+
+    const result = await transport(
+      makeRequest({
+        target: {
+          provider: "ps-p1",
+          modelId: "m1",
+          claudeCodeCompat: true,
+        },
+      }),
+    );
+
+    expect(result.httpStatus).toBe(200);
+    const opts = comp.calls[0]!.options as {
+      onPayload?: (payload: unknown) => unknown;
+    };
+    expect(typeof opts.onPayload).toBe("function");
+  });
+
+  test("claudeCodeCompat returns an explicit setup failure when Claude facts are missing", async () => {
+    const comp = fakeComplete();
+    const transport = createProbeTransport({
+      resolveAuth: async () => ({ ok: true }),
+      completeFn: comp.fn as never,
+    });
+    const result = await transport(
+      makeRequest({
+        target: {
+          provider: "ps-p1",
+          modelId: "m1",
+          claudeCodeCompat: true,
+        },
+      }),
+    );
+
+    expect(result.message.stopReason).toBe("error");
+    expect(result.message.errorMessage).toContain("local compatibility setup failed");
+    expect(result.message.errorMessage).toContain(
+      "requires complete Claude application settings",
+    );
+    expect(comp.calls).toHaveLength(0);
+  });
+
   test("claudeCodeCompat is a no-op for non-anthropic api", async () => {
     const comp = fakeComplete();
     const transport = createProbeTransport({
@@ -296,6 +354,26 @@ describe("createProbeTransport reads request.target (issue #42 fix)", () => {
     // Observation request headers include the candidate fingerprint expansion.
     expect(obs.request?.headers?.["User-Agent"]).toContain("codex_cli_rs/");
     expect(obs.response?.message).toEqual(result.message);
+  });
+
+  test("does not misclassify observation failures as compatibility setup failures", async () => {
+    const comp = fakeComplete();
+    let observationCalls = 0;
+    const transport = createProbeTransport({
+      resolveAuth: async () => ({ ok: true }),
+      completeFn: comp.fn as never,
+      onObservation: () => {
+        observationCalls += 1;
+        if (observationCalls === 1) {
+          throw new Error("observation sink failed");
+        }
+      },
+    });
+
+    await expect(transport(makeRequest())).rejects.toThrow(
+      "observation sink failed",
+    );
+    expect(observationCalls).toBe(1);
   });
 
   test("reasoning contract forwards the simple reasoning level", async () => {
