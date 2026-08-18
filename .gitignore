@@ -44,6 +44,12 @@ prototypes/ps-probe-feasibility/
 # Playwright CLI scratch
 .playwright-cli/
 
+# Local code analysis and workflow artifacts
+.codegraph/
+.graphify/
+.workflow/
+spikes/
+
 # Local agent / domain / research notes (not published)
 AGENTS.md
 CONTEXT.md
