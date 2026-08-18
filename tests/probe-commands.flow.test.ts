@@ -21,6 +21,10 @@ import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
+import {
+  resolveEffectiveProviderCompatibility,
+  type EffectiveProviderCompatibility,
+} from "../src/provider-config-views.ts";
 import { createLocalState } from "../src/local-state.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
@@ -128,7 +132,11 @@ async function allPassTransport(req: ProbeRequest): Promise<ProbeTransportResult
 
 function makeRt(
   providers: CcProvider[],
-  opts: { reasoning?: boolean; modelsDevReasoning?: boolean } = {},
+  opts: {
+    reasoning?: boolean;
+    modelsDevReasoning?: boolean;
+    effectiveCompatibility?: EffectiveProviderCompatibility;
+  } = {},
 ): ProbeCommandRuntime {
   const home = "/home/user";
   const config = { providerOverrides: {} };
@@ -165,7 +173,7 @@ function makeRt(
     providerWireCompatFor: () => undefined,
     tupleCompatFor: () => undefined,
   });
-  return {
+  const rt = {
     config,
     state: createLocalState({ fs, home, pid: 1 }),
     lastGoodProviders: providers,
@@ -183,7 +191,12 @@ function makeRt(
     fsLike: () => fs,
     io: { existsSync: () => false },
     routingProbe: async () => undefined,
-  };
+    effectiveCompatibilityFor: () => ({}),
+  } as ProbeCommandRuntime;
+  rt.effectiveCompatibilityFor = (provider) =>
+    opts.effectiveCompatibility ??
+    resolveEffectiveProviderCompatibility(rt.config, provider);
+  return rt;
 }
 
 function makeCommandRuntime(): Runtime {
@@ -507,6 +520,34 @@ describe("runProbeCommand (command flow)", () => {
 
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((call) => call.target.claudeCodeCompat === true)).toBe(true);
+  });
+
+  test("Probe consumes Runtime effective compatibility instead of re-reading raw config", async () => {
+    const claude = {
+      ...provider("p1", "Anyrouter"),
+      api: "anthropic-messages" as const,
+      baseUrl: "https://anyrouter.top",
+    };
+    const rt = makeRt([claude], { effectiveCompatibility: {} });
+    rt.config = {
+      providerOverrides: {},
+      claudeCodeCompat: { mode: "always" },
+    };
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx({ mode: "tui" });
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call.target.claudeCodeCompat === undefined)).toBe(true);
   });
 
   test("missing registry model is registered for probing without setModel", async () => {

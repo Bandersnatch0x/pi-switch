@@ -51,16 +51,8 @@ export type InvestigationEffect =
       expectedVersion: string;
       patch: RepairCandidate;
     }
-  | { kind: "offer-switch"; target: ProbeTarget }
-  | { kind: "switch-to-repaired-target"; target: ProbeTarget }
-  | {
-      kind: "persist-repair-case";
-      status: "verification-failed" | "cas-conflict" | "commit-error" | "committed";
-      target: ProbeTarget;
-      evidence: NormalizedProbeRunEvidence;
-      attempts: ProbeRunResult[];
-      recipe?: RepairRecipeMatch;
-    };
+  /** The command/UI adapter owns the optional post-commit switch decision. */
+  | { kind: "offer-switch"; target: ProbeTarget };
 
 export type InvestigationTerminalStatus =
   | "probe-complete"
@@ -114,12 +106,6 @@ type AwaitingCommitState = AttemptedRepairState & {
   expectedVersion: string;
 };
 
-type AwaitingSwitchState = AttemptedRepairState & {
-  status: "awaiting-switch";
-  intent: RepairIntent & { offerSwitch: true };
-  commitVersion: string;
-};
-
 type ProbeCompleteState = CommonState & {
   status: "probe-complete";
   result: ProbeRunResult;
@@ -153,7 +139,6 @@ type CommitErrorState = AttemptedRepairState & {
 type CommittedState = AttemptedRepairState & {
   status: "committed";
   commitVersion: string;
-  message?: string;
 };
 
 type RepairTerminalState =
@@ -170,7 +155,6 @@ export type InvestigationState =
   | AwaitingSnapshotState
   | AwaitingVerificationState
   | AwaitingCommitState
-  | AwaitingSwitchState
   | ProbeCompleteState
   | NoRecipeState
   | ConfirmationDeclinedState
@@ -182,8 +166,7 @@ export type InvestigationInput =
   | { kind: "config-snapshot"; version: string }
   | { kind: "config-snapshot-error"; message: string }
   | { kind: "verification-completed"; sequence: VerificationSequence; result: ProbeRunResult }
-  | { kind: "commit-completed"; result: { ok: true; version: string } | { ok: false; reason: "conflict" | "error"; message?: string } }
-  | { kind: "switch-decision"; accepted: boolean };
+  | { kind: "commit-completed"; result: { ok: true; version: string } | { ok: false; reason: "conflict" | "error"; message?: string } };
 
 export interface InvestigationTransition {
   state: InvestigationState;
@@ -331,22 +314,11 @@ export function createRepairInvestigation(
   };
 }
 
-function finishRepair(
-  state: RepairTerminalState,
-  effects: InvestigationEffect[] = [],
-): InvestigationTransition {
-  const persistEffect: Extract<
-    InvestigationEffect,
-    { kind: "persist-repair-case" }
-  > = {
-    kind: "persist-repair-case",
-    status: state.status,
-    target: copyTarget(state.target),
-    evidence: copyEvidence(state.evidence),
-    attempts: state.attempts.map(copyProbeResult),
-    recipe: copyRecipe(state.recipe),
-  };
-  return { state, effects: [...effects, persistEffect] };
+function finishRepair(state: RepairTerminalState): InvestigationTransition {
+  // Repair Case persistence is a command-level concern. The terminal state is
+  // already a complete, redacted record source; keeping a persistence effect
+  // here made the plan-scoped facade invent an effect it could not consume.
+  return { state, effects: [] };
 }
 
 /** Pure deterministic transition. Invalid/out-of-order inputs throw explicitly. */
@@ -362,8 +334,6 @@ export function advance(state: InvestigationState, input: InvestigationInput): I
       return advanceAwaitingVerification(state, input);
     case "awaiting-commit":
       return advanceAwaitingCommit(state, input);
-    case "awaiting-switch":
-      return advanceAwaitingSwitch(state, input);
     default:
       throw new InvalidInvestigationTransitionError(state.status, input.kind);
   }
@@ -575,38 +545,16 @@ function advanceAwaitingCommit(
     };
     return finishRepair(committed);
   }
-  const awaitingSwitch: AwaitingSwitchState = {
+  const committed: CommittedState = {
     ...state,
-    status: "awaiting-switch",
+    status: "committed",
     intent: { ...state.intent, offerSwitch: true },
     commitVersion: input.result.version,
   };
   return {
-    state: awaitingSwitch,
+    state: committed,
     effects: [{ kind: "offer-switch", target: copyTarget(state.candidateTarget) }],
   };
-}
-
-function advanceAwaitingSwitch(
-  state: AwaitingSwitchState,
-  input: InvestigationInput,
-): InvestigationTransition {
-  if (input.kind !== "switch-decision") {
-    throw new InvalidInvestigationTransitionError(state.status, input.kind);
-  }
-  const committed: CommittedState = {
-    ...state,
-    status: "committed",
-    message: input.accepted
-      ? "repair committed; switched to repaired target"
-      : "repair committed; switch offer declined",
-  };
-  return finishRepair(
-    committed,
-    input.accepted
-      ? [{ kind: "switch-to-repaired-target", target: copyTarget(state.candidateTarget) }]
-      : [],
-  );
 }
 
 function verificationEffect(

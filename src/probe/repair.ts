@@ -119,7 +119,7 @@ export type RepairOutcome =
       /** Session Model is never switched by repair. */
       sessionModelUnchanged: true;
       /** Explicit post-success action for UI (ticket 8 wires the lifecycle). */
-      switchAction: RepairSwitchAction;
+      switchAction?: RepairSwitchAction;
     };
 
 export interface RunRepairOptions {
@@ -135,6 +135,8 @@ export interface RunRepairOptions {
   configStore: RepairConfigStore;
   /** Which recipe to try (default 0). At most one recipe is committed. */
   recipeIndex?: number;
+  /** Whether the command adapter should receive a post-commit switch offer. */
+  offerSwitch?: boolean;
   maxRequests?: number;
   timeoutMs?: number;
   maxTokens?: number;
@@ -172,9 +174,10 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
       maxTokens: opts.maxTokens,
     },
     opts.recipeIndex ?? 0,
-    true,
+    opts.offerSwitch ?? true,
   );
 
+  let switchTarget: ProbeTarget | undefined;
   while (transition.effects.length > 0) {
     const effect = transition.effects[0]!;
     switch (effect.kind) {
@@ -234,17 +237,16 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
         break;
       }
       case "offer-switch":
-        // Switch lifecycle belongs to the command/UI adapter. Stop at the
-        // offer so the returned action reflects an undecided user choice.
-        transition = { state: transition.state, effects: [] };
-        break;
-      case "persist-repair-case":
-        // The compatibility facade maps the terminal state to RepairOutcome;
-        // the command adapter records that outcome exactly once.
-        transition = { state: transition.state, effects: transition.effects.slice(1) };
+        // Switch lifecycle belongs to the command/UI adapter. Consume the
+        // declarative offer and map it to the outcome action below; no choice
+        // or Session Model mutation happens inside this facade.
+        switchTarget = { ...effect.target };
+        transition = {
+          state: transition.state,
+          effects: transition.effects.slice(1),
+        };
         break;
       case "probe":
-      case "switch-to-repaired-target":
         throw new Error(`runRepair cannot interpret ${effect.kind} from a plan-scoped investigation`);
     }
   }
@@ -290,18 +292,12 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
     };
   }
   if (state.status !== "committed") {
-    if (state.status === "awaiting-switch") {
-      if (!state.recipe || !state.candidateTarget) {
-        throw new Error("repair investigation ended in impossible state: switch offer without recipe or target");
-      }
-      return mapCommittedOutcome(plan, state.recipe, attempts, state.candidateTarget);
-    }
     throw new Error(`repair investigation ended in impossible state: ${state.status}`);
   }
   if (!state.recipe || !state.candidateTarget) {
     throw new Error("repair investigation ended in impossible state: committed without recipe or candidate target");
   }
-  return mapCommittedOutcome(plan, state.recipe, attempts, state.candidateTarget);
+  return mapCommittedOutcome(plan, state.recipe, attempts, switchTarget);
 }
 
 type CommittedRepairOutcome = Extract<RepairOutcome, { status: "committed" }>;
@@ -310,7 +306,7 @@ function mapCommittedOutcome(
   plan: RepairPlan,
   recipe: RepairRecipeMatch,
   attempts: ProbeRunResult[],
-  candidateTarget: ProbeTarget,
+  switchTarget?: ProbeTarget,
 ): CommittedRepairOutcome {
   return {
     status: "committed",
@@ -320,10 +316,14 @@ function mapCommittedOutcome(
     summary: `committed ${recipe.recipeId} for ${plan.target.provider}/${plan.target.modelId} (session model unchanged)`,
     persisted: true,
     sessionModelUnchanged: true,
-    switchAction: {
-      kind: "switch-to-repaired-target",
-      target: { ...candidateTarget },
-    },
+    ...(switchTarget
+      ? {
+          switchAction: {
+            kind: "switch-to-repaired-target" as const,
+            target: { ...switchTarget },
+          },
+        }
+      : {}),
   };
 }
 

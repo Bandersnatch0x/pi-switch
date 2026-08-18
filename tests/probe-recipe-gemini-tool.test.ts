@@ -356,10 +356,10 @@ describe("runRepair reuses ticket 4 pipeline for Recipe3 (ticket 6)", () => {
 
     if (outcome.status === "committed") {
       expect(outcome.sessionModelUnchanged).toBe(true);
-      expect(outcome.switchAction.kind).toBe("switch-to-repaired-target");
+      expect(outcome.switchAction!.kind).toBe("switch-to-repaired-target");
       expect(outcome.recipe.recipeId).toBe("gemini-tool-compat");
       // Candidate applied to repaired target in memory
-      expect(outcome.switchAction.target.geminiToolCompat).toBe(true);
+      expect(outcome.switchAction!.target.geminiToolCompat).toBe(true);
     }
   });
 

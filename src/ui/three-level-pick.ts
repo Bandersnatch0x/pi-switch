@@ -141,16 +141,54 @@ export function headerLabelWidth(colWidth: number, countWidth: number): number {
   return Math.max(0, colWidth - countWidth - 1);
 }
 
+function isMissingThemeTokenError(error: unknown, key: ThemeColor): boolean {
+  if (!(error instanceof Error)) return false;
+
+  // Pi has used both "color" and "token" in this error across versions. Pull
+  // the token from the diagnostic position and compare it as a complete value;
+  // a requested key mentioned elsewhere in an unrelated error is not evidence
+  // that the requested token is the missing one.
+  const patterns = [
+    /(?:unknown|missing|unsupported)\s+(?:theme\s+)?(?:color|token)\s*:?\s*["'`]?([A-Za-z][\w-]*)["'`]?/i,
+    /(?:theme\s+)?(?:color|token)\s*:?\s*["'`]?([A-Za-z][\w-]*)["'`]?\s+(?:is\s+)?(?:unknown|missing|unsupported)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const reportedToken = pattern.exec(error.message)?.[1];
+    if (reportedToken !== undefined) return reportedToken === key;
+  }
+  return false;
+}
+
+function safeThemeFg(
+  theme: ThemeLike | undefined,
+  key: ThemeColor,
+  text: string,
+): string {
+  if (typeof theme?.fg !== "function") return text;
+  try {
+    return theme.fg(key, text);
+  } catch (err) {
+    const fallback: Partial<Record<ThemeColor, ThemeColor>> = {
+      borderMuted: "dim",
+      success: "accent",
+    };
+    const replacement = fallback[key];
+    if (!replacement || !isMissingThemeTokenError(err, key)) throw err;
+    // Let failures from the compatibility token propagate as well. The caller
+    // must retain its normal custom-TUI fallback for errors other than a
+    // missing token supported by an older Pi.
+    return theme.fg(replacement, text);
+  }
+}
+
 /** Pi-style key hint: dim key + muted description. */
 export function formatKeyHint(
   theme: ThemeLike | undefined,
   key: string,
   description: string,
 ): string {
-  const dim = (s: string) =>
-    typeof theme?.fg === "function" ? theme.fg("dim", s) : s;
-  const muted = (s: string) =>
-    typeof theme?.fg === "function" ? theme.fg("muted", s) : s;
+  const dim = (s: string) => safeThemeFg(theme, "dim", s);
+  const muted = (s: string) => safeThemeFg(theme, "muted", s);
   return `${dim(key)}${muted(` ${description}`)}`;
 }
 
@@ -179,8 +217,7 @@ export function formatFooterHints(
   theme?: ThemeLike,
   opts?: { revealed?: number; col?: number; readOnly?: boolean },
 ): string {
-  const sep =
-    typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
+  const sep = safeThemeFg(theme, "dim", " · ");
   const revealed = opts?.revealed ?? 0;
   const col = opts?.col ?? 0;
   const enterHint =
@@ -213,8 +250,7 @@ export function formatFooterHints(
 
 /** Footer while typing an in-picker search query. */
 export function formatSearchFooterHints(theme?: ThemeLike): string {
-  const sep =
-    typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
+  const sep = safeThemeFg(theme, "dim", " · ");
   return [
     formatKeyHint(theme, "type", t("filter")),
     formatKeyHint(theme, "enter", t("confirm")),
@@ -224,8 +260,7 @@ export function formatSearchFooterHints(theme?: ThemeLike): string {
 
 /** Footer while typing a manual model id. */
 export function formatManualFooterHints(theme?: ThemeLike): string {
-  const sep =
-    typeof theme?.fg === "function" ? theme.fg("dim", " · ") : " · ";
+  const sep = safeThemeFg(theme, "dim", " · ");
   return [
     formatKeyHint(theme, "type", t("modelId")),
     formatKeyHint(theme, "enter", t("switch")),
@@ -235,8 +270,7 @@ export function formatManualFooterHints(theme?: ThemeLike): string {
 
 /** Semantic legend for picker marks (mirrors the canvas spec). */
 export function formatTuiLegend(theme?: ThemeLike): string {
-  const g = (key: ThemeColor, s: string) =>
-    typeof theme?.fg === "function" ? theme.fg(key, s) : s;
+  const g = (key: ThemeColor, s: string) => safeThemeFg(theme, key, s);
   return [
     `${g("accent", GLYPH.cursor)} ${t("cursor")}`,
     `${GLYPH.pin} ${t("pinned")}`,
@@ -461,7 +495,7 @@ async function threeLevelCustom(
     }
 
     function fg(key: ThemeColor, s: string): string {
-      return typeof theme.fg === "function" ? theme.fg(key, s) : s;
+      return safeThemeFg(theme, key, s);
     }
     function bold(s: string): string {
       return typeof theme.bold === "function" ? theme.bold(s) : s;

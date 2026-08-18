@@ -228,7 +228,7 @@ describe("Repair Case recorder contract", () => {
     const outcome = committedOutcome(evidence);
     const event = createRepairCaseRepairEvent(outcome, {
       status: "succeeded",
-      target: { ...outcome.switchAction.target },
+      target: { ...outcome.switchAction!.target },
       summary:
         "switched via https://relay.example/v1?token=sk-live-SWITCH Bearer sk-live-SWITCH",
     });
@@ -258,7 +258,7 @@ describe("Repair Case recorder contract", () => {
       },
       switch: {
         status: "succeeded",
-        target: outcome.switchAction.target,
+        target: outcome.switchAction!.target,
       },
     });
     const repair = detail.data.repair;

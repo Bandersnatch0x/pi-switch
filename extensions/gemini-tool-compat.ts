@@ -15,7 +15,6 @@ import {
   applyGeminiToolCompatToPayload,
   emptyToolCallReason,
   hasEmptyToolCallArgs,
-  shouldApplyGeminiToolCompat,
   type GeminiToolCompatConfig,
 } from "../src/compat/gemini-tool-compat.ts";
 import type { CcProvider } from "../src/types.ts";
@@ -97,14 +96,10 @@ function resolveCompatTarget(rt: Runtime): {
     return { apply: false, config };
   }
 
-  const force = session.compatibility.geminiToolCompat;
-  const apply = shouldApplyGeminiToolCompat({
-    mode: config.mode,
-    hosts: config.hosts,
-    api: provider.api,
-    baseUrl: provider.baseUrl,
-    providerForce: typeof force === "boolean" ? force : null,
-  });
+  // Runtime owns the complete effective interpretation (global mode/hosts,
+  // provider override, and API gating). Hooks consume that value directly so
+  // they cannot drift from Probe or registration behavior.
+  const apply = session.compatibility.geminiToolCompat === true;
 
   return {
     apply,

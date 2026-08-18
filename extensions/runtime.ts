@@ -216,8 +216,13 @@ export class Runtime {
     return resolveSessionCompatibilityTarget({
       lastGoodProviders: this.lastGoodProviders,
       readSelectionCached: (ttl) => this.readSelectionCached(ttl),
-      effectiveCompatibilityFor: (p) => this.providerViews.effectiveCompatibilityFor(p),
+      effectiveCompatibilityFor: (p) => this.effectiveCompatibilityFor(p),
     });
+  }
+
+  /** Effective provider compatibility shared by hooks, Probe, and Repair. */
+  effectiveCompatibilityFor(provider: CcProvider): EffectiveProviderCompatibility {
+    return this.providerViews.effectiveCompatibilityFor(provider);
   }
 
   loadConfig(): PiSwitchConfig {
