@@ -404,6 +404,30 @@ describe("runRepair pipeline (ticket 4)", () => {
     }
   });
 
+  test("confirmed repair can suppress the post-commit switch offer", async () => {
+    const plan = buildRepairPlan(reasoningRejectedEvidence());
+    const { transport } = recordingTransport((req) => {
+      if (req.contract === "basic") return okText();
+      if (req.contract === "tool") return okTool();
+      throw new Error(`unexpected contract during verify: ${req.contract}`);
+    });
+    const { store } = memoryConfigStore({ initialVersion: "cfg-v1" });
+
+    const outcome = await runRepair({
+      mode: "interactive",
+      confirmed: true,
+      offerSwitch: false,
+      plan,
+      verify: createProbeVerifier({ model: { id: target.modelId }, transport }),
+      configStore: store,
+    });
+
+    expect(outcome.status).toBe("committed");
+    if (outcome.status === "committed") {
+      expect(outcome.switchAction).toBeUndefined();
+    }
+  });
+
   test("verification failure discards candidate: zero persist, no rollback needed", async () => {
     const plan = buildRepairPlan(reasoningRejectedEvidence());
     let n = 0;
@@ -510,6 +534,29 @@ describe("runRepair pipeline (ticket 4)", () => {
     if (outcome.status === "cas-conflict") {
       expect(outcome.summary.toLowerCase()).toMatch(/conflict|changed|external/);
     }
+  });
+
+  test("blank config errors use an explicit fallback summary", async () => {
+    const plan = buildRepairPlan(reasoningRejectedEvidence());
+    const outcome = await runRepair({
+      mode: "interactive",
+      confirmed: true,
+      plan,
+      verify: async () => {
+        throw new Error("verification must not run when the snapshot fails");
+      },
+      configStore: {
+        read: () => {
+          throw new Error("   ");
+        },
+        commit: () => {
+          throw new Error("commit must not run when the snapshot fails");
+        },
+      },
+    });
+
+    expect(outcome.status).toBe("commit-error");
+    expect(outcome.summary).toBe("failed to persist repair candidate");
   });
 
   test("candidate only affects in-memory probe target during verify (reasoning off)", async () => {

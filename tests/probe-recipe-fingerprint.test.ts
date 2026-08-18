@@ -423,7 +423,7 @@ describe("runRepair reuses ticket 4 pipeline for Recipe2 (ticket 5)", () => {
 
     if (outcome.status === "committed") {
       expect(outcome.sessionModelUnchanged).toBe(true);
-      expect(outcome.switchAction.kind).toBe("switch-to-repaired-target");
+      expect(outcome.switchAction!.kind).toBe("switch-to-repaired-target");
       expect(outcome.recipe.recipeId).toBe("client-fingerprint");
     }
   });

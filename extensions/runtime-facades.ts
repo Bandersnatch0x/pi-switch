@@ -9,7 +9,6 @@
 
 import type {
   CcProvider,
-  ModelMetaOverride,
   PiSwitchConfig,
   PiSwitchSelection,
 } from "../src/types.ts";
@@ -19,21 +18,8 @@ import {
   resolveModelCapabilities,
   type ResolvedCapabilities,
 } from "../src/capabilities/resolve.ts";
-import {
-  resolveRegistrationCapability,
-  type RegistrationCapabilityDecision,
-} from "../src/capabilities/registration.ts";
 import { resolveEffectiveModelMeta } from "../src/model-meta.ts";
 import type { EffectiveProviderCompatibility } from "../src/provider-config-views.ts";
-
-/**
- * Narrow interface for registration decision resolution.
- * Tests can mock just these 2 methods instead of the full Runtime.
- */
-export interface RegistrationDecisionDeps {
-  modelMetaFor(provider: CcProvider, modelId: string): ModelMetaOverride | undefined;
-  modelsDevFor(modelId: string): ModelsDevCapabilities | undefined;
-}
 
 /**
  * Narrow interface for capability resolution.
@@ -99,35 +85,14 @@ export interface SessionCompatibilityDeps {
 }
 
 /**
- * Pure function: resolve registration capability decision for a provider/model.
- *
- * This is the registration-facing capability decision — same inputs buildProviderConfig
- * resolves when it registers this model. Extracted from Runtime.registrationDecisionFor().
- */
-export function resolveRegistrationDecisionFor(
-  provider: CcProvider,
-  modelId: string,
-  deps: RegistrationDecisionDeps,
-): RegistrationCapabilityDecision {
-  return resolveRegistrationCapability({
-    modelId,
-    api: provider.api,
-    baseUrl: provider.baseUrl,
-    userMeta: deps.modelMetaFor(provider, modelId),
-    modelsDev: deps.modelsDevFor(modelId),
-    ccMeta: ccMetaFrom(provider.meta),
-  });
-}
-
-/**
  * Pure function: resolve capability facts for a provider/model.
  *
  * Follows the full #36/#63 priority chain (user config layers only —
  * built-in compat is not a capability source). Extracted from Runtime.capabilitiesFor().
  *
- * Internal implementation detail of Runtime.capabilitiesFor — for judging whether
- * a model is registerable, prefer resolveRegistrationDecisionFor: ADR-0002 makes
- * the registration capability decision the shared currency, not these lower facts.
+ * Internal implementation detail of Runtime.capabilitiesFor — registration callers
+ * consume RegistrationOperations instead: ADR-0002 makes its decision the shared
+ * currency, not these lower facts.
  */
 export function resolveCapabilitiesFor(
   provider: CcProvider,

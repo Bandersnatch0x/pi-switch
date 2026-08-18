@@ -10,16 +10,22 @@ import { describe, expect, test } from "bun:test";
 import {
   runProbeCommand,
   runRepairCommand,
+  type ProbeCommandRuntime,
   type ProbeCommandDeps,
 } from "../extensions/probe-commands.ts";
+import { createRegistrationOperations } from "../extensions/registration-operations.ts";
 import { registerCommands } from "../extensions/commands.ts";
+import { Runtime, type NodeIo } from "../extensions/runtime.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Runtime } from "../extensions/runtime.ts";
 import type { SwitchLifecycle } from "../extensions/switch-lifecycle.ts";
 import type { PiSwitchCtx } from "../src/pi-context.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { CcProvider } from "../src/types.ts";
-import { completeFakeRuntime } from "./helpers/fake-runtime.ts";
+import {
+  resolveEffectiveProviderCompatibility,
+  type EffectiveProviderCompatibility,
+} from "../src/provider-config-views.ts";
+import { createLocalState } from "../src/local-state.ts";
 import { setLocale } from "../src/ui/tui-locale.ts";
 import type {
   ProbeRunPrecheckSnapshot,
@@ -126,38 +132,96 @@ async function allPassTransport(req: ProbeRequest): Promise<ProbeTransportResult
 
 function makeRt(
   providers: CcProvider[],
-  opts: { reasoning?: boolean } = {},
-): Runtime {
-  // completeFakeRuntime derives registrationDecisionFor/registrationOptsFor
-  // from these views through the real chain, so per-test overrides of
-  // modelMetaFor / modelsDevFor behave exactly like production.
-  return completeFakeRuntime({
-    reloadConfig: () => undefined,
-    refreshSnapshot: () => ({ providers, error: undefined }),
-    readSelectionCached: () => undefined,
-    config: { providerOverrides: {} },
-    // Provide maxTokens so #63 registration gate admits the probe model.
-    modelMetaFor: () =>
-      opts.reasoning
-        ? { reasoning: true, maxTokens: 8_192 }
-        : { maxTokens: 8_192 },
-    tupleCompatFor: () => undefined,
-    headerRules: [],
+  opts: {
+    reasoning?: boolean;
+    modelsDevReasoning?: boolean;
+    effectiveCompatibility?: EffectiveProviderCompatibility;
+  } = {},
+): ProbeCommandRuntime {
+  const home = "/home/user";
+  const config = { providerOverrides: {} };
+  const fs: FsLike = {
+    existsSync: () => false,
+    readFileSync: () => "",
+    writeFileSync: () => undefined,
+    renameSync: () => undefined,
+    unlinkSync: () => undefined,
+  };
+  const registration = createRegistrationOperations({
+    headerRules: () => [],
     headerOverrideOpts: () => ({}),
-    rejectSink: () => undefined,
-    modelsDevFor: () => undefined,
-    providerWireCompatFor: () => undefined,
     headerVars: () => ({}),
+    debug: () => false,
+    rejectSink: () => undefined,
+    // Provide maxTokens so #63 registration gate admits the probe model.
+    modelMetaFactsFor: () => ({
+      userMeta:
+        typeof opts.reasoning === "boolean"
+          ? { reasoning: opts.reasoning, maxTokens: 8_192 }
+          : { maxTokens: 8_192 },
+      userMapScopes: {},
+    }),
+    modelsDevFor: () =>
+      typeof opts.modelsDevReasoning === "boolean"
+        ? {
+            maxTokens: 8_192,
+            reasoning: opts.modelsDevReasoning,
+            observedAt: "2026-08-01",
+            source: "models-dev",
+          }
+        : undefined,
+    providerWireCompatFor: () => undefined,
+    tupleCompatFor: () => undefined,
+  });
+  const rt = {
+    config,
+    state: createLocalState({ fs, home, pid: 1 }),
+    lastGoodProviders: providers,
+    migrateIdentity: () => undefined,
+    refreshSnapshot: () => ({ providers, error: undefined }),
+    registeredPsNames: [],
+    registration,
     scheduleModelsDevRefresh: () => undefined,
-    home: "/home/user",
-    fsLike: (): FsLike =>
-      ({
-        existsSync: () => false,
-        readFileSync: () => "",
-      }) as unknown as FsLike,
+    warnedMissingDbId: false,
+    reloadConfig: () => config,
+    readSelectionCached: () => undefined,
+    overridesFor: () => undefined,
+    headerVars: () => ({}),
+    home,
+    fsLike: () => fs,
     io: { existsSync: () => false },
     routingProbe: async () => undefined,
-  }) as unknown as Runtime;
+    effectiveCompatibilityFor: () => ({}),
+  } as ProbeCommandRuntime;
+  rt.effectiveCompatibilityFor = (provider) =>
+    opts.effectiveCompatibility ??
+    resolveEffectiveProviderCompatibility(rt.config, provider);
+  return rt;
+}
+
+function makeCommandRuntime(): Runtime {
+  const io = {
+    execFileSync: (() => {
+      throw new Error("unexpected command execution");
+    }) as NodeIo["execFileSync"],
+    existsSync: () => false,
+    readFileSync: (() => {
+      throw new Error("unexpected file read");
+    }) as NodeIo["readFileSync"],
+    writeFileSync: () => undefined,
+    renameSync: () => undefined,
+    unlinkSync: () => undefined,
+    randomUUID: () => "00000000-0000-4000-8000-000000000000",
+    resolvePackageVersion: () => undefined,
+    snapshotPath: "/not-used/fingerprint-snapshot.json",
+    probeHttp: async () => false,
+    fetchJson: async () => ({}),
+    release: "test",
+    home: "/home/user",
+  } satisfies NodeIo;
+  const rt = new Runtime(io);
+  rt.config = { aliasCcs: false };
+  return rt;
 }
 
 function makeCtx(
@@ -288,7 +352,7 @@ describe("registerCommands (probe/repair wiring)", () => {
         },
       ) => commands.set(name, command),
     } as unknown as ExtensionAPI;
-    const rt = { config: { aliasCcs: false } } as unknown as Runtime;
+    const rt = makeCommandRuntime();
     const lifecycle = makeLifecycle().lifecycle;
     registerCommands(pi, rt, lifecycle);
     return { commands, pi, rt, lifecycle };
@@ -357,13 +421,7 @@ describe("runProbeCommand (command flow)", () => {
     // relay's reasoning model looked non-reasoning to the probe: the reasoning
     // contract was skipped and the run used the 32-token budget, so thinking
     // models failed as false negatives.
-    const rt = makeRt(providers);
-    rt.modelsDevFor = () => ({
-      maxTokens: 8_192,
-      reasoning: true,
-      observedAt: "2026-08-01",
-      source: "models-dev",
-    });
+    const rt = makeRt(providers, { modelsDevReasoning: true });
 
     const calls: ProbeRequest[] = [];
     const { pi } = makePi();
@@ -384,13 +442,9 @@ describe("runProbeCommand (command flow)", () => {
   });
 
   test("an explicit user reasoning=false still wins over the resolved chain", async () => {
-    const rt = makeRt(providers);
-    rt.modelMetaFor = (() => ({ maxTokens: 8_192, reasoning: false })) as never;
-    rt.modelsDevFor = () => ({
-      maxTokens: 8_192,
-      reasoning: true,
-      observedAt: "2026-08-01",
-      source: "models-dev",
+    const rt = makeRt(providers, {
+      reasoning: false,
+      modelsDevReasoning: true,
     });
 
     const calls: ProbeRequest[] = [];
@@ -466,6 +520,34 @@ describe("runProbeCommand (command flow)", () => {
 
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((call) => call.target.claudeCodeCompat === true)).toBe(true);
+  });
+
+  test("Probe consumes Runtime effective compatibility instead of re-reading raw config", async () => {
+    const claude = {
+      ...provider("p1", "Anyrouter"),
+      api: "anthropic-messages" as const,
+      baseUrl: "https://anyrouter.top",
+    };
+    const rt = makeRt([claude], { effectiveCompatibility: {} });
+    rt.config = {
+      providerOverrides: {},
+      claudeCodeCompat: { mode: "always" },
+    };
+    const calls: ProbeRequest[] = [];
+    const { pi } = makePi();
+    const { ctx } = makeCtx({ mode: "tui" });
+
+    await runProbeCommand(pi, rt, ctx, {
+      transport: async (req) => {
+        calls.push(req);
+        if (req.contract === "tool") return okTool();
+        return okText();
+      },
+      buildPrecheck: precheckPass,
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call.target.claudeCodeCompat === undefined)).toBe(true);
   });
 
   test("missing registry model is registered for probing without setModel", async () => {

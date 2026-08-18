@@ -35,6 +35,7 @@ import { activeProviderName, type PiSwitchCtx } from "../src/pi-context.ts";
 import { buildProviderConfig } from "../src/register.ts";
 import type { ModelMetaDialogUi } from "../src/ui/model-meta-dialog.ts";
 import type { Runtime } from "./runtime.ts";
+import type { RegistrationOperations } from "./registration-operations.ts";
 import type {
   SwitchLifecycle,
   ActivationResult,
@@ -42,6 +43,18 @@ import type {
 } from "./switch-lifecycle.ts";
 import { runProbeCommand, runRepairCommand } from "./probe-commands.ts";
 import { t, tf } from "../src/ui/tui-locale.ts";
+import type { ExactModelThinkingOptInRequest } from "../src/capabilities/thinking-opt-in.ts";
+import type { ThinkingProjectionDecision } from "../src/capabilities/thinking-projection.ts";
+
+export type EffectiveConfigRuntime = {
+  config: Runtime["config"];
+  state: Pick<Runtime["state"], "readSelection">;
+  reloadConfig: Runtime["reloadConfig"];
+  reloadHeaderRules: Runtime["reloadHeaderRules"];
+  refreshSnapshot: Runtime["refreshSnapshot"];
+  providerWireCompatFor: Runtime["providerWireCompatFor"];
+  registration: RegistrationOperations;
+};
 
 /** Adapt Pi ExtensionUIContext confirm(title,message) to dialog's confirm(message). */
 function asModelMetaUi(ui: PiSwitchCtx["ui"]): ModelMetaDialogUi {
@@ -100,16 +113,32 @@ function maxTokensHintsFor(
   return Object.keys(out).length ? out : undefined;
 }
 
+function thinkingProjectionsFor(
+  rt: Runtime,
+  provider: CcProvider,
+  modelIds: string[],
+): Record<string, ThinkingProjectionDecision> | undefined {
+  const out: Record<string, ThinkingProjectionDecision> = {};
+  for (const modelId of modelIds) {
+    const projection = rt.registration.decisionFor(
+      provider,
+      modelId,
+    ).thinkingProjection;
+    if (projection) out[modelId] = projection;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /**
  * Actionable next step when the #63 maxTokens gate is what blocked the model.
  * Undefined when maxTokens resolved, so unrelated failures stay unannotated.
  */
 export function maxTokensUnresolvedFix(
-  rt: Runtime,
+  registration: RegistrationOperations,
   provider: CcProvider,
   modelId: string,
 ): string | undefined {
-  if (!rt.registrationDecisionFor(provider, modelId).maxTokensUnresolved) {
+  if (!registration.decisionFor(provider, modelId).maxTokensUnresolved) {
     return undefined;
   }
   return tf("maxTokensUnresolvedFix", { model: modelId });
@@ -126,8 +155,21 @@ async function persistAndMaybeReapplyMeta(
   provider: CcProvider,
   scope: ModelMetaScope,
   modelMeta: ModelMetaOverride | null,
+  thinkingOptIn?: {
+    decision: ThinkingProjectionDecision | undefined;
+    request: ExactModelThinkingOptInRequest;
+  },
 ): Promise<boolean> {
-  const written = rt.state.saveModelMetaOverride(provider, scope, modelMeta);
+  const written =
+    thinkingOptIn && modelMeta
+      ? rt.state.saveExactModelThinkingOptIn(
+          provider,
+          scope,
+          modelMeta,
+          thinkingOptIn.decision,
+          thinkingOptIn.request,
+        )
+      : rt.state.saveModelMetaOverride(provider, scope, modelMeta);
   if (!written.ok) {
     ctx.ui?.notify?.(
       tf("overrideSaveFailed", { error: written.error ?? "unknown" }),
@@ -193,7 +235,7 @@ async function reapplyIfActive(
     ctx,
   );
   if (result.kind === "failed") {
-    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const fix = maxTokensUnresolvedFix(rt.registration, provider, modelId);
     const message = tf("overrideReapplyFailed", { error: result.error });
     ctx.ui?.notify?.(fix ? `${message}\n${fix}` : message, "warning");
   }
@@ -234,6 +276,7 @@ async function openProviderOverride(
     base: rt.config.defaultModelMeta,
     tier: tierMeta(provider),
     maxTokensHints: maxTokensHintsFor(rt, provider, models),
+    thinkingProjections: thinkingProjectionsFor(rt, provider, models),
     models,
   };
 
@@ -261,6 +304,12 @@ async function openProviderOverride(
     provider,
     result.scope,
     result.kind === "clear" ? null : result.modelMeta,
+    result.kind === "save" && result.thinkingOptIn && result.scope.kind === "model"
+      ? {
+          request: result.thinkingOptIn,
+          decision: dialogInput.thinkingProjections?.[result.scope.modelId],
+        }
+      : undefined,
   );
 }
 
@@ -325,7 +374,10 @@ export async function runDoctorCommand(rt: Runtime, ctx: PiSwitchCtx): Promise<v
 }
 
 /** /ps-info — readonly view of the config registration would currently use. */
-export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
+export function runEffectiveConfigCommand(
+  rt: EffectiveConfigRuntime,
+  ctx: PiSwitchCtx,
+): void {
   rt.reloadConfig();
   rt.reloadHeaderRules();
   const { providers, error } = rt.refreshSnapshot();
@@ -359,11 +411,11 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
   const resolvedModelId =
     resolveListedModel(provider.configModels, modelId) ?? modelId;
   const providerWireCompat = rt.providerWireCompatFor(provider);
-  const decision = rt.registrationDecisionFor(provider, resolvedModelId);
+  const decision = rt.registration.decisionFor(provider, resolvedModelId);
   const config = buildProviderConfig(
     provider,
     [resolvedModelId],
-    rt.registrationOptsFor(provider),
+    rt.registration.optionsFor(provider),
   );
   if (!config) {
     ctx.ui?.notify?.(
@@ -393,6 +445,7 @@ export function runEffectiveConfigCommand(rt: Runtime, ctx: PiSwitchCtx): void {
     fingerprint,
     providerWireCompat,
     reasoningConservative: decision.reasoningConservative,
+    thinkingProjection: decision.thinkingProjection,
   });
   const text = formatEffectiveConfigSummary(summary);
   if (ctx.ui?.notify) {
@@ -474,14 +527,14 @@ export async function runCommand(
       { provider, modelId, commit: "selection" },
       ctx,
     );
-    notifyActivation(rt, ctx, provider, modelId, result);
+    notifyActivation(rt.registration, ctx, provider, modelId, result);
     return;
   }
 }
 
 /** Shared post-activate notifications (used by /ps-config and /ps). */
 function notifyActivation(
-  rt: Runtime,
+  registration: RegistrationOperations,
   ctx: PiSwitchCtx,
   provider: CcProvider,
   modelId: string,
@@ -494,7 +547,7 @@ function notifyActivation(
         : t("stageModelSwitch");
     // #63: "cannot register provider" is opaque when the real cause is the
     // maxTokens gate — name the fix instead of leaving the user guessing.
-    const fix = maxTokensUnresolvedFix(rt, provider, modelId);
+    const fix = maxTokensUnresolvedFix(registration, provider, modelId);
     const message = tf("activationFailed", { stage: label, error: result.error });
     ctx.ui.notify(fix ? `${message}\n${fix}` : message, "error");
     return;
@@ -505,7 +558,7 @@ function notifyActivation(
     ctx.ui.notify(tf("activationPartial", { warnings: warnings.join("\n- ") }), "warning");
   } else {
     const metaHint = summarizeModelMeta(
-      rt.registrationDecisionFor(provider, modelId).meta,
+      registration.decisionFor(provider, modelId).meta,
     );
     ctx.ui.notify(
       tf("activationSuccess", {
@@ -574,7 +627,7 @@ export async function runQuickSwitch(
       { provider, modelId, commit: "selection" },
       ctx,
     );
-    notifyActivation(rt, ctx, provider, modelId, result);
+    notifyActivation(rt.registration, ctx, provider, modelId, result);
   };
   await quickSwitchPick(ctx, {
     providers: live,

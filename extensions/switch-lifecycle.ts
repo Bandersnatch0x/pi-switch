@@ -9,11 +9,15 @@ import {
 import { registerProvider } from "../src/register.ts";
 import type {
   CcProvider,
+  PiSwitchConfig,
   PiSwitchSelection,
   RecentEntry,
   SessionModelStrategy,
 } from "../src/types.ts";
-import type { Runtime } from "./runtime.ts";
+import type { IdentityMigrationSummary } from "../src/migration.ts";
+import type { LocalState } from "../src/local-state.ts";
+import type { ProviderSnapshotResult } from "../src/provider-snapshot.ts";
+import type { RegistrationOperations } from "./registration-operations.ts";
 import { matchProvider } from "./runtime-facades.ts";
 
 /** session_start reasons that may need a pi-switch provider re-registered. */
@@ -29,6 +33,18 @@ export type SwitchTarget = {
   modelId: string;
   commit: "selection" | "runtime-only";
 };
+
+export interface SwitchLifecycleRuntime {
+  config: PiSwitchConfig;
+  lastGoodProviders: CcProvider[];
+  migrateIdentity(providers: CcProvider[]): IdentityMigrationSummary | undefined;
+  refreshSnapshot(): ProviderSnapshotResult;
+  registeredPsNames: string[];
+  registration: RegistrationOperations;
+  scheduleModelsDevRefresh(modelId: string): void;
+  state: LocalState;
+  warnedMissingDbId: boolean;
+}
 
 /** Minimal session branch entry fields used to recover the last model. */
 type SessionBranchEntry = {
@@ -257,7 +273,7 @@ function formatError(error: unknown): string {
 
 export function createSwitchLifecycle(
   pi: ExtensionAPI,
-  rt: Runtime,
+  rt: SwitchLifecycleRuntime,
 ): SwitchLifecycle {
   type RegistrationOutcome =
     | { kind: "registered" }
@@ -274,7 +290,7 @@ export function createSwitchLifecycle(
         asRegisterApi(pi),
         provider,
         ids,
-        rt.registrationOptsFor(provider),
+        rt.registration.optionsFor(provider),
       );
       if (result.kind === "skipped") {
         // A #63 skip on a *switchable* provider means "no trusted maxTokens

@@ -9,6 +9,10 @@ import {
   isMaxTokensResolved,
   type ResolvedCapabilities,
 } from "../src/capabilities/resolve.ts";
+import {
+  canonicalProviderEndpointTuple,
+  type ThinkingProjectionDecision,
+} from "../src/capabilities/thinking-projection.ts";
 
 // Doctor badges are hardcoded-English by design; pin en so the [FAIL] assertion
 // is deterministic regardless of the test runner's LANG.
@@ -22,6 +26,58 @@ function capDecision(resolved: ResolvedCapabilities): RegistrationCapabilityDeci
     meta: undefined,
     maxTokensUnresolved: !isMaxTokensResolved(resolved.maxTokens),
     reasoningConservative: resolved.reasoning.source === "conservative-default",
+    thinkingProjection: undefined,
+  };
+}
+
+function withThinking(
+  base: RegistrationCapabilityDecision,
+  over: Partial<ThinkingProjectionDecision> = {},
+): RegistrationCapabilityDecision {
+  return {
+    ...base,
+    thinkingProjection: {
+      tuple: canonicalProviderEndpointTuple({
+        appType: "codex",
+        providerId: "relay",
+        api: "openai-responses",
+        baseUrl: "https://secret.example/v1",
+        modelId: "gpt-5.6-sol",
+      }),
+      tupleKey: "redacted-key",
+      profileVersion: "catalog@1",
+      control: { type: "effort" },
+      map: { max: "max" },
+      advertised: [
+        { type: "effort", value: "max" },
+        { type: "effort", value: "ultra" },
+      ],
+      unrepresented: [{ type: "effort", value: "ultra" }],
+      projections: [
+        {
+          intent: "max",
+          native: { type: "effort", value: "max" },
+          effectiveLevel: "max",
+          status: "exact",
+          source: "codex-model-catalog",
+        },
+      ],
+      collisions: [],
+      source: "codex-model-catalog",
+      observedAt: "2026-08-17T00:00:00.000Z",
+      stale: false,
+      status: "exact",
+      runtime: {
+        version: "0.84.2",
+        runtimeVerified: true,
+        payloadVerified: true,
+        supportedControls: ["effort"],
+        providerDefault: "supported",
+        off: "indistinguishable-from-provider-default",
+      },
+      warnings: [],
+      ...over,
+    },
   };
 }
 
@@ -559,6 +615,104 @@ describe("runDoctor", () => {
     const check = report.checks.find((c) => c.id === "capabilities");
     expect(check?.status).toBe("pass");
     expect(check?.detail).toContain("context=200000(protocol-default)");
+  });
+
+  test("capabilities: thinking projection detail is shared and lossy raises warn", () => {
+    const resolved: ResolvedCapabilities = {
+      contextWindow: { value: 200000, source: "protocol-default" },
+      maxTokens: { value: 64000, source: "user-override" },
+      reasoning: { value: true, source: "user-override" },
+      vision: { value: true, source: "protocol-default" },
+      conflicts: [],
+    };
+    const exact = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "relay", displayName: "a", appType: "codex" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "gpt-5.6-sol",
+        decision: withThinking(capDecision(resolved)),
+      },
+    });
+    const exactCheck = exact.checks.find((c) => c.id === "capabilities");
+    expect(exactCheck?.status).toBe("pass");
+    expect(exactCheck?.detail).toContain("ultra advertised but not selectable");
+    expect(exactCheck?.detail).not.toContain("secret.example");
+
+    const lossy = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "relay", displayName: "a", appType: "codex" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "gpt-5.6-sol",
+        decision: withThinking(capDecision(resolved), {
+          map: { max: "ultra" },
+          unrepresented: [{ type: "effort", value: "max" }],
+          projections: [
+            {
+              intent: "max",
+              native: { type: "effort", value: "ultra" },
+              effectiveLevel: "max",
+              status: "lossy",
+              source: "user-map",
+              scope: "exact-model",
+            },
+          ],
+          status: "lossy",
+        }),
+      },
+    });
+    const lossyCheck = lossy.checks.find((c) => c.id === "capabilities");
+    expect(lossyCheck?.status).toBe("warn");
+    expect(lossyCheck?.detail).toContain("Pi max -> provider ultra");
+
+    const unsupportedRuntime = runDoctor({
+      home: "/h",
+      dbPath: "/db",
+      dbExists: true,
+      sqlite3Path: "sqlite3",
+      providers: [mk({ id: "relay", displayName: "a", appType: "codex" })],
+      config: {},
+      headerRuleCount: 1,
+      capabilities: {
+        modelId: "gpt-5.6-sol",
+        decision: withThinking(capDecision(resolved), {
+          map: undefined,
+          projections: [
+            {
+              intent: "high",
+              native: { type: "effort", value: "high" },
+              effectiveLevel: "high",
+              status: "unsupported",
+              source: "codex-model-catalog",
+              reason: "Pi 0.84.2 does not support this control for this tuple",
+            },
+          ],
+          status: "unsupported",
+          runtime: {
+            version: "0.84.2",
+            runtimeVerified: true,
+            payloadVerified: false,
+            supportedControls: [],
+            providerDefault: "supported",
+            off: "unsupported",
+          },
+        }),
+      },
+    });
+    const unsupportedCheck = unsupportedRuntime.checks.find(
+      (c) => c.id === "capabilities",
+    );
+    expect(unsupportedCheck?.status).toBe("warn");
+    expect(unsupportedCheck?.detail).toContain("thinking=unsupported-runtime");
   });
 
   test("capabilities #63: unresolved maxTokens fails with exact-model fix", () => {

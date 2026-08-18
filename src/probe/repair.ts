@@ -8,78 +8,27 @@
  * Interactive only — headless is rejected (no silent persistent change).
  */
 
-import type { NormalizedProbeRunEvidence } from "./evidence.ts";
+import { advance, createRepairInvestigation } from "./investigation.ts";
+import type { RepairPlan } from "./repair-plan.ts";
 import {
-  applyRepairCandidateToProbeTarget,
-  matchRepairRecipes,
   type RepairCandidate,
-  type RepairRecipeId,
   type RepairRecipeMatch,
 } from "./recipes.ts";
 import {
-  probeMaxTokensFor,
   type ProbeEngineOptions,
   type ProbeRunResult,
   type ProbeTarget,
   type ProbeVerifier,
 } from "./types.ts";
 
-// ── Plan ────────────────────────────────────────────────────────────────────
-
-interface RepairPlanPreviewPatchBase {
-  recipeId: RepairRecipeId;
-  description: string;
-}
-
-export interface RepairPlanPreviewExactModelPatch
-  extends RepairPlanPreviewPatchBase {
-  scope: "exact-model";
-  affectedModels: string[];
-}
-
-export interface RepairPlanPreviewProviderPatch
-  extends RepairPlanPreviewPatchBase {
-  scope: "provider-wide";
-  provider: string;
-}
-
-export type RepairPlanPreviewPatch =
-  | RepairPlanPreviewExactModelPatch
-  | RepairPlanPreviewProviderPatch;
-
-export interface RepairPlanPreview {
-  target: string;
-  recipeOrder: RepairRecipeId[];
-  patches: RepairPlanPreviewPatch[];
-}
-
-/** Plan-level preview for one interactive confirmation. */
-export interface RepairPlan {
-  target: ProbeTarget;
-  recipes: RepairRecipeMatch[];
-  evidence: NormalizedProbeRunEvidence;
-  preview: RepairPlanPreview;
-}
-
-/**
- * Build a repair plan from durable normalized evidence (pure, zero network).
- * Empty recipes when evidence is ambiguous / unmatched.
- */
-export function buildRepairPlan(evidence: NormalizedProbeRunEvidence): RepairPlan {
-  const recipes = matchRepairRecipes(evidence);
-  const target: ProbeTarget = { ...evidence.target };
-
-  return {
-    target,
-    recipes,
-    evidence,
-    preview: {
-      target: `${target.provider}/${target.modelId}`,
-      recipeOrder: recipes.map((r) => r.recipeId),
-      patches: recipes.map(buildRepairPlanPreviewPatch),
-    },
-  };
-}
+export { buildRepairPlan } from "./repair-plan.ts";
+export type {
+  RepairPlan,
+  RepairPlanPreview,
+  RepairPlanPreviewExactModelPatch,
+  RepairPlanPreviewPatch,
+  RepairPlanPreviewProviderPatch,
+} from "./repair-plan.ts";
 
 // ── Config store (CAS) ──────────────────────────────────────────────────────
 
@@ -170,7 +119,7 @@ export type RepairOutcome =
       /** Session Model is never switched by repair. */
       sessionModelUnchanged: true;
       /** Explicit post-success action for UI (ticket 8 wires the lifecycle). */
-      switchAction: RepairSwitchAction;
+      switchAction?: RepairSwitchAction;
     };
 
 export interface RunRepairOptions {
@@ -186,6 +135,8 @@ export interface RunRepairOptions {
   configStore: RepairConfigStore;
   /** Which recipe to try (default 0). At most one recipe is committed. */
   recipeIndex?: number;
+  /** Whether the command adapter should receive a post-commit switch offer. */
+  offerSwitch?: boolean;
   maxRequests?: number;
   timeoutMs?: number;
   maxTokens?: number;
@@ -193,30 +144,19 @@ export interface RunRepairOptions {
   now?: () => number;
 }
 
-const CONSECUTIVE_PASSES_REQUIRED = 2;
-
 /**
- * Execute Compatibility Repair for a confirmed plan.
- *
- * Guarantees:
- * - headless → rejected (no network, no persist)
- * - unconfirmed → needs-confirmation (no network, no persist)
- * - candidate applied only in memory until two consecutive verify passes
- * - CAS commit of exactly one recipe; conflict aborts without overwrite
- * - never calls setModel; exposes switchAction only after successful commit
+ * Public Compatibility Repair facade. The state machine owns progression and
+ * this function only interprets its effects through the existing adapters.
  */
 export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> {
   const { plan } = opts;
-
   if (opts.mode === "headless") {
     return {
       status: "headless-rejected",
-      summary:
-        "repair requires interactive confirmation; headless mode is not allowed",
+      summary: "repair requires interactive confirmation; headless mode is not allowed",
       persisted: false,
     };
   }
-
   if (!opts.confirmed) {
     return {
       status: "needs-confirmation",
@@ -226,7 +166,93 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
     };
   }
 
-  if (plan.recipes.length === 0) {
+  let transition = createRepairInvestigation(
+    plan,
+    {
+      maxRequests: opts.maxRequests,
+      timeoutMs: opts.timeoutMs,
+      maxTokens: opts.maxTokens,
+    },
+    opts.recipeIndex ?? 0,
+    opts.offerSwitch ?? true,
+  );
+
+  let switchTarget: ProbeTarget | undefined;
+  while (transition.effects.length > 0) {
+    const effect = transition.effects[0]!;
+    switch (effect.kind) {
+      case "confirm-repair":
+        transition = advance(transition.state, { kind: "confirm", accepted: true });
+        break;
+      case "read-config-snapshot": {
+        try {
+          const snapshot = await opts.configStore.read();
+          transition = advance(transition.state, {
+            kind: "config-snapshot",
+            version: snapshot.version,
+          });
+        } catch (error) {
+          transition = advance(transition.state, {
+            kind: "config-snapshot-error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        break;
+      }
+      case "verify-candidate": {
+        const result = await opts.verify({
+          target: effect.target,
+          contracts: effect.contracts,
+          maxRequests: effect.maxRequests,
+          timeoutMs: effect.timeoutMs,
+          maxTokens: effect.maxTokens,
+          createSignal: opts.createSignal,
+          now: opts.now,
+        });
+        transition = advance(transition.state, {
+          kind: "verification-completed",
+          sequence: effect.sequence,
+          result,
+        });
+        break;
+      }
+      case "commit-repair": {
+        let result: RepairConfigCommitResult;
+        try {
+          result = await opts.configStore.commit({
+            expectedVersion: effect.expectedVersion,
+            patch: effect.patch,
+          });
+        } catch (error) {
+          result = {
+            ok: false,
+            reason: "error",
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+        transition = advance(transition.state, {
+          kind: "commit-completed",
+          result,
+        });
+        break;
+      }
+      case "offer-switch":
+        // Switch lifecycle belongs to the command/UI adapter. Consume the
+        // declarative offer and map it to the outcome action below; no choice
+        // or Session Model mutation happens inside this facade.
+        switchTarget = { ...effect.target };
+        transition = {
+          state: transition.state,
+          effects: transition.effects.slice(1),
+        };
+        break;
+      case "probe":
+        throw new Error(`runRepair cannot interpret ${effect.kind} from a plan-scoped investigation`);
+    }
+  }
+
+  const state = transition.state;
+  if (state.status === "no-recipe") {
     return {
       status: "no-recipe",
       plan,
@@ -234,123 +260,70 @@ export async function runRepair(opts: RunRepairOptions): Promise<RepairOutcome> 
       persisted: false,
     };
   }
-
-  const index = opts.recipeIndex ?? 0;
-  const recipe = plan.recipes[index] ?? plan.recipes[0]!;
-  // Isolation: only this one recipe is attempted / committed this run.
-
-  // Snapshot config version before verification so CAS detects external edits
-  // that land during the (network) verify window.
-  const snapshot = await opts.configStore.read();
-  const expectedVersion = snapshot.version;
-
-  const candidateTarget = applyRepairCandidateToProbeTarget(
-    plan.target,
-    recipe.patch,
-  );
-  // Budget follows the ORIGINAL target: the reasoning-false recipe flips the
-  // very flag the budget keys off, and a model that still thinks would then be
-  // truncated into a false verification failure (#83).
-  const verifyMaxTokens = probeMaxTokensFor(plan.target, opts.maxTokens);
-  const attempts: ProbeRunResult[] = [];
-
-  for (let i = 0; i < CONSECUTIVE_PASSES_REQUIRED; i++) {
-    const result = await opts.verify({
-      target: candidateTarget,
-      contracts: recipe.verifyContracts,
-      maxRequests: opts.maxRequests,
-      timeoutMs: opts.timeoutMs,
-      maxTokens: verifyMaxTokens,
-      createSignal: opts.createSignal,
-      now: opts.now,
-    });
-    attempts.push(result);
-
-    if (!result.ok) {
-      return {
-        status: "verification-failed",
-        plan,
-        recipe,
-        attempts,
-        summary:
-          `candidate verification failed on pass ${i + 1}/${CONSECUTIVE_PASSES_REQUIRED}` +
-          ` (${result.stoppedReason ?? "stage failure"}); candidate discarded, no config write`,
-        persisted: false,
-      };
-    }
-  }
-
-  // Two consecutive passes — CAS commit exactly one recipe.
-  const commitResult = await opts.configStore.commit({
-    expectedVersion,
-    patch: recipe.patch,
-  });
-
-  if (!commitResult.ok) {
-    if (commitResult.reason === "conflict") {
-      return {
-        status: "cas-conflict",
-        plan,
-        recipe,
-        attempts,
-        summary:
-          commitResult.message?.trim() ||
-          "config changed externally during repair; aborting to preserve external changes",
-        persisted: false,
-      };
+  const attempts = ("attempts" in state ? state.attempts : undefined) ?? [];
+  if (state.status === "verification-failed") {
+    if (!state.recipe) {
+      throw new Error("repair investigation ended in impossible state: verification-failed without recipe");
     }
     return {
-      status: "commit-error",
+      status: state.status,
       plan,
-      recipe,
+      recipe: state.recipe,
       attempts,
       summary:
-        commitResult.message?.trim() ||
-        "failed to persist repair candidate",
+        `${state.message || `candidate verification failed after ${attempts.length} verification attempt(s)`}` +
+        ` (${attempts.at(-1)?.stoppedReason ?? "stage failure"}); candidate discarded, no config write`,
       persisted: false,
     };
   }
+  if (state.status === "cas-conflict" || state.status === "commit-error") {
+    if (!state.recipe) {
+      throw new Error(`repair investigation ended in impossible state: ${state.status} without recipe`);
+    }
+    return {
+      status: state.status,
+      plan,
+      recipe: state.recipe,
+      attempts,
+      summary: state.message?.trim() || (state.status === "cas-conflict"
+        ? "config changed externally during repair; aborting to preserve external changes"
+        : "failed to persist repair candidate"),
+      persisted: false,
+    };
+  }
+  if (state.status !== "committed") {
+    throw new Error(`repair investigation ended in impossible state: ${state.status}`);
+  }
+  if (!state.recipe || !state.candidateTarget) {
+    throw new Error("repair investigation ended in impossible state: committed without recipe or candidate target");
+  }
+  return mapCommittedOutcome(plan, state.recipe, attempts, switchTarget);
+}
 
-  const repairedTarget: ProbeTarget = applyRepairCandidateToProbeTarget(
-    plan.target,
-    recipe.patch,
-  );
+type CommittedRepairOutcome = Extract<RepairOutcome, { status: "committed" }>;
 
+function mapCommittedOutcome(
+  plan: RepairPlan,
+  recipe: RepairRecipeMatch,
+  attempts: ProbeRunResult[],
+  switchTarget?: ProbeTarget,
+): CommittedRepairOutcome {
   return {
     status: "committed",
     plan,
     recipe,
     attempts,
-    summary:
-      `committed ${recipe.recipeId} for ${plan.target.provider}/${plan.target.modelId}` +
-      ` (session model unchanged)`,
+    summary: `committed ${recipe.recipeId} for ${plan.target.provider}/${plan.target.modelId} (session model unchanged)`,
     persisted: true,
     sessionModelUnchanged: true,
-    switchAction: {
-      kind: "switch-to-repaired-target",
-      target: repairedTarget,
-    },
-  };
-}
-
-function buildRepairPlanPreviewPatch(
-  recipe: RepairRecipeMatch,
-): RepairPlanPreviewPatch {
-  const base = {
-    recipeId: recipe.recipeId,
-    description: recipe.summary,
-  };
-  if (recipe.patch.scope === "model") {
-    return {
-      ...base,
-      scope: "exact-model",
-      affectedModels: [recipe.patch.modelId],
-    };
-  }
-  return {
-    ...base,
-    scope: "provider-wide",
-    provider: recipe.patch.provider,
+    ...(switchTarget
+      ? {
+          switchAction: {
+            kind: "switch-to-repaired-target" as const,
+            target: { ...switchTarget },
+          },
+        }
+      : {}),
   };
 }
 

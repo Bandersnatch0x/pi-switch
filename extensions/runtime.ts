@@ -39,8 +39,12 @@ import type {
   ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
-import type { RegistrationCapabilityDecision } from "../src/capabilities/registration.ts";
-import type { ProviderRegistrationOpts } from "../src/register.ts";
+import { resolveProviderReasoningProfile } from "../src/capabilities/reasoning-profile-registry.ts";
+import { resolvePiThinkingRuntimeCapability } from "../src/capabilities/thinking-runtime.ts";
+import type {
+  PiThinkingRuntimeCapability,
+  ProviderReasoningProfile,
+} from "../src/capabilities/thinking-projection.ts";
 import type { ModelMetaLayers } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
@@ -58,10 +62,13 @@ import { SelectionCache } from "../src/selection-cache.ts";
 import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 import {
-  resolveRegistrationDecisionFor,
   resolveCapabilitiesFor,
   resolveSessionCompatibilityTarget,
 } from "./runtime-facades.ts";
+import {
+  createRegistrationOperations,
+  type RegistrationOperations,
+} from "./registration-operations.ts";
 
 export type NodeIo = {
   /** Real node execFileSync; narrowed at call sites for ProbeDeps/DbReaderDeps. */
@@ -97,6 +104,7 @@ export type SessionCompatibilityTarget = {
 export class Runtime {
   readonly io: NodeIo;
   readonly state: LocalState;
+  readonly registration: RegistrationOperations;
   registeredPsNames: string[] = [];
   warnedMissingDbId = false;
   headerRules: HeaderRule[] = [];
@@ -138,6 +146,21 @@ export class Runtime {
       home: io.home,
       execFileSync: io.execFileSync as DbReaderDeps["execFileSync"],
       existsSync: io.existsSync,
+    });
+    this.registration = createRegistrationOperations({
+      headerRules: () => this.headerRules,
+      headerOverrideOpts: (provider) => this.headerOverrideOpts(provider),
+      headerVars: () => this.headerVars(),
+      debug: () => this.config.debug,
+      rejectSink: () => this.rejectSink(),
+      modelMetaFactsFor: (provider, modelId) =>
+        this.providerViews.registrationModelMetaFor(provider, modelId),
+      modelsDevFor: (modelId) => this.modelsDevFor(modelId),
+      piVersion: () => this.piVersion(),
+      thinkingFor: (provider, modelId) =>
+        this.registrationThinkingFor(provider, modelId),
+      providerWireCompatFor: (provider) => this.providerWireCompatFor(provider),
+      tupleCompatFor: (provider, modelId) => this.tupleCompatFor(provider, modelId),
     });
   }
 
@@ -193,8 +216,13 @@ export class Runtime {
     return resolveSessionCompatibilityTarget({
       lastGoodProviders: this.lastGoodProviders,
       readSelectionCached: (ttl) => this.readSelectionCached(ttl),
-      effectiveCompatibilityFor: (p) => this.providerViews.effectiveCompatibilityFor(p),
+      effectiveCompatibilityFor: (p) => this.effectiveCompatibilityFor(p),
     });
+  }
+
+  /** Effective provider compatibility shared by hooks, Probe, and Repair. */
+  effectiveCompatibilityFor(provider: CcProvider): EffectiveProviderCompatibility {
+    return this.providerViews.effectiveCompatibilityFor(provider);
   }
 
   loadConfig(): PiSwitchConfig {
@@ -351,39 +379,42 @@ export class Runtime {
     });
   }
 
-  /**
-   * The registration-facing capability decision — same inputs buildProviderConfig
-   * resolves when it registers this model, so doctor / precheck / ps-info /
-   * notifications judge and display with registration's truth instead of
-   * re-deriving it from lower-level facts (three hand-rolled respellings of
-   * "maxTokens unresolved" disagreed on value:0 before this existed).
-   */
-  registrationDecisionFor(
+  /** Resolve provider profile and Pi runtime evidence for registration. */
+  private registrationThinkingFor(
     provider: CcProvider,
     modelId: string,
-  ): RegistrationCapabilityDecision {
-    return resolveRegistrationDecisionFor(provider, modelId, {
-      modelMetaFor: (p, m) => this.modelMetaFor(p, m),
-      modelsDevFor: (m) => this.modelsDevFor(m),
-    });
-  }
-
-  /**
-   * The full option bundle buildProviderConfig/registerProvider need for this
-   * provider. Lives here because Runtime owns every ingredient; call sites
-   * used to hand-copy these nine fields (four verbatim copies, one drifted).
-   */
-  registrationOptsFor(provider: CcProvider): ProviderRegistrationOpts {
+  ): {
+    profile?: ProviderReasoningProfile;
+    runtime: PiThinkingRuntimeCapability;
+  } {
+    const profile = resolveProviderReasoningProfile(
+      provider,
+      modelId,
+      this.providerViews.reasoningProfileFor(provider, modelId),
+    );
+    const tuple = this.tupleCompatFor(provider, modelId)?.tuple;
+    const modelMeta = this.modelMetaFor(provider, modelId);
+    const anthropic =
+      tuple?.api === "anthropic-messages"
+        ? { forceAdaptiveThinking: tuple.forceAdaptiveThinking }
+        : undefined;
+    const chat =
+      tuple?.api === "openai-completions"
+        ? {
+            thinkingFormat: tuple.thinkingFormat ?? modelMeta?.thinkingFormat,
+            supportsReasoningEffort: tuple.supportsReasoningEffort,
+          }
+        : modelMeta?.thinkingFormat
+          ? { thinkingFormat: modelMeta.thinkingFormat }
+          : undefined;
     return {
-      rules: this.headerRules,
-      ...this.headerOverrideOpts(provider),
-      vars: this.headerVars(),
-      debug: this.config.debug,
-      onReject: this.rejectSink(),
-      modelMetaFor: (id) => this.modelMetaFor(provider, id),
-      modelsDevFor: (id) => this.modelsDevFor(id),
-      providerWireCompat: this.providerWireCompatFor(provider),
-      tupleCompatFor: (id) => this.tupleCompatFor(provider, id),
+      ...(profile ? { profile } : {}),
+      runtime: resolvePiThinkingRuntimeCapability({
+        version: this.piVersion(),
+        profile,
+        anthropic,
+        chat,
+      }),
     };
   }
 
@@ -419,7 +450,7 @@ export class Runtime {
       }
       capabilities = {
         modelId: sel.model,
-        decision: this.registrationDecisionFor(selMatch, sel.model),
+        decision: this.registration.decisionFor(selMatch, sel.model),
       };
       // Issue #39: surface cache state after on-demand refresh.
       const entry = this.rawCacheEntry(sel.model);
@@ -503,9 +534,9 @@ export class Runtime {
   }
 
   /**
-   * Registration/display effective modelMeta:
+   * Display-facing effective modelMeta:
    *   built-in compat < defaultModelMeta < provider.modelMeta < modelOverrides
-   * (user wins per field). Same compat resolveRegistrationMeta applies.
+   * (user wins per field). Registration consumes registrationDecisionFor.
    * For user-config layers only, use modelMetaLayers(...).effective.
    */
   modelMetaFor(

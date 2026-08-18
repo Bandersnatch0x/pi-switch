@@ -14,6 +14,12 @@ import type { CcProvider } from "../types.ts";
 import { THINKING_FORMATS } from "../types.ts";
 import type { ModelMetaOverride } from "../types.ts";
 import type { TrustedMaxTokensHint } from "../capabilities/resolve.ts";
+import type { ThinkingProjectionDecision } from "../capabilities/thinking-projection.ts";
+import {
+  activeExactModelThinkingOptIn,
+  toggleExactModelThinkingOptIn,
+  type ExactModelThinkingOptInRequest,
+} from "../capabilities/thinking-opt-in.ts";
 import {
   cleanModelMeta,
   inheritedModelMetaBelowExact,
@@ -29,6 +35,7 @@ import {
   maxTokensHintForScope,
   shouldShowBuiltInCompatRow,
   syncValueLabel,
+  thinkingOptInForScope,
   useBuiltInCompatStateText,
   userMetaForBuiltInGate,
 } from "./model-meta-form.ts";
@@ -59,12 +66,19 @@ export interface ModelMetaDialogInput {
   tier?: ModelMetaOverride;
   /** Exact-model maxTokens sync hints (trusted only: models.dev / CC Switch meta). */
   maxTokensHints?: Record<string, TrustedMaxTokensHint>;
+  /** Tuple-scoped registration decisions; only exact-model entries are offered. */
+  thinkingProjections?: Record<string, ThinkingProjectionDecision>;
   /** Model ids offered when switching scope. */
   models?: string[];
 }
 
 export type ModelMetaDialogResult =
-  | { kind: "save"; scope: ModelMetaScope; modelMeta: ModelMetaOverride }
+  | {
+      kind: "save";
+      scope: ModelMetaScope;
+      modelMeta: ModelMetaOverride;
+      thinkingOptIn?: ExactModelThinkingOptInRequest;
+    }
   | { kind: "clear"; scope: ModelMetaScope }
   | { kind: "clearAll" }
   | { kind: "cancel" };
@@ -165,6 +179,7 @@ export async function runModelMetaDialog(
 
   let stored = storedFor(scope);
   let draft: ModelMetaOverride = { ...(stored ?? {}) };
+  let requestedThinkingOptIn: ExactModelThinkingOptInRequest | undefined;
 
   const dirty = (): boolean => !sameMeta(draft, stored);
 
@@ -222,6 +237,7 @@ export async function runModelMetaDialog(
     scope = next;
     stored = storedFor(scope);
     draft = { ...(stored ?? {}) };
+    requestedThinkingOptIn = undefined;
   }
 
   async function pickPreset(): Promise<void> {
@@ -346,6 +362,10 @@ export async function runModelMetaDialog(
     const CONTEXT_ROW = fieldRow("contextWindow", inherited, builtIn);
     const MAXTOKENS_ROW = fieldRow("maxTokens", inherited, builtIn);
     const THINKING_ROW = fieldRow("thinkingFormat", inherited, builtIn);
+    const thinkingOptIn = thinkingOptInForScope(input, scope);
+    const ULTRA_ROW = thinkingOptIn
+      ? `Provider ultra · ${draft.thinkingLevelMap?.max === "ultra" ? "已启用（Pi max -> ultra）" : "Pi max -> provider ultra（有损 opt-in）"}`
+      : undefined;
     const BUILTIN_ROW = shouldShowBuiltInCompatRow(scope, draft, inherited)
       ? `内置compat · ${useBuiltInCompatStateText(draft, inherited)}`
       : undefined;
@@ -355,6 +375,7 @@ export async function runModelMetaDialog(
     const CANCEL_ROW = "取消";
 
     const options = [SCOPE_ROW, PRESET_ROW, REASONING_ROW, CONTEXT_ROW, MAXTOKENS_ROW, THINKING_ROW];
+    if (ULTRA_ROW) options.push(ULTRA_ROW);
     if (BUILTIN_ROW) options.push(BUILTIN_ROW);
     if (cleanModelMeta(draft) || stored) options.push(CLEAR_SCOPE_ROW);
     if (hasAnyOverride()) options.push(CLEAR_ALL_ROW);
@@ -392,6 +413,23 @@ export async function runModelMetaDialog(
       await pickThinkingFormat(inherited, builtIn);
       continue;
     }
+    if (ULTRA_ROW && thinkingOptIn && pick === ULTRA_ROW) {
+      const toggled = toggleExactModelThinkingOptIn(
+        draft,
+        scope,
+        scope.kind === "model"
+          ? input.thinkingProjections?.[scope.modelId]
+          : undefined,
+        thinkingOptIn,
+      );
+      if (!toggled.ok) {
+        ui.notify?.(toggled.error, "warning");
+        continue;
+      }
+      draft = toggled.modelMeta;
+      requestedThinkingOptIn = toggled.requested;
+      continue;
+    }
     if (BUILTIN_ROW && pick === BUILTIN_ROW) {
       await pickUseBuiltInCompat(inherited);
       continue;
@@ -417,7 +455,18 @@ export async function runModelMetaDialog(
       }
       const cleaned = cleanModelMeta(draft);
       if (!cleaned) return { kind: "clear", scope };
-      return { kind: "save", scope, modelMeta: cleaned };
+      const activeThinkingOptIn = activeExactModelThinkingOptIn(
+        cleaned,
+        requestedThinkingOptIn,
+      );
+      return {
+        kind: "save",
+        scope,
+        modelMeta: cleaned,
+        ...(activeThinkingOptIn
+          ? { thinkingOptIn: activeThinkingOptIn }
+          : {}),
+      };
     }
     if (pick === CANCEL_ROW) {
       if (await confirmDiscard()) return { kind: "cancel" };

@@ -29,6 +29,10 @@ import {
 } from "../src/ui/model-meta-form.ts";
 import type { ModelMetaDialogInput, ModelMetaScope } from "../src/ui/model-meta-dialog.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
+import {
+  canonicalProviderEndpointTuple,
+  type ThinkingProjectionDecision,
+} from "../src/capabilities/thinking-projection.ts";
 
 const provider = { id: "abc", displayName: "elysiver-claude", piName: "elysiver-claude" };
 
@@ -39,6 +43,42 @@ function baseInput(over?: Partial<ModelMetaDialogInput>): ModelMetaDialogInput {
     tier: { reasoning: true, contextWindow: 200_000, maxTokens: 64_000 },
     models: ["glm-4.6", "claude-sonnet-4"],
     ...over,
+  };
+}
+
+function ultraDecision(): ThinkingProjectionDecision {
+  return {
+    tuple: canonicalProviderEndpointTuple({
+      appType: "codex",
+      providerId: "abc",
+      api: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+      modelId: "gpt-5.6-sol",
+    }),
+    tupleKey: "codex:abc:gpt-5.6-sol",
+    profileVersion: "catalog@1",
+    control: { type: "effort" },
+    map: { max: "max" },
+    advertised: [
+      { type: "effort", value: "max" },
+      { type: "effort", value: "ultra" },
+    ],
+    unrepresented: [{ type: "effort", value: "ultra" }],
+    projections: [],
+    collisions: [],
+    source: "codex-model-catalog",
+    observedAt: "2026-08-17T00:00:00.000Z",
+    stale: false,
+    status: "exact",
+    runtime: {
+      version: "0.84.2",
+      runtimeVerified: true,
+      payloadVerified: true,
+      supportedControls: ["effort"],
+      providerDefault: "supported",
+      off: "indistinguishable-from-provider-default",
+    },
+    warnings: [],
   };
 }
 
@@ -296,6 +336,27 @@ function cleanEq(a: ModelMetaOverride | undefined, b: ModelMetaOverride | undefi
 }
 
 describe("buildFormItems", () => {
+  test("shows ultra opt-in only for an advertised exact-model decision", () => {
+    const scope = { kind: "model" as const, modelId: "gpt-5.6-sol" };
+    const input = baseInput({
+      scope,
+      models: [scope.modelId],
+      thinkingProjections: { [scope.modelId]: ultraDecision() },
+    });
+
+    expect(buildFormItems(input, scope, {}).some((item) => item.id === FORM_ITEM_ID.thinkingOptIn)).toBe(true);
+    expect(
+      buildFormItems(input, { kind: "provider" }, {}).some(
+        (item) => item.id === FORM_ITEM_ID.thinkingOptIn,
+      ),
+    ).toBe(false);
+    expect(
+      buildFormItems(input, { kind: "model", modelId: "gpt-*" }, {}).some(
+        (item) => item.id === FORM_ITEM_ID.thinkingOptIn,
+      ),
+    ).toBe(false);
+  });
+
   test("emits the canonical item order", () => {
     const ids = buildFormItems(baseInput(), { kind: "provider" }, {}).map((i) => i.id);
     expect(ids).toEqual([

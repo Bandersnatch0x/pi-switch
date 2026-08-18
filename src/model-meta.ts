@@ -208,18 +208,29 @@ export function matchExactModelOverride(
   modelOverrides: Record<string, ModelMetaOverride> | undefined,
   modelId: string | undefined,
 ): { key: string; modelMeta: ModelMetaOverride | undefined } | undefined {
+  const match = matchExactModelOverrideEntry(modelOverrides, modelId);
+  return match
+    ? { key: match.key, modelMeta: cleanModelMeta(match.entry) }
+    : undefined;
+}
+
+/** Pick a raw exact model entry (case-insensitive), preserving tuple/profile fields. */
+export function matchExactModelOverrideEntry<T>(
+  modelOverrides: Record<string, T> | undefined,
+  modelId: string | undefined,
+): { key: string; entry: T } | undefined {
   if (!modelOverrides || typeof modelOverrides !== "object") return undefined;
   const id = modelId?.trim();
   if (!id) return undefined;
 
   if (Object.prototype.hasOwnProperty.call(modelOverrides, id)) {
-    return { key: id, modelMeta: cleanModelMeta(modelOverrides[id]) };
+    return { key: id, entry: modelOverrides[id]! };
   }
 
   const ci = Object.entries(modelOverrides).find(
     ([key]) => key.toLowerCase() === id.toLowerCase(),
-  );
-  return ci ? { key: ci[0], modelMeta: cleanModelMeta(ci[1]) } : undefined;
+  ) as [string, T] | undefined;
+  return ci ? { key: ci[0], entry: ci[1] } : undefined;
 }
 
 export interface ModelMetaLayers {

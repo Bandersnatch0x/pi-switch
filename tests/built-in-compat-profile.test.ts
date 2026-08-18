@@ -175,7 +175,7 @@ describe("resolveRegistrationCapability + built-in", () => {
       modelId: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://api.deepseek.com",
-      userMeta: { maxTokens: 32_000 },
+      userMeta: { maxTokens: 32_000, reasoning: true },
     });
     expect(full.maxTokensUnresolved).toBe(false);
     expect(full.meta?.maxTokens).toBe(32_000);
@@ -225,7 +225,7 @@ describe("buildProviderConfig + built-in registration", () => {
     const cfg = buildProviderConfig(
       mk({ id: "ds", appType: "hermes", api: "openai-completions" }),
       ["deepseek-v4-flash"],
-      { rules: [], modelMeta: { maxTokens: 32_000 } },
+      { rules: [], modelMeta: { maxTokens: 32_000, reasoning: true } },
     );
     const m = (cfg?.models as any[])[0];
     expect(m).toBeDefined();

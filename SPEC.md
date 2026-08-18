@@ -160,7 +160,7 @@ pi-switch/
 | 依赖 | 用途 |
 |------|------|
 | `@earendil-works/pi-coding-agent` | peer：ExtensionAPI |
-| `@earendil-works/pi-tui` | peer：三级选择器自定义 TUI（`0.81.1`） |
+| `@earendil-works/pi-tui` | peer：三级选择器自定义 TUI（已验证 `0.81.1` / `0.84.2`） |
 | 系统 `sqlite3` CLI | 读 DB（**不用 bun:sqlite**） |
 | 无强制 runtime dep | headers / 解析自实现 |
 
@@ -360,7 +360,7 @@ v0.1 **不包含**：
 | `/ps-config` | 主流程：重读 DB → 快照 → tab → provider → model（pin/recent） |
 | `/ps` | 快速切换：pin + recent 合并去重一屏直达（≤10 条；失效/不可切换条目静默过滤） |
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
-| `/ps-override` | 为 Provider 设置 modelMeta 覆写（TUI SettingsList 表单；非交互退到串接弹窗）；预设：中转兼容 / 完整推理；默认编辑当前选中模型，可在子菜单切 provider 级 / 其他模型 / glob |
+| `/ps-override` | 为 Provider 设置 modelMeta 覆写（TUI SettingsList 表单；非交互退到串接弹窗）；预设：中转兼容 / 完整推理；默认编辑当前选中模型，可在子菜单切 provider 级 / 其他模型 / glob；仅当 exact-model 的共享 profile 广告 `ultra` 时提供有损 `Pi max -> provider ultra` opt-in |
 | `/ps-doctor` | 结构化体检：PASS/WARN/FAIL + 修复建议 |
 
 ### 8.2 渐进三级选择（类型 → 名称 → 模型）
@@ -463,17 +463,41 @@ session_start(startup | resume | fork | reload)
   },
   "defaultModelMeta": { "reasoning": false },
   "providerOverrides": {
-    "448d0e64-...": {
-      "label": "sbai",
-      "fingerprint": "codex",
-      "headers": {
-        "User-Agent": "codex_cli_rs/0.144.0 (Windows 10.0; x64) Terminal"
-      },
-      "modelMeta": { "reasoning": false },
-      "modelOverrides": {
-        "glm-4.6":    { "reasoning": false, "maxTokens": 8192 },
-        "gpt-5*":     { "reasoning": true },
-        "*sonnet*":   { "contextWindow": 200000 }
+    "codex": {
+      "448d0e64-...": {
+        "label": "sbai",
+        "fingerprint": "codex",
+        "headers": {
+          "User-Agent": "codex_cli_rs/0.144.0 (Windows 10.0; x64) Terminal"
+        },
+        "modelMeta": { "reasoning": false },
+        "modelOverrides": {
+          "glm-4.6": {
+            "reasoning": false,
+            "maxTokens": 8192,
+            "reasoningProfile": {
+              "profileVersion": "relay-contract/v1",
+              "control": { "type": "toggle" },
+              "variants": [
+                {
+                  "name": "off",
+                  "native": { "type": "toggle", "enabled": false },
+                  "piLevel": "off",
+                  "effectiveLevel": "off"
+                },
+                {
+                  "name": "high",
+                  "native": { "type": "toggle", "enabled": true },
+                  "piLevel": "high",
+                  "effectiveLevel": "high"
+                }
+              ],
+              "observedAt": "2026-08-18T00:00:00.000Z"
+            }
+          },
+          "gpt-5*":     { "reasoning": true },
+          "*sonnet*":   { "contextWindow": 200000 }
+        }
       }
     }
   },
@@ -484,8 +508,10 @@ session_start(startup | resume | fork | reload)
 }
 ```
 
-- `providerOverrides` 以 **dbId** 为键；`label` 仅人读，不参与匹配。
-- `providerOverrides[*].modelMeta` 作用域为该 Provider 全部模型；`modelOverrides[modelId]` 作用域为单个模型。键可为确切 id 或 glob（`gpt-5*` / `*sonnet*`），最具体的 glob 生效。合并顺序：`defaultModelMeta ⊕ provider.modelMeta ⊕ provider.modelOverrides[id]`（后者逐字段覆盖，未设字段不会抹除下层）。
+- canonical `providerOverrides` 结构为 `<appType>.<dbId>`；`label` 仅人读，不参与匹配。旧的顶层 dbId 形式仅兼容读取，后续写入会归并到 canonical 层。
+- `providerOverrides.<appType>.<dbId>.modelMeta` 作用域为该 Provider 全部模型；`modelOverrides[modelId]` 作用域为单个模型。键可为确切 id 或 glob（`gpt-5*` / `*sonnet*`），最具体的 glob 生效。合并顺序：`defaultModelMeta ⊕ provider.modelMeta ⊕ provider.modelOverrides[id]`（后者逐字段覆盖，未设字段不会抹除下层）。
+- `reasoningProfile` 只允许位于 `providerOverrides.<appType>.<dbId>.modelOverrides.<exact-model-id>`；default/provider/glob 作用域必须拒绝。tuple 与 `source=user` 由该作用域生成。来源优先级为：确切用户 profile > Provider 快照 metadata/catalog > reviewed built-in。profile variant 可完整表达 `effort`、`toggle`、`budget_tokens`、`composite`；Codex catalog 的 `{ value }` 仅是 effort 简写。
+- `PiThinkingRuntimeCapability` 必须满足 `payloadVerified ⇒ runtimeVerified`。已评审 Pi 版本遇到不支持的 tuple/control 时诊断为 `unsupported-runtime`；未评审版本为 `unverified`。当前 payload fixture 覆盖 Pi `0.81.1` 与 `0.84.2`。
 - `tabs` 只影响排序；DB 多出的类型仍显示在末尾。
 - **无 `pageSize`**：三级选择器用可滚动列表 + `/` 搜索，**不**做分页/跳页（旧配置中的 `pageSize` 忽略）。
 - `pins` / `recent` / `recentLimit`：仅本地快捷，不引入 expose 配置中心。

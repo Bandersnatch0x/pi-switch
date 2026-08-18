@@ -17,6 +17,7 @@ export type ProviderSnapshotIo = {
   home: string;
   execFileSync: DbReaderDeps["execFileSync"];
   existsSync: (path: string) => boolean;
+  now?: () => number;
 };
 
 export type ProviderSnapshotResult = {
@@ -38,12 +39,14 @@ export class ProviderSnapshot {
       existsSync: this.io.existsSync,
       sqlite3Path: this.sqlite3Path,
       dbPath: defaultDbPath(this.io.home),
+      now: this.io.now,
     });
     if (result.ok) {
       this.lastGoodProviders = result.providers;
       return { providers: result.providers, capabilities: result.capabilities };
     }
     if (this.lastGoodProviders.length) {
+      this.lastGoodProviders = this.lastGoodProviders.map(markProviderSnapshotStale);
       return {
         providers: this.lastGoodProviders,
         error: result.error ?? "read failed; using last good snapshot",
@@ -56,4 +59,15 @@ export class ProviderSnapshot {
       capabilities: result.capabilities,
     };
   }
+}
+
+function markProviderSnapshotStale(provider: CcProvider): CcProvider {
+  if (!provider.reasoningCatalog || provider.reasoningCatalog.stale) return provider;
+  return {
+    ...provider,
+    reasoningCatalog: {
+      ...provider.reasoningCatalog,
+      stale: true,
+    },
+  };
 }

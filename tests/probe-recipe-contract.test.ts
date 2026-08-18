@@ -118,14 +118,28 @@ function effectiveFromTarget(target: ProbeTarget) {
   };
 }
 
-function effectiveFromConfig(document: Record<string, unknown>) {
+function providerForRecipe(recipeId: RepairRecipeId): CcProvider {
+  return recipeId === "gemini-tool-compat"
+    ? {
+        ...provider,
+        appType: "gemini",
+        api: "google-generative-ai",
+        baseUrl: "https://relay.example/v1",
+      }
+    : provider;
+}
+
+function effectiveFromConfig(
+  document: Record<string, unknown>,
+  targetProvider: CcProvider,
+) {
   const config = document as unknown as PiSwitchConfig;
   const views = new ProviderConfigViews(() => config);
-  const override = resolveProviderOverride(config.providerOverrides, provider);
-  const compatibility = views.effectiveCompatibilityFor(provider);
+  const override = resolveProviderOverride(config.providerOverrides, targetProvider);
+  const compatibility = views.effectiveCompatibilityFor(targetProvider);
 
   return {
-    reasoning: views.modelMetaFor(provider, MODEL_ID)?.reasoning,
+    reasoning: views.modelMetaFor(targetProvider, MODEL_ID)?.reasoning,
     fingerprint: override?.fingerprint,
     claudeCodeCompat: compatibility.claudeCodeCompat,
     geminiToolCompat: compatibility.geminiToolCompat,
@@ -198,13 +212,16 @@ describe("Repair candidate adapters", () => {
         input.target,
         match.patch,
       );
+      const targetProvider = providerForRecipe(input.recipeId);
       const document = applyRepairCandidateToConfigDocument(
         {},
-        provider,
+        targetProvider,
         match.patch,
       );
 
-      expect(effectiveFromConfig(document)).toEqual(effectiveFromTarget(target));
+      expect(effectiveFromConfig(document, targetProvider)).toEqual(
+        effectiveFromTarget(target),
+      );
     },
   );
 

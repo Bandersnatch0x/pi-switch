@@ -9,7 +9,6 @@ import {
   applyClaudeCodeCompatToPayload,
   resolveDeviceId,
   resolveSystemPrefixText,
-  shouldApplyClaudeCodeCompat,
   type ClaudeCodeCompatConfig,
 } from "../src/compat/claude-code.ts";
 import type { CcProvider } from "../src/types.ts";
@@ -104,14 +103,10 @@ function resolveCompatTarget(rt: Runtime): {
     };
   }
 
-  const force = session.compatibility.claudeCodeCompat;
-  const apply = shouldApplyClaudeCodeCompat({
-    mode: config.mode,
-    hosts: config.hosts,
-    api: provider.api,
-    baseUrl: provider.baseUrl,
-    providerForce: typeof force === "boolean" ? force : null,
-  });
+  // Runtime owns the complete effective interpretation (global mode/hosts,
+  // provider override, and API gating). Hooks consume that value directly so
+  // they cannot drift from Probe or registration behavior.
+  const apply = session.compatibility.claudeCodeCompat === true;
   return { apply, config, provider };
 }
 

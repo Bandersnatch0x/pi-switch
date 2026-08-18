@@ -4,6 +4,7 @@ import { installGeminiToolCompat } from "../extensions/gemini-tool-compat.ts";
 import { Runtime, type NodeIo } from "../extensions/runtime.ts";
 import { isModelsDevMiss, makeMiss, MODELS_DEV_API_URL } from "../src/capabilities/models-dev.ts";
 import { resolveRegistrationCapability } from "../src/capabilities/registration.ts";
+import { parseCodexReasoningCatalog } from "../src/capabilities/reasoning-profile-registry.ts";
 import { piSwitchCachePath } from "../src/paths.ts";
 import type { CcProvider } from "../src/types.ts";
 
@@ -47,6 +48,7 @@ function makeIo(opts?: {
   home?: string;
   fs?: ReturnType<typeof memFs>;
   fetchJson?: (url: string) => Promise<unknown>;
+  piVersion?: string;
 }): { rt: Runtime; fs: ReturnType<typeof memFs>; fetchCount: { n: number } } {
   const home = opts?.home ?? "/home/test";
   const fs = opts?.fs ?? memFs();
@@ -64,7 +66,7 @@ function makeIo(opts?: {
     renameSync: fs.renameSync as NodeIo["renameSync"],
     unlinkSync: fs.unlinkSync as NodeIo["unlinkSync"],
     randomUUID: () => "test-0000-0000-0000-uuid",
-    resolvePackageVersion: () => undefined,
+    resolvePackageVersion: () => opts?.piVersion,
     snapshotPath: "/dev/null",
     probeHttp: async () => false,
     fetchJson: async (url) => {
@@ -75,6 +77,41 @@ function makeIo(opts?: {
     home,
   };
   return { rt: new Runtime(io), fs, fetchCount };
+}
+
+function catalogProvider(): CcProvider {
+  const parsed = parseCodexReasoningCatalog(
+    {
+      modelCatalog: {
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            default_reasoning_level: "low",
+            supported_reasoning_levels: [
+              { effort: "low" },
+              { effort: "medium" },
+              { effort: "ultra" },
+            ],
+          },
+        ],
+      },
+    },
+    "2026-08-17T00:00:00.000Z",
+  );
+  return {
+    id: "codex-catalog",
+    piName: "codex-catalog",
+    displayName: "Codex Catalog",
+    appType: "codex",
+    api: "openai-responses",
+    baseUrl: "https://relay.example/v1",
+    apiKey: "key",
+    authHeader: true,
+    configModels: ["gpt-5.6-sol"],
+    reasoningCatalog: parsed.catalog,
+    meta: {},
+    isCurrentInCc: false,
+  };
 }
 
 describe("Runtime capabilities cache (issue #39)", () => {
@@ -239,6 +276,97 @@ describe("Runtime capabilities cache (issue #39)", () => {
     });
     await rt.refreshCapabilities(["x"]);
     expect(urls).toEqual([MODELS_DEV_API_URL]);
+  });
+});
+
+describe("Runtime reasoning profile integration", () => {
+  test.each(["0.81.1", "0.84.2"])(
+    "Pi %s consumes the catalog profile without synthesizing ultra",
+    (piVersion) => {
+      const { rt } = makeIo({ piVersion });
+      rt.config = {
+        defaultModelMeta: { maxTokens: 32_000, reasoning: true },
+      };
+
+      const decision = rt.registration.decisionFor(
+        catalogProvider(),
+        "gpt-5.6-sol",
+      );
+
+      expect(decision.thinkingProjection).toMatchObject({
+        source: "codex-model-catalog",
+        status: "exact",
+        map: {
+          low: "low",
+          medium: "medium",
+          max: null,
+        },
+      });
+      expect(decision.thinkingProjection?.unrepresented).toEqual([
+        { type: "effort", value: "ultra" },
+      ]);
+      expect(
+        decision.thinkingProjection?.projections.find(
+          (item) => item.intent === "provider-default",
+        ),
+      ).toMatchObject({
+        status: "provider-default",
+        native: { type: "effort", value: "low" },
+      });
+      expect(decision.meta?.thinkingLevelMap?.max).toBeNull();
+    },
+  );
+
+  test("unknown Pi versions keep the same profile diagnostic-only", () => {
+    const { rt } = makeIo();
+    rt.config = {
+      defaultModelMeta: { maxTokens: 32_000, reasoning: true },
+    };
+
+    const decision = rt.registration.decisionFor(
+      catalogProvider(),
+      "gpt-5.6-sol",
+    );
+
+    expect(decision.thinkingProjection?.status).toBe("unverified");
+    expect(decision.thinkingProjection?.map).toBeUndefined();
+    expect(decision.meta?.thinkingLevelMap).toBeUndefined();
+  });
+
+  test("verified Gemini budgets remain selectable and keep off distinct from active levels", () => {
+    const { rt } = makeIo({ piVersion: "0.81.1" });
+    rt.config = {
+      defaultModelMeta: { maxTokens: 32_000, reasoning: true },
+    };
+    const provider: CcProvider = {
+      id: "gemini",
+      piName: "gemini",
+      displayName: "Gemini",
+      appType: "gemini",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiKey: "key",
+      authHeader: false,
+      configModels: ["gemini-2.5-pro"],
+      meta: {},
+      isCurrentInCc: false,
+    };
+
+    const decision = rt.registration.decisionFor(provider, "gemini-2.5-pro");
+    expect(decision.thinkingProjection?.status).toBe("lossy");
+    expect(decision.meta?.thinkingLevelMap).toMatchObject({
+      off: "off",
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+    });
+    expect(
+      decision.thinkingProjection?.projections.find((item) => item.intent === "off"),
+    ).toMatchObject({
+      status: "exact",
+      native: { type: "budget_tokens", tokens: 0 },
+    });
   });
 });
 

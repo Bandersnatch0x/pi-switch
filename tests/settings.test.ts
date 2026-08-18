@@ -707,6 +707,94 @@ describe("per-model modelMeta overrides", () => {
     });
   });
 
+  test("model scope replaces only modelMeta fields and preserves tuple/profile siblings", () => {
+    const reasoningProfile = {
+      profileVersion: "relay-contract/v1",
+      control: { type: "fixed", enabled: true },
+      variants: [],
+      observedAt: "2026-08-18T00:00:00.000Z",
+    };
+    const compat = {
+      api: "openai-completions",
+      supportsReasoningEffort: false,
+    };
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          hermes: {
+            abc: {
+              modelOverrides: {
+                "custom-reasoner": {
+                  reasoning: false,
+                  maxTokens: 1024,
+                  compat,
+                  reasoningProfile,
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    const result = writeModelMetaOverride(
+      { fs, configPath: "/c.json", pid: 7 },
+      { id: "abc", displayName: "relay", appType: "hermes" },
+      { kind: "model", modelId: "custom-reasoner" },
+      { maxTokens: 8192 },
+    );
+
+    expect(result.ok).toBe(true);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(
+      raw.providerOverrides.hermes.abc.modelOverrides["custom-reasoner"],
+    ).toEqual({ maxTokens: 8192, compat, reasoningProfile });
+  });
+
+  test("model scope clear removes modelMeta fields but preserves tuple/profile siblings", () => {
+    const reasoningProfile = {
+      profileVersion: "relay-contract/v1",
+      control: { type: "fixed", enabled: true },
+      variants: [],
+      observedAt: "2026-08-18T00:00:00.000Z",
+    };
+    const compat = {
+      api: "openai-completions",
+      supportsReasoningEffort: false,
+    };
+    const fs = memFs({
+      "/c.json": JSON.stringify({
+        providerOverrides: {
+          hermes: {
+            abc: {
+              modelOverrides: {
+                "custom-reasoner": {
+                  reasoning: false,
+                  maxTokens: 1024,
+                  compat,
+                  reasoningProfile,
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    const result = writeModelMetaOverride(
+      { fs, configPath: "/c.json", pid: 7 },
+      { id: "abc", displayName: "relay", appType: "hermes" },
+      { kind: "model", modelId: "custom-reasoner" },
+      null,
+    );
+
+    expect(result.ok).toBe(true);
+    const raw = JSON.parse(fs.store["/c.json"]);
+    expect(
+      raw.providerOverrides.hermes.abc.modelOverrides["custom-reasoner"],
+    ).toEqual({ compat, reasoningProfile });
+  });
+
   test("model scope writes exact id without rewriting a matching glob", () => {
     // Editing gpt-5-pro must not clobber the broader gpt-5* rule.
     const fs = memFs({

@@ -1,6 +1,11 @@
 import type { BuiltProviderConfig } from "./register.ts";
 import type { ResolvedProviderWireCompat } from "./provider-wire-compat.ts";
 import type { CcProvider, FingerprintPreset } from "./types.ts";
+import type { ThinkingProjectionDecision } from "./capabilities/thinking-projection.ts";
+import {
+  formatThinkingProjectionDetail,
+  thinkingProjectionNeedsWarning,
+} from "./capabilities/thinking-projection-display.ts";
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "api-key",
@@ -58,6 +63,11 @@ export type EffectiveConfigSummary = {
     reasoningProvenance?: "resolved" | "unknown→conservative false";
   };
   providerWireCompat?: EffectiveProviderWireCompatSummary;
+  thinkingProjection?: {
+    status: ThinkingProjectionDecision["status"];
+    warning: boolean;
+    detail: string;
+  };
 };
 
 function redactEndpoint(raw: string): string {
@@ -97,6 +107,8 @@ export function createEffectiveConfigSummary(input: {
   config: BuiltProviderConfig;
   fingerprint?: FingerprintPreset;
   providerWireCompat?: ResolvedProviderWireCompat;
+  /** Shared registration decision; this display layer never re-derives a profile. */
+  thinkingProjection?: ThinkingProjectionDecision;
   /** When true, reasoning was derived as unknown→conservative false (issue #63). */
   reasoningConservative?: boolean;
 }): EffectiveConfigSummary {
@@ -178,6 +190,15 @@ export function createEffectiveConfigSummary(input: {
         : { reasoningProvenance: "resolved" as const }),
     },
     ...(providerWireCompat ? { providerWireCompat } : {}),
+    ...(input.thinkingProjection
+      ? {
+          thinkingProjection: {
+            status: input.thinkingProjection.status,
+            warning: thinkingProjectionNeedsWarning(input.thinkingProjection),
+            detail: formatThinkingProjectionDetail(input.thinkingProjection),
+          },
+        }
+      : {}),
   };
 }
 
@@ -225,6 +246,9 @@ export function formatEffectiveConfigSummary(summary: EffectiveConfigSummary): s
         `providerWireCompat: eager=${wire.supportsEagerToolInputStreaming} cacheOnTools=${wire.supportsCacheControlOnTools} longRetention=${wire.supportsLongCacheRetention} scope=${wire.scope} source=${wire.source}`,
       );
     }
+  }
+  if (summary.thinkingProjection) {
+    lines.push(`thinkingProjection: ${summary.thinkingProjection.detail}`);
   }
   return lines.join("\n");
 }

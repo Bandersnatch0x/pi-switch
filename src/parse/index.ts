@@ -88,7 +88,15 @@ function isOfficialManagedAuth(row: ProviderRow, configRaw: unknown): boolean {
 }
 
 /** Convert one DB row into a CcProvider (never returns null 鈥?failures become parseError). */
-export function parseProviderRow(row: ProviderRow): CcProvider {
+export interface ParseProviderOpts {
+  /** One timestamp per provider-table read, shared by all catalog entries. */
+  observedAt?: string;
+}
+
+export function parseProviderRow(
+  row: ProviderRow,
+  opts: ParseProviderOpts = {},
+): CcProvider {
   const meta = parseMeta(row.meta ?? undefined);
   const apiFormat = asString(meta.apiFormat) ?? asString(meta.api_format);
   const modelsUrl = asString(meta.modelsUrl) ?? asString(meta.models_url);
@@ -113,7 +121,11 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
         core = parseClaude(configRaw, apiFormat);
         break;
       case "codex":
-        core = parseCodex(configRaw, apiFormat);
+        core = parseCodex(
+          configRaw,
+          apiFormat,
+          opts.observedAt ?? new Date().toISOString(),
+        );
         break;
       case "gemini":
         core = parseGemini(configRaw, apiFormat);
@@ -157,6 +169,12 @@ export function parseProviderRow(row: ProviderRow): CcProvider {
     apiKey: core.apiKey,
     authHeader: core.authHeader,
     configModels: core.configModels,
+    ...(core.reasoningCatalog
+      ? { reasoningCatalog: core.reasoningCatalog }
+      : {}),
+    ...(core.capabilityWarnings?.length
+      ? { capabilityWarnings: core.capabilityWarnings }
+      : {}),
     apiFormat,
     meta,
     category: row.category ?? undefined,
