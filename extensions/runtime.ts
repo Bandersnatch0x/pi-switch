@@ -39,6 +39,12 @@ import type {
   ModelsDevCapabilities,
 } from "../src/capabilities/models-dev.ts";
 import type { ResolvedCapabilities } from "../src/capabilities/resolve.ts";
+import { resolveProviderReasoningProfile } from "../src/capabilities/reasoning-profile-registry.ts";
+import { resolvePiThinkingRuntimeCapability } from "../src/capabilities/thinking-runtime.ts";
+import type {
+  PiThinkingRuntimeCapability,
+  ProviderReasoningProfile,
+} from "../src/capabilities/thinking-projection.ts";
 import type { ModelMetaLayers } from "../src/model-meta.ts";
 import type { ModelMetaOverride } from "../src/types.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
@@ -147,8 +153,12 @@ export class Runtime {
       headerVars: () => this.headerVars(),
       debug: () => this.config.debug,
       rejectSink: () => this.rejectSink(),
-      modelMetaFor: (provider, modelId) => this.modelMetaFor(provider, modelId),
+      modelMetaFactsFor: (provider, modelId) =>
+        this.providerViews.registrationModelMetaFor(provider, modelId),
       modelsDevFor: (modelId) => this.modelsDevFor(modelId),
+      piVersion: () => this.piVersion(),
+      thinkingFor: (provider, modelId) =>
+        this.registrationThinkingFor(provider, modelId),
       providerWireCompatFor: (provider) => this.providerWireCompatFor(provider),
       tupleCompatFor: (provider, modelId) => this.tupleCompatFor(provider, modelId),
     });
@@ -364,6 +374,45 @@ export class Runtime {
     });
   }
 
+  /** Resolve provider profile and Pi runtime evidence for registration. */
+  private registrationThinkingFor(
+    provider: CcProvider,
+    modelId: string,
+  ): {
+    profile?: ProviderReasoningProfile;
+    runtime: PiThinkingRuntimeCapability;
+  } {
+    const profile = resolveProviderReasoningProfile(
+      provider,
+      modelId,
+      this.providerViews.reasoningProfileFor(provider, modelId),
+    );
+    const tuple = this.tupleCompatFor(provider, modelId)?.tuple;
+    const modelMeta = this.modelMetaFor(provider, modelId);
+    const anthropic =
+      tuple?.api === "anthropic-messages"
+        ? { forceAdaptiveThinking: tuple.forceAdaptiveThinking }
+        : undefined;
+    const chat =
+      tuple?.api === "openai-completions"
+        ? {
+            thinkingFormat: tuple.thinkingFormat ?? modelMeta?.thinkingFormat,
+            supportsReasoningEffort: tuple.supportsReasoningEffort,
+          }
+        : modelMeta?.thinkingFormat
+          ? { thinkingFormat: modelMeta.thinkingFormat }
+          : undefined;
+    return {
+      ...(profile ? { profile } : {}),
+      runtime: resolvePiThinkingRuntimeCapability({
+        version: this.piVersion(),
+        profile,
+        anthropic,
+        chat,
+      }),
+    };
+  }
+
   /**
    * Collect the full DoctorInput fact set: reload config/rules, force a
    * fingerprint re-probe, refresh the selected model's capability fact when
@@ -480,9 +529,9 @@ export class Runtime {
   }
 
   /**
-   * Registration/display effective modelMeta:
+   * Display-facing effective modelMeta:
    *   built-in compat < defaultModelMeta < provider.modelMeta < modelOverrides
-   * (user wins per field). Same compat resolveRegistrationMeta applies.
+   * (user wins per field). Registration consumes registrationDecisionFor.
    * For user-config layers only, use modelMetaLayers(...).effective.
    */
   modelMetaFor(

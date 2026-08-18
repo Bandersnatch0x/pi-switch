@@ -32,7 +32,7 @@ function deps(
     headerVars: () => ({}),
     debug: () => false,
     rejectSink: () => undefined,
-    modelMetaFor: () => undefined,
+    modelMetaFactsFor: () => ({ userMeta: undefined, userMapScopes: {} }),
     modelsDevFor: () => undefined,
     providerWireCompatFor: () => undefined,
     tupleCompatFor: () => undefined,
@@ -47,7 +47,9 @@ describe("RegistrationOperations", () => {
       reasoning: true,
     };
     const registration = createRegistrationOperations(
-      deps({ modelMetaFor: () => modelMeta }),
+      deps({
+        modelMetaFactsFor: () => ({ userMeta: modelMeta, userMapScopes: {} }),
+      }),
     );
     const currentProvider = provider();
 
@@ -92,7 +94,10 @@ describe("RegistrationOperations", () => {
         headerVars: () => vars,
         debug: () => debug,
         rejectSink: () => rejectSink,
-        modelMetaFor: () => modelMeta,
+        modelMetaFactsFor: (_provider, modelId) => ({
+          userMeta: modelId === "gpt-5" ? modelMeta : undefined,
+          userMapScopes: {},
+        }),
         modelsDevFor: () => ({
           maxTokens: modelMaxTokens,
           observedAt: "2026-08-17",
@@ -114,8 +119,8 @@ describe("RegistrationOperations", () => {
       onReject: rejectSink,
       providerWireCompat,
     });
-    expect(first.modelMetaFor?.("gpt-5")).toEqual({ maxTokens: 16_000 });
-    expect(first.modelsDevFor?.("gpt-5")).toMatchObject({ maxTokens: 24_000 });
+    expect(first.registrationDecisionFor?.("gpt-5").meta?.maxTokens).toBe(16_000);
+    expect(first.registrationDecisionFor?.("models-dev-only").meta?.maxTokens).toBe(24_000);
     expect(first.tupleCompatFor?.("gpt-5")).toEqual(tuple);
 
     rules = [
@@ -143,8 +148,8 @@ describe("RegistrationOperations", () => {
     expect(reloaded.overrideHeaders).toEqual({ "User-Agent": "codex-cli/2.0" });
     expect(reloaded.providerWireCompat).toBe(providerWireCompat);
     expect(reloaded.tupleCompatFor?.("gpt-5")).toEqual(tuple);
-    expect(reloaded.modelMetaFor?.("gpt-5")).toEqual(modelMeta);
-    expect(reloaded.modelsDevFor?.("gpt-5")).toMatchObject({ maxTokens: 64_000 });
+    expect(reloaded.registrationDecisionFor?.("gpt-5").meta?.maxTokens).toBe(48_000);
+    expect(reloaded.registrationDecisionFor?.("models-dev-only").meta?.maxTokens).toBe(64_000);
   });
 
   test("executes debug rejection behavior without exposing credentials or header values", () => {
@@ -163,7 +168,10 @@ describe("RegistrationOperations", () => {
           }),
           rejectSink: () => (name, reason) =>
             console.warn(`[pi-switch] header rejected: ${name} (${reason})`),
-          modelMetaFor: () => ({ maxTokens: 16_000 }),
+          modelMetaFactsFor: () => ({
+            userMeta: { maxTokens: 16_000 },
+            userMapScopes: {},
+          }),
         }),
       );
 

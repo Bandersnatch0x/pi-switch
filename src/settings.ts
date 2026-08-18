@@ -6,6 +6,7 @@ import type {
   PiSwitchSelection,
   SessionModelStrategy,
 } from "./types.ts";
+import type { UserReasoningProfileOverride } from "./capabilities/thinking-projection.ts";
 import {
   isThinkingFormat,
   isThinkingLevel,
@@ -15,7 +16,11 @@ import {
   THINKING_LEVELS,
 } from "./types.ts";
 import type { CcProvider } from "./types.ts";
-import { cleanModelMeta, matchExactModelOverride } from "./model-meta.ts";
+import {
+  cleanModelMeta,
+  matchExactModelOverride,
+  matchExactModelOverrideEntry,
+} from "./model-meta.ts";
 import { parsePins, parseRecent } from "./pins-recent.ts";
 import { parseClaudeCodeCompatConfig } from "./compat/claude-code.ts";
 import { parseGeminiToolCompatConfig } from "./compat/gemini-tool-compat.ts";
@@ -39,6 +44,15 @@ import {
   type ConfigEditResult,
   type ConfigWriteTarget,
 } from "./config-edit.ts";
+import {
+  applyExactModelThinkingOptIn,
+  type ExactModelThinkingOptInRequest,
+} from "./capabilities/thinking-opt-in.ts";
+import {
+  normalizeUserReasoningProfileOverride,
+  providerEndpointTupleKey,
+  type ThinkingProjectionDecision,
+} from "./capabilities/thinking-projection.ts";
 
 /**
  * Minimum supported Pi runtime (issue #11 D1, compat-window-policy).
@@ -160,6 +174,7 @@ const PROVIDER_OVERRIDE_ENTRY_KEYS = new Set([
   "headers",
   "modelMeta",
   "modelOverrides",
+  "reasoningProfile",
   "compat",
   "claudeCodeCompat",
   "geminiToolCompat",
@@ -189,13 +204,38 @@ function looksLikeExactModelTupleCompat(c: Record<string, unknown>): boolean {
 function parseModelOverrideEntry(
   raw: Record<string, unknown>,
   path: string,
+  modelId: string,
 ): ModelOverrideEntry {
   const meta = parseModelMeta(raw) ?? {};
   const entry: ModelOverrideEntry = { ...meta };
   if (hasOwn(raw, "compat")) {
     entry.compat = parseModelTupleCompat(raw.compat, `${path}.compat`);
   }
+  if (hasOwn(raw, "reasoningProfile")) {
+    if (modelId.includes("*")) {
+      throw new Error(
+        `invalid ${path}.reasoningProfile scope: reasoning profiles require an exact model id`,
+      );
+    }
+    try {
+      entry.reasoningProfile = normalizeUserReasoningProfileOverride(
+        raw.reasoningProfile,
+      );
+    } catch (error) {
+      throw new Error(
+        `invalid ${path}.reasoningProfile: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   return entry;
+}
+
+function rejectBroadReasoningProfile(value: unknown, path: string): void {
+  if (isPlainObject(value) && hasOwn(value, "reasoningProfile")) {
+    throw new Error(
+      `invalid ${path}.reasoningProfile scope: reasoning profiles belong under an exact modelOverrides.<model> entry`,
+    );
+  }
 }
 
 function parseProviderOverrideEntry(
@@ -204,6 +244,12 @@ function parseProviderOverrideEntry(
 ): Record<string, unknown> {
   // modelMeta must not host wire/tuple compat.
   rejectNestedWireCompat(raw.modelMeta, `${path}.modelMeta`);
+  rejectBroadReasoningProfile(raw.modelMeta, `${path}.modelMeta`);
+  if (hasOwn(raw, "reasoningProfile")) {
+    throw new Error(
+      `invalid ${path}.reasoningProfile scope: reasoning profiles belong under an exact modelOverrides.<model> entry`,
+    );
+  }
 
   const next = { ...raw };
   if (isPlainObject(raw.modelOverrides)) {
@@ -213,6 +259,7 @@ function parseProviderOverrideEntry(
       models[modelId] = parseModelOverrideEntry(
         modelRaw,
         `${path}.modelOverrides.${modelId}`,
+        modelId,
       );
     }
     next.modelOverrides = models;
@@ -282,6 +329,7 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
     );
   }
   rejectNestedWireCompat(raw.defaultModelMeta, "defaultModelMeta");
+  rejectBroadReasoningProfile(raw.defaultModelMeta, "defaultModelMeta");
   const varsRaw =
     raw.vars && typeof raw.vars === "object" && !Array.isArray(raw.vars)
       ? (raw.vars as Record<string, unknown>)
@@ -333,7 +381,7 @@ export type MutableOverrideEntry = {
   fingerprint?: FingerprintPreset;
   headers?: Record<string, string>;
   modelMeta?: ModelMetaOverride;
-  modelOverrides?: Record<string, ModelMetaOverride>;
+  modelOverrides?: Record<string, ModelOverrideEntry>;
   compat?: ProviderWireCompat;
   /** Force Claude Code compat on/off (provider scope; written by Repair Recipe2). */
   claudeCodeCompat?: boolean;
@@ -405,6 +453,49 @@ function validateModelMetaWrite(
     };
   }
   return { ok: true };
+}
+
+/** Persist or clear one validated exact-model reasoning profile definition. */
+export function writeExactModelReasoningProfile(
+  target: ConfigWriteTarget,
+  provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
+  modelId: string,
+  profile: UserReasoningProfileOverride | null,
+): ConfigEditResult {
+  const id = modelId.trim();
+  if (!id || id.includes("*")) {
+    return {
+      ok: false,
+      error: "reasoning profile requires a non-empty exact model id",
+    };
+  }
+  let normalized: UserReasoningProfileOverride | undefined;
+  if (profile) {
+    try {
+      normalized = normalizeUserReasoningProfileOverride(profile);
+    } catch (error) {
+      return configEditError(
+        `invalid reasoning profile: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return editConfig(target, (raw) =>
+    updateOverrideEntry(raw, provider, (entry) => {
+      const prev = { ...entry };
+      const map = { ...(prev.modelOverrides ?? {}) };
+      const match = matchExactModelOverrideEntry(map, id);
+      const key = match?.key ?? id;
+      const existing = { ...(match?.entry ?? {}) };
+      if (normalized) existing.reasoningProfile = normalized;
+      else delete existing.reasoningProfile;
+      if (Object.keys(existing).length) map[key] = existing;
+      else delete map[key];
+      if (Object.keys(map).length) prev.modelOverrides = map;
+      else delete prev.modelOverrides;
+      if (normalized) prev.label = prev.label ?? provider.displayName;
+      return prev;
+    }),
+  );
 }
 
 /** An override entry is only worth keeping when it carries real config. */
@@ -512,16 +603,75 @@ export function writeModelMetaOverride(
       } else {
         const modelId = scope.modelId.trim();
         const map = { ...(prev.modelOverrides ?? {}) };
-        const key = matchExactModelOverride(map, modelId)?.key ?? modelId;
+        const match = matchExactModelOverrideEntry(map, modelId);
+        const key = match?.key ?? modelId;
         const cleaned = modelMeta ? cleanModelMeta(modelMeta) : undefined;
-        if (!cleaned) delete map[key];
-        else map[key] = cleaned;
+        const next: ModelOverrideEntry = {};
+        if (match?.entry.compat) next.compat = match.entry.compat;
+        if (match?.entry.reasoningProfile) {
+          next.reasoningProfile = match.entry.reasoningProfile;
+        }
+        if (cleaned) Object.assign(next, cleaned);
+        if (Object.keys(next).length) map[key] = next;
+        else delete map[key];
         if (Object.keys(map).length) prev.modelOverrides = map;
         else delete prev.modelOverrides;
       }
       if (modelMeta) prev.label = prev.label ?? provider.displayName;
       return prev;
     }),
+  );
+}
+
+/**
+ * Persist the reviewed lossy max -> ultra opt-in. The ordinary writer remains
+ * permissive for legacy raw maps; this path requires fresh tuple/profile
+ * authority and is the only path used by the UI-generated opt-in.
+ */
+export function writeExactModelThinkingOptIn(
+  target: ConfigWriteTarget,
+  provider: Pick<
+    CcProvider,
+    "id" | "displayName" | "appType" | "api" | "baseUrl"
+  >,
+  scope: ModelMetaScope,
+  modelMeta: ModelMetaOverride,
+  decision: ThinkingProjectionDecision | undefined,
+  request: ExactModelThinkingOptInRequest,
+): ConfigEditResult {
+  if (!provider.appType || !provider.api || !provider.baseUrl || !decision) {
+    return { ok: false, error: "thinking opt-in requires a complete provider tuple" };
+  }
+  let tupleKey: string;
+  try {
+    tupleKey = providerEndpointTupleKey({
+      appType: provider.appType,
+      providerId: provider.id,
+      api: provider.api,
+      baseUrl: provider.baseUrl,
+      modelId: scope.kind === "model" ? scope.modelId : decision.tuple.modelId,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: `invalid thinking opt-in tuple: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (tupleKey !== decision.tupleKey) {
+    return { ok: false, error: "thinking decision does not match the provider tuple" };
+  }
+  const applied = applyExactModelThinkingOptIn(
+    modelMeta,
+    scope,
+    decision,
+    request,
+  );
+  if (!applied.ok) return applied;
+  return writeModelMetaOverride(
+    target,
+    provider,
+    scope,
+    applied.modelMeta,
   );
 }
 

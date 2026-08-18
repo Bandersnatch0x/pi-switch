@@ -146,10 +146,13 @@ function makeRt(
     debug: () => false,
     rejectSink: () => undefined,
     // Provide maxTokens so #63 registration gate admits the probe model.
-    modelMetaFor: () =>
-      typeof opts.reasoning === "boolean"
-        ? { reasoning: opts.reasoning, maxTokens: 8_192 }
-        : { maxTokens: 8_192 },
+    modelMetaFactsFor: () => ({
+      userMeta:
+        typeof opts.reasoning === "boolean"
+          ? { reasoning: opts.reasoning, maxTokens: 8_192 }
+          : { maxTokens: 8_192 },
+      userMapScopes: {},
+    }),
     modelsDevFor: () =>
       typeof opts.modelsDevReasoning === "boolean"
         ? {

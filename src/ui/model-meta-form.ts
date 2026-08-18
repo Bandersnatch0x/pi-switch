@@ -33,6 +33,12 @@ import {
 } from "../model-meta.ts";
 import type { TrustedMaxTokensHint } from "../capabilities/resolve.ts";
 import {
+  activeExactModelThinkingOptIn,
+  exactModelThinkingOptInFor,
+  toggleExactModelThinkingOptIn,
+  type ExactModelThinkingOptInRequest,
+} from "../capabilities/thinking-opt-in.ts";
+import {
   builtInCompatForModelId,
   hasBuiltInCompatProfile,
 } from "../compat/built-in-compat-profile.ts";
@@ -56,6 +62,7 @@ export const FORM_ITEM_ID = {
   contextWindow: "contextWindow",
   maxTokens: "maxTokens",
   thinkingFormat: "thinkingFormat",
+  thinkingOptIn: "thinkingOptIn",
   useBuiltInCompat: "useBuiltInCompat",
   clearScope: "clearScope",
   clearAll: "clearAll",
@@ -244,6 +251,18 @@ export function maxTokensHintForScope(
 ): TrustedMaxTokensHint | undefined {
   if (scope.kind !== "model") return undefined;
   return input.maxTokensHints?.[scope.modelId];
+}
+
+/** The UI never inspects advertised values directly; this consumes the shared validator. */
+export function thinkingOptInForScope(
+  input: ModelMetaDialogInput,
+  scope: ModelMetaScope,
+): ExactModelThinkingOptInRequest | undefined {
+  if (scope.kind !== "model") return undefined;
+  return exactModelThinkingOptInFor(
+    scope,
+    input.thinkingProjections?.[scope.modelId],
+  );
 }
 
 /* ---------------------------------------------------- count submenu items */
@@ -462,6 +481,18 @@ export function buildFormItems(
     description: "thinking 块解析格式（内置 profile 可提供 deepseek/qwen 等）",
   });
 
+  if (thinkingOptInForScope(input, scope)) {
+    items.push({
+      id: FORM_ITEM_ID.thinkingOptIn,
+      label: "Provider ultra",
+      currentValue:
+        draft.thinkingLevelMap?.max === "ultra"
+          ? "已启用（Pi max -> ultra）"
+          : "可用（Pi max -> provider ultra）",
+      description: "精确模型 opt-in；有损替换 Pi max，provider 原生 max 将不可选",
+    });
+  }
+
   if (shouldShowBuiltInCompatRow(scope, draft, inherited)) {
     items.push({
       id: FORM_ITEM_ID.useBuiltInCompat,
@@ -550,6 +581,7 @@ export async function runModelMetaForm(
   let scope: ModelMetaScope = input.scope;
   let stored = storedFor(input, scope);
   let draft: ModelMetaOverride = { ...(stored ?? {}) };
+  let requestedThinkingOptIn: ExactModelThinkingOptInRequest | undefined;
 
   const dirty = (): boolean => !sameMeta(draft, stored);
 
@@ -855,16 +887,19 @@ export async function runModelMetaForm(
             scope = { kind: "model", modelId: id };
             stored = storedFor(input, scope);
             draft = { ...(stored ?? {}) };
+            requestedThinkingOptIn = undefined;
           }
         }
       } else if (r.kind === "provider") {
         scope = { kind: "provider" };
         stored = storedFor(input, scope);
         draft = { ...(stored ?? {}) };
+        requestedThinkingOptIn = undefined;
       } else {
         scope = { kind: "model", modelId: r.modelId };
         stored = storedFor(input, scope);
         draft = { ...(stored ?? {}) };
+        requestedThinkingOptIn = undefined;
       }
       selIdx = 0;
       closeSubmenu();
@@ -893,6 +928,24 @@ export async function runModelMetaForm(
         case FORM_ITEM_ID.thinkingFormat:
           openThinkingSubmenu();
           return;
+        case FORM_ITEM_ID.thinkingOptIn: {
+          const request = thinkingOptInForScope(input, scope);
+          if (!request || scope.kind !== "model") return;
+          const toggled = toggleExactModelThinkingOptIn(
+            draft,
+            scope,
+            input.thinkingProjections?.[scope.modelId],
+            request,
+          );
+          if (!toggled.ok) {
+            ui.notify?.(toggled.error, "warning");
+            return;
+          }
+          draft = toggled.modelMeta;
+          requestedThinkingOptIn = toggled.requested;
+          rerender();
+          return;
+        }
         case FORM_ITEM_ID.useBuiltInCompat: {
           cycleUseBuiltInCompat(draft);
           rerender();
@@ -928,7 +981,20 @@ export async function runModelMetaForm(
           }
           const cleaned = cleanModelMeta(draft);
           if (!cleaned) finish({ kind: "clear", scope });
-          else finish({ kind: "save", scope, modelMeta: cleaned });
+          else {
+            const activeThinkingOptIn = activeExactModelThinkingOptIn(
+              cleaned,
+              requestedThinkingOptIn,
+            );
+            finish({
+              kind: "save",
+              scope,
+              modelMeta: cleaned,
+              ...(activeThinkingOptIn
+                ? { thinkingOptIn: activeThinkingOptIn }
+                : {}),
+            });
+          }
           return;
         }
         case FORM_ITEM_ID.cancel: {

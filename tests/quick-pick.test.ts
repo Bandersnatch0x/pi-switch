@@ -121,6 +121,7 @@ describe("runQuickSwitch", () => {
           meta: {},
           maxTokensUnresolved: false,
           reasoningConservative: false,
+          thinkingProjection: undefined,
         }),
         optionsFor: () => ({ rules: [] }),
       },

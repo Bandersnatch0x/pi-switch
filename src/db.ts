@@ -153,6 +153,8 @@ export interface DbReaderDeps {
   dbPath: string;
   timeoutMs?: number;
   maxBuffer?: number;
+  /** Injectable clock for one snapshot-ingestion timestamp. */
+  now?: () => number;
 }
 
 export interface ReadResult {
@@ -209,7 +211,12 @@ export function readProviders(deps: DbReaderDeps): ReadResult {
     return { providers: [], ok: false, error: "unexpected sqlite3 json shape", capabilities };
   }
 
-  const providers = uniquifyPiNames(rows.map((row) => parseProviderRow(normalizeRow(row))));
+  const observedAt = new Date(deps.now?.() ?? Date.now()).toISOString();
+  const providers = uniquifyPiNames(
+    rows.map((row) =>
+      parseProviderRow(normalizeRow(row), { observedAt }),
+    ),
+  );
   return { providers, ok: true, capabilities };
 }
 

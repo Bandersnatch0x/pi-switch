@@ -204,7 +204,10 @@ function setup(options?: {
     debug: () => false,
     rejectSink: () => undefined,
     // Trusted maxTokens so registration is eligible under issue #63.
-    modelMetaFor: (provider, modelId) => modelMetaFor(provider, modelId),
+    modelMetaFactsFor: (provider, modelId) => ({
+      userMeta: modelMetaFor(provider, modelId),
+      userMapScopes: {},
+    }),
     modelsDevFor: () => undefined,
     providerWireCompatFor: (provider) =>
       options?.providerWireCompatFor?.(provider),

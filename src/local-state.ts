@@ -11,10 +11,13 @@ import {
   migrateLegacySelection,
   readPiSwitchConfig,
   readSelection,
+  writeExactModelThinkingOptIn,
   writeModelMetaOverride,
   writeSelection,
   type ModelMetaScope,
 } from "./settings.ts";
+import type { ExactModelThinkingOptInRequest } from "./capabilities/thinking-opt-in.ts";
+import type { ThinkingProjectionDecision } from "./capabilities/thinking-projection.ts";
 import type { FsLike } from "./json-file.ts";
 import { piSettingsPath, piSwitchConfigPath } from "./paths.ts";
 import { recordRecentAndWrite, togglePinAndWrite } from "./pins-recent.ts";
@@ -35,6 +38,16 @@ export interface LocalState {
     provider: Pick<CcProvider, "id" | "displayName"> & { appType?: string },
     scope: ModelMetaScope,
     modelMeta: ModelMetaOverride | null,
+  ): StateWriteResult;
+  saveExactModelThinkingOptIn(
+    provider: Pick<
+      CcProvider,
+      "id" | "displayName" | "appType" | "api" | "baseUrl"
+    >,
+    scope: ModelMetaScope,
+    modelMeta: ModelMetaOverride,
+    decision: ThinkingProjectionDecision | undefined,
+    request: ExactModelThinkingOptInRequest,
   ): StateWriteResult;
   /** Drop provider modelMeta plus every per-model override. */
   clearModelMetaOverrides(
@@ -70,6 +83,15 @@ export function createLocalState(options: {
       writeModelMetaOverride({ fs, configPath, pid }, provider, { kind: "provider" }, modelMeta),
     saveModelMetaOverride: (provider, scope, modelMeta) =>
       writeModelMetaOverride({ fs, configPath, pid }, provider, scope, modelMeta),
+    saveExactModelThinkingOptIn: (provider, scope, modelMeta, decision, request) =>
+      writeExactModelThinkingOptIn(
+        { fs, configPath, pid },
+        provider,
+        scope,
+        modelMeta,
+        decision,
+        request,
+      ),
     clearModelMetaOverrides: (provider) =>
       clearAllModelMetaOverrides({ fs, configPath, pid }, provider),
     togglePin: (entry) => togglePinAndWrite({ fs, configPath, pid }, entry),

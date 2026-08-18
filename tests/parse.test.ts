@@ -111,6 +111,52 @@ base_url = "https://new.sbai.shop/v1"
     expect(p.baseUrl).toBe("https://new.sbai.shop/v1");
     expect(p.configModels).toContain("gpt-5");
   });
+
+  test("attaches catalog facts and keeps malformed optional entries as warnings", () => {
+    const toml = `
+model_provider = "custom"
+wire_api = "responses"
+
+[model_providers.custom]
+base_url = "https://relay.example/v1"
+`;
+    const p = parseProviderRow(
+      row({
+        id: "catalog",
+        app_type: "codex",
+        name: "catalog",
+        settings_config: JSON.stringify({
+          auth: { OPENAI_API_KEY: "key" },
+          config: toml,
+          modelCatalog: {
+            models: [
+              {
+                slug: "gpt-5.6-sol",
+                default_reasoning_level: "low",
+                supported_reasoning_levels: [
+                  { effort: "low", description: "fast" },
+                  { effort: "ultra", description: "delegating" },
+                ],
+              },
+              {
+                model: "legacy-id",
+                supported_reasoning_levels: "high",
+              },
+            ],
+          },
+        }),
+      }),
+      { observedAt: "2026-08-17T00:00:00.000Z" },
+    );
+
+    expect(isSwitchable(p)).toBe(true);
+    expect(p.configModels).toEqual(["gpt-5.6-sol", "legacy-id"]);
+    expect(p.reasoningCatalog?.models["gpt-5.6-sol"]?.variants).toHaveLength(2);
+    expect(p.reasoningCatalog?.observedAt).toBe("2026-08-17T00:00:00.000Z");
+    expect(p.capabilityWarnings?.join("\n")).toContain(
+      "supported_reasoning_levels",
+    );
+  });
 });
 
 describe("parse hermes", () => {

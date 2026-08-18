@@ -1,4 +1,5 @@
 import type { PiApi } from "../types.ts";
+import type { ProviderReasoningCatalog } from "../capabilities/thinking-projection.ts";
 import { asRecord, asString, normalizeBaseUrlForPi, stripTrailingSlash, uniqueModels } from "./common.ts";
 import { resolveApi } from "./api-format.ts";
 
@@ -10,6 +11,8 @@ export interface ParsedCore {
   configModels: string[];
   parseError?: string;
   typeHint?: string;
+  reasoningCatalog?: ProviderReasoningCatalog;
+  capabilityWarnings?: string[];
 }
 
 export function parseClaude(

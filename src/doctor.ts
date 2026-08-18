@@ -24,6 +24,10 @@ import {
 } from "./db.ts";
 import type { CapabilitySource } from "./capabilities/resolve.ts";
 import type { RegistrationCapabilityDecision } from "./capabilities/registration.ts";
+import {
+  formatThinkingProjectionDetail,
+  thinkingProjectionNeedsWarning,
+} from "./capabilities/thinking-projection-display.ts";
 import type { IdentityMigrationSummary } from "./migration.ts";
 import { summarizeTiers } from "./tier.ts";
 import {
@@ -545,6 +549,16 @@ export function runDoctor(input: DoctorInput): DoctorReport {
     if (input.refreshFailure) {
       const iso = new Date(input.refreshFailure.at).toISOString();
       infoRows.push(tf("docCapRefreshFail", { t: iso }));
+    }
+    if (decision.thinkingProjection) {
+      const projectionDetail = formatThinkingProjectionDetail(
+        decision.thinkingProjection,
+      );
+      if (thinkingProjectionNeedsWarning(decision.thinkingProjection)) {
+        warnRows.push(projectionDetail);
+      } else {
+        infoRows.push(projectionDetail);
+      }
     }
     const detail =
       `${input.capabilities.modelId}: ` +

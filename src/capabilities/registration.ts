@@ -7,7 +7,11 @@
  */
 
 import type { ModelMetaOverride, PiApi } from "../types.ts";
-import { mergeBuiltInCompatUnderUser } from "../compat/built-in-compat-profile.ts";
+import {
+  isBuiltInCompatDisabled,
+  matchBuiltInCompatProfile,
+  mergeBuiltInCompatUnderUser,
+} from "../compat/built-in-compat-profile.ts";
 import type { ModelsDevCapabilities } from "./models-dev.ts";
 import {
   assembleCapabilityLayers,
@@ -21,11 +25,46 @@ import {
   type ResolvedCapabilities,
 } from "./resolve.ts";
 import { tf } from "../ui/tui-locale.ts";
+import {
+  resolveThinkingProjection,
+  type PiThinkingRuntimeCapability,
+  type ProviderEndpointTupleInput,
+  type ProviderReasoningProfile,
+  type ThinkingProjectionDecision,
+  type UserThinkingMapScope,
+  type UserThinkingMapScopes,
+} from "./thinking-projection.ts";
 
 // Deep-import compat: helpers live in layers.ts; keep prior registration
 // surface so existing `from "./registration.ts"` importers still resolve.
 export { ccMetaFrom, protocolCapabilityDefaults } from "./layers.ts";
 export { trustedMaxTokensHint, type TrustedMaxTokensHint } from "./resolve.ts";
+
+export interface RegistrationModelMetaFacts {
+  /** User-configured layers only; built-in compat is resolved inside registration. */
+  userMeta: ModelMetaOverride | undefined;
+  /** Per-level provenance after user thinkingLevelMap layers are deep-merged. */
+  userMapScopes: UserThinkingMapScopes;
+}
+
+export interface RegistrationThinkingFacts {
+  tuple: ProviderEndpointTupleInput;
+  profile?: ProviderReasoningProfile;
+  runtime: PiThinkingRuntimeCapability;
+  userMapScope: UserThinkingMapScope;
+  userMapScopes?: UserThinkingMapScopes;
+}
+
+export interface RegistrationCapabilityInput {
+  modelId: string;
+  api: PiApi | null;
+  baseUrl: string;
+  userMeta?: ModelMetaOverride;
+  modelsDev?: ModelsDevCapabilities;
+  ccMeta?: CapabilityMeta;
+  /** Full tuple identity plus profile/runtime evidence for thinking projection. */
+  thinking?: RegistrationThinkingFacts;
+}
 
 export type RegistrationCapabilityDecision = {
   /** Full resolved chain (for doctor / effective config / precheck). */
@@ -39,7 +78,35 @@ export type RegistrationCapabilityDecision = {
   maxTokensUnresolved: boolean;
   /** True when reasoning came from the runtime conservative derivation. */
   reasoningConservative: boolean;
+  /** One tuple-scoped thinking decision shared by registration and diagnostics. */
+  thinkingProjection: ThinkingProjectionDecision | undefined;
 };
+
+function resolveRegistrationThinking(
+  input: RegistrationCapabilityInput,
+  reasoningEnabled: boolean,
+): ThinkingProjectionDecision | undefined {
+  if (!reasoningEnabled || !input.thinking || !input.api) return undefined;
+  const builtInDisabled = isBuiltInCompatDisabled(input.userMeta);
+  const profile =
+    builtInDisabled && input.thinking.profile?.source === "built-in"
+      ? undefined
+      : input.thinking.profile;
+  const builtInMap = builtInDisabled
+    ? undefined
+    : matchBuiltInCompatProfile(input.modelId)?.modelMeta.thinkingLevelMap;
+  const userMap = input.userMeta?.thinkingLevelMap;
+  if (!profile && !builtInMap && !userMap) return undefined;
+  return resolveThinkingProjection({
+    tuple: input.thinking.tuple,
+    profile,
+    runtime: input.thinking.runtime,
+    builtInMap,
+    userMap,
+    userMapScope: input.thinking.userMapScope,
+    userMapScopes: input.thinking.userMapScopes,
+  });
+}
 
 /**
  * Redacted one-line decision for doctor/precheck (no secrets, no full URLs).
@@ -72,14 +139,9 @@ export function formatCapabilityDecision(
  * Resolve registration-facing model meta through the full capability chain.
  * Returns undefined meta when maxTokens is unresolved (model must not register).
  */
-export function resolveRegistrationCapability(input: {
-  modelId: string;
-  api: PiApi | null;
-  baseUrl: string;
-  userMeta?: ModelMetaOverride;
-  modelsDev?: ModelsDevCapabilities;
-  ccMeta?: CapabilityMeta;
-}): RegistrationCapabilityDecision {
+export function resolveRegistrationCapability(
+  input: RegistrationCapabilityInput,
+): RegistrationCapabilityDecision {
   const resolved = resolveModelCapabilities(
     assembleCapabilityLayers({
       modelId: input.modelId,
@@ -93,6 +155,10 @@ export function resolveRegistrationCapability(input: {
 
   const maxTokensUnresolved = !isMaxTokensResolved(resolved.maxTokens);
   const reasoningConservative = resolved.reasoning.source === "conservative-default";
+  const thinkingProjection = resolveRegistrationThinking(
+    input,
+    resolved.reasoning.value === true,
+  );
 
   if (maxTokensUnresolved) {
     return {
@@ -100,6 +166,7 @@ export function resolveRegistrationCapability(input: {
       meta: undefined,
       maxTokensUnresolved: true,
       reasoningConservative,
+      thinkingProjection,
     };
   }
 
@@ -114,7 +181,12 @@ export function resolveRegistrationCapability(input: {
   // Compat/effort: user override > built-in profile (not capability layers).
   const compat = mergeBuiltInCompatUnderUser(input.modelId, input.userMeta);
   if (compat?.thinkingFormat) out.thinkingFormat = compat.thinkingFormat;
-  if (compat?.thinkingLevelMap) out.thinkingLevelMap = compat.thinkingLevelMap;
+  const thinkingLevelMap = out.reasoning
+    ? thinkingProjection
+      ? thinkingProjection.map
+      : compat?.thinkingLevelMap
+    : undefined;
+  if (thinkingLevelMap) out.thinkingLevelMap = thinkingLevelMap;
   if (typeof compat?.requiresReasoningContentOnAssistantMessages === "boolean") {
     out.requiresReasoningContentOnAssistantMessages =
       compat.requiresReasoningContentOnAssistantMessages;
@@ -128,6 +200,7 @@ export function resolveRegistrationCapability(input: {
     meta: out,
     maxTokensUnresolved: false,
     reasoningConservative,
+    thinkingProjection,
   };
 }
 
