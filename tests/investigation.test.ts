@@ -132,12 +132,12 @@ describe("Compatibility investigation state machine", () => {
     const first = repairFlow();
     const failedFirst = advance(first.state, { kind: "verification-completed", sequence: 1, result: result(false, { ...target, reasoning: false }) });
     expect(failedFirst.state.status).toBe("verification-failed");
-    expect(failedFirst.effects.map((e) => e.kind)).toEqual(["persist-repair-case"]);
+    expect(failedFirst.effects).toEqual([]);
 
     const pass1 = advance(first.state, { kind: "verification-completed", sequence: 1, result: result(true, { ...target, reasoning: false }) });
     const failedSecond = advance(pass1.state, { kind: "verification-completed", sequence: 2, result: result(false, { ...target, reasoning: false }) });
     expect(failedSecond.state.status).toBe("verification-failed");
-    expect(failedSecond.effects.map((e) => e.kind)).toEqual(["persist-repair-case"]);
+    expect(failedSecond.effects).toEqual([]);
   });
 
   test("CAS conflict/error and committed outcome with optional switch offer", () => {
@@ -149,11 +149,8 @@ describe("Compatibility investigation state machine", () => {
     expect(error.state.status).toBe("commit-error");
 
     const offered = advance(committing.state, { kind: "commit-completed", result: { ok: true, version: "v2" } });
-    expect(offered.state.status).toBe("awaiting-switch");
+    expect(offered.state.status).toBe("committed");
     expect(offered.effects.map((e) => e.kind)).toEqual(["offer-switch"]);
-    const committed = advance(offered.state, { kind: "switch-decision", accepted: false });
-    expect(committed.state.status).toBe("committed");
-    expect(committed.effects.map((e) => e.kind)).toEqual(["persist-repair-case"]);
   });
 
   test("successful repair can omit the optional switch offer", () => {
@@ -165,20 +162,15 @@ describe("Compatibility investigation state machine", () => {
     transition = advance(transition.state, { kind: "verification-completed", sequence: 2, result: result(true, { ...target, reasoning: false }) });
     transition = advance(transition.state, { kind: "commit-completed", result: { ok: true, version: "v2" } });
     expect(transition.state.status).toBe("committed");
-    expect(transition.effects.map((effect) => effect.kind)).toEqual(["persist-repair-case"]);
+    expect(transition.effects).toEqual([]);
   });
 
-  test("accepted switch emits lifecycle action before Repair Case persistence", () => {
+  test("switch choice stays at the command boundary after commit", () => {
     const ready = advance(repairFlow().state, { kind: "verification-completed", sequence: 1, result: result(true, { ...target, reasoning: false }) });
     const committing = advance(ready.state, { kind: "verification-completed", sequence: 2, result: result(true, { ...target, reasoning: false }) });
     const offered = advance(committing.state, { kind: "commit-completed", result: { ok: true, version: "v2" } });
-    const committed = advance(offered.state, { kind: "switch-decision", accepted: true });
-
-    expect(committed.state.status).toBe("committed");
-    expect(committed.effects.map((effect) => effect.kind)).toEqual([
-      "switch-to-repaired-target",
-      "persist-repair-case",
-    ]);
+    expect(offered.state.status).toBe("committed");
+    expect(offered.effects.map((effect) => effect.kind)).toEqual(["offer-switch"]);
   });
 
   test("out-of-order events throw and state has no Session Model or side-effect objects", () => {

@@ -15,12 +15,8 @@ import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import {
   resolveDeviceId,
   resolveSystemPrefixText,
-  shouldApplyClaudeCodeCompat,
   type ClaudeCodeCompatConfig,
 } from "../src/compat/claude-code.ts";
-import {
-  shouldApplyGeminiToolCompat,
-} from "../src/compat/gemini-tool-compat.ts";
 import {
   applyCompatibilityPlan,
   buildCompatibilityPlan,
@@ -35,6 +31,7 @@ import {
 import { editConfigStrict } from "../src/config-edit.ts";
 import type { FsLike } from "../src/json-file.ts";
 import type { ResolvedOverrideHeaders } from "../src/headers/fingerprints.ts";
+import type { EffectiveProviderCompatibility } from "../src/provider-config-views.ts";
 import { resolveProviderOverride } from "../src/provider-override.ts";
 import { piSwitchConfigPath } from "../src/paths.ts";
 import type {
@@ -98,6 +95,7 @@ export interface ProbeCommandRuntime extends SwitchLifecycleRuntime {
   fsLike(): FsLike;
   headerVars(): Record<string, string>;
   overridesFor(provider: CcProvider): ResolvedOverrideHeaders | undefined;
+  effectiveCompatibilityFor(provider: CcProvider): EffectiveProviderCompatibility;
   readSelectionCached(ttlMs?: number): PiSwitchSelection | undefined;
   reloadConfig(): PiSwitchConfig;
   routingProbe(): Promise<{ url: string; reachable: boolean } | undefined>;
@@ -105,7 +103,7 @@ export interface ProbeCommandRuntime extends SwitchLifecycleRuntime {
 
 type ProbeTargetEnrichmentRuntime = Pick<
   ProbeCommandRuntime,
-  "config" | "registration"
+  "config" | "registration" | "effectiveCompatibilityFor"
 >;
 
 type ProbePrecheckRuntime = Pick<
@@ -483,35 +481,12 @@ function enrichTarget(
     out.reasoning = reasoning.value;
   }
 
-  const claudeForce =
-    typeof entry?.claudeCodeCompat === "boolean"
-      ? entry.claudeCodeCompat
-      : null;
-  if (
-    shouldApplyClaudeCodeCompat({
-      mode: rt.config.claudeCodeCompat?.mode,
-      hosts: rt.config.claudeCodeCompat?.hosts,
-      api: provider.api,
-      baseUrl: provider.baseUrl,
-      providerForce: claudeForce,
-    })
-  ) {
+  const compatibility = rt.effectiveCompatibilityFor(provider);
+  if (compatibility.claudeCodeCompat === true) {
     out.claudeCodeCompat = true;
   }
 
-  const geminiForce =
-    typeof entry?.geminiToolCompat === "boolean"
-      ? entry.geminiToolCompat
-      : null;
-  if (
-    shouldApplyGeminiToolCompat({
-      mode: rt.config.geminiToolCompat?.mode,
-      hosts: rt.config.geminiToolCompat?.hosts,
-      api: provider.api,
-      baseUrl: provider.baseUrl,
-      providerForce: geminiForce,
-    })
-  ) {
+  if (compatibility.geminiToolCompat === true) {
     out.geminiToolCompat = true;
   }
 

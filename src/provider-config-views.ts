@@ -21,6 +21,8 @@ import {
   cleanModelMeta,
 } from "./model-meta.ts";
 import { withBuiltInCompatUnderUser } from "./compat/built-in-compat-profile.ts";
+import { shouldApplyClaudeCodeCompat } from "./compat/claude-code.ts";
+import { shouldApplyGeminiToolCompat } from "./compat/gemini-tool-compat.ts";
 import type { ModelTupleCompat } from "./model-tuple-compat.ts";
 import type { ModelMetaOverride } from "./types.ts";
 
@@ -35,22 +37,55 @@ export interface EffectiveProviderCompatibility {
   geminiToolCompat?: boolean;
 }
 
+type CompatibilityProvider = Pick<
+  CcProvider,
+  "id" | "piName" | "displayName" | "api" | "baseUrl"
+> & { appType?: string };
+
+/**
+ * Resolve the one compatibility interpretation shared by hooks, registration,
+ * Probe, and Repair. The returned shape only contains enabled behaviors; an
+ * omitted key means the effective behavior is disabled for this provider.
+ */
+export function resolveEffectiveProviderCompatibility(
+  config: PiSwitchConfig,
+  provider: CompatibilityProvider,
+): EffectiveProviderCompatibility {
+  const entry = resolveProviderOverride(config.providerOverrides, provider);
+  const claudeCodeCompat = shouldApplyClaudeCodeCompat({
+    mode: config.claudeCodeCompat?.mode,
+    hosts: config.claudeCodeCompat?.hosts,
+    api: provider.api,
+    baseUrl: provider.baseUrl,
+    providerForce:
+      typeof entry?.claudeCodeCompat === "boolean"
+        ? entry.claudeCodeCompat
+        : null,
+  });
+  const geminiToolCompat = shouldApplyGeminiToolCompat({
+    mode: config.geminiToolCompat?.mode,
+    hosts: config.geminiToolCompat?.hosts,
+    api: provider.api,
+    baseUrl: provider.baseUrl,
+    providerForce:
+      typeof entry?.geminiToolCompat === "boolean"
+        ? entry.geminiToolCompat
+        : null,
+  });
+
+  return {
+    ...(claudeCodeCompat ? { claudeCodeCompat: true } : {}),
+    ...(geminiToolCompat ? { geminiToolCompat: true } : {}),
+  };
+}
+
 export class ProviderConfigViews {
   constructor(private readonly getConfig: () => PiSwitchConfig) {}
 
   effectiveCompatibilityFor(
-    provider: Pick<CcProvider, "id" | "piName" | "displayName"> & { appType?: string },
+    provider: CompatibilityProvider,
   ): EffectiveProviderCompatibility {
-    const entry = resolveProviderOverride(
-      this.getConfig().providerOverrides,
-      provider,
-    );
-    return {
-      claudeCodeCompat:
-        typeof entry?.claudeCodeCompat === "boolean" ? entry.claudeCodeCompat : undefined,
-      geminiToolCompat:
-        typeof entry?.geminiToolCompat === "boolean" ? entry.geminiToolCompat : undefined,
-    };
+    return resolveEffectiveProviderCompatibility(this.getConfig(), provider);
   }
 
   overridesFor(provider: Pick<CcProvider, "id" | "piName" | "displayName">) {

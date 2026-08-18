@@ -74,11 +74,14 @@ export type ExecuteRepairSwitchResult =
   | ExecuteRepairSwitchErr;
 
 /** True when a repair outcome carries an executable post-success switch action. */
+export type CommittedRepairWithSwitch = Extract<
+  RepairOutcome,
+  { status: "committed" }
+> & { switchAction: RepairSwitchAction };
+
 export function hasRepairSwitchAction(
-  outcome: Pick<RepairOutcome, "status"> & {
-    switchAction?: RepairSwitchAction;
-  },
-): outcome is Extract<RepairOutcome, { status: "committed" }> {
+  outcome: RepairOutcome,
+): outcome is CommittedRepairWithSwitch {
   return (
     outcome.status === "committed" &&
     outcome.switchAction?.kind === "switch-to-repaired-target"
