@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |------|-----|
 | 版本 | 0.1.0 |
-| 状态 | **已锁定**（grilling 完成，剩余决策按最优解冻结） |
+| 状态 | **已停止维护**（被 [CC Switch v3.20.0](https://github.com/farion1231/cc-switch/releases/tag/v3.20.0) 原生 Pi 支持取代） |
 | 目录 | `D:\code_space\pi-switch` |
 | 形态 | pi package（extension） |
 | 上游数据 | `~/.cc-switch/cc-switch.db` **只读** |
