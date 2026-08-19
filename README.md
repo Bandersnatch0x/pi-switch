@@ -6,6 +6,24 @@
 
 English | [中文](./README-zh.md)
 
+> [!CAUTION]
+> **This repository is unmaintained.**
+>
+> [CC Switch v3.20.0](https://github.com/farion1231/cc-switch/releases/tag/v3.20.0) added first-class Pi support (ninth managed app): providers, prompts, skills, session browsing, and usage. Use CC Switch to manage Pi.
+>
+> The last published package is [`pi-ccs@0.3.5`](https://www.npmjs.com/package/pi-ccs). Existing installs keep working. This repo will not receive new features, fixes, or support.
+
+## Successor
+
+Use **[CC Switch](https://github.com/farion1231/cc-switch) ≥ v3.20.0**:
+
+- Manage Pi providers in the CC Switch desktop app (writes `~/.pi/agent/models.json`).
+- Prompts, `SYSTEM.md` / `APPEND_SYSTEM.md`, slash-command templates, and Skills are managed there too.
+- CC Switch never touches Pi login, `defaultProvider`, or `defaultModel`.
+- If you no longer need the in-Pi `/ps-*` switcher, uninstall `npm:pi-ccs` from Pi.
+
+The documentation below describes the last release of this bridge. It is kept for historical reference.
+
 pi-switch is a Pi extension package built on top of [cc-switch](https://github.com/farion1231/cc-switch). It uses cc-switch as the source of provider and model configuration, then exposes a fast provider/model switcher directly inside Pi.
 
 pi-switch does not replace cc-switch and does not modify the cc-switch database. It reads the local cc-switch SQLite database in read-only mode, registers the selected provider in Pi, and stores the active model in Pi settings.

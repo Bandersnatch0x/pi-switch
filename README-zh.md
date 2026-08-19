@@ -6,6 +6,24 @@
 
 [English](./README.md) | 中文
 
+> [!CAUTION]
+> **本仓库已停止维护。**
+>
+> [CC Switch v3.20.0](https://github.com/farion1231/cc-switch/releases/tag/v3.20.0) 已将 Pi 作为第九个受管应用接入：供应商、提示词、Skills、会话浏览与用量统计。请改用 CC Switch 管理 Pi。
+>
+> 最后发布的包为 [`pi-ccs@0.3.5`](https://www.npmjs.com/package/pi-ccs)。已安装的版本仍可继续使用。本仓库不再接受新功能、修复或支持。
+
+## 后继方案
+
+请使用 **[CC Switch](https://github.com/farion1231/cc-switch) ≥ v3.20.0**：
+
+- 在 CC Switch 桌面端管理 Pi 供应商（写入 `~/.pi/agent/models.json`）。
+- 提示词、`SYSTEM.md` / `APPEND_SYSTEM.md`、斜杠命令模板和 Skills 也在那里管理。
+- CC Switch 不会触碰 Pi 的登录、`defaultProvider` 或 `defaultModel`。
+- 若不再需要 Pi 内的 `/ps-*` 切换器，从 Pi 卸载 `npm:pi-ccs`。
+
+下文是本桥接工具最后一版的说明，仅作历史参考。
+
 pi-switch 是一个面向 Pi 的扩展包，依托于 [cc-switch](https://github.com/farion1231/cc-switch) 构建。它以 cc-switch 作为 Provider 和模型配置的数据来源，并在 Pi 内提供快速切换 Provider 与模型的入口。
 
 pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会以只读方式读取本机 cc-switch SQLite 数据库，然后把选中的 Provider 注册到 Pi，并把当前模型写入 Pi 的设置。
