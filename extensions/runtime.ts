@@ -59,7 +59,22 @@ import {
   type ProviderSnapshotResult,
 } from "../src/provider-snapshot.ts";
 import { SelectionCache } from "../src/selection-cache.ts";
-import { piSettingsPath, piSwitchConfigPath } from "../src/paths.ts";
+import { piSettingsPath, piSwitchConfigPath, piModelsPath, piPersistedProvidersPath, agentDirPath } from "../src/paths.ts";
+import {
+  createProviderMirror,
+  syncPersistedProviders,
+  type ProviderMirror,
+  type ProviderSyncResult,
+} from "../src/persistent-providers.ts";
+import {
+  listSubagentAgents,
+  planSubagentRows,
+  readSubagentSettings,
+  writeSubagentModel,
+  type SubagentAgentRoot,
+  type SubagentRow,
+  type SubagentTarget,
+} from "../src/subagent-models.ts";
 import { migrateIdentityState, type IdentityMigrationSummary } from "../src/migration.ts";
 import {
   resolveCapabilitiesFor,
@@ -89,6 +104,15 @@ export type NodeIo = {
   fetchJson: (url: string) => Promise<unknown>;
   release: string;
   home: string;
+  /** Working directory of the host (project-level `.pi/agents` discovery). */
+  cwd: string;
+  readdirSync: typeof import("node:fs").readdirSync;
+  /** Directory of an installed package, when it can be located. */
+  resolvePackageDir?: (name: string) => string | undefined;
+  /** Short stable digest of a string (used as the models.json ownership fingerprint). */
+  hashText: (text: string) => string;
+  /** `PI_CODING_AGENT_DIR` when the host moved its agent directory. */
+  agentDirOverride?: string;
 };
 
 export type { FingerprintSnapshot, CapabilitiesCache, VarsSummary };
@@ -109,6 +133,8 @@ export class Runtime {
   warnedMissingDbId = false;
   headerRules: HeaderRule[] = [];
   config: PiSwitchConfig = {};
+  /** In-process registrations, mirrored to models.json for other processes. */
+  readonly providerMirror: ProviderMirror = createProviderMirror();
 
   private readonly selectionCache = new SelectionCache<PiSwitchSelection | undefined>();
   private readonly codexWindowId: string;
@@ -253,6 +279,83 @@ export class Runtime {
 
   refreshSnapshot(): ProviderSnapshotResult {
     return this.providerSnapshot.refresh();
+  }
+
+  /** `persistProviders: false` keeps registrations process-local. */
+  persistProvidersEnabled(): boolean {
+    return this.config.persistProviders !== false;
+  }
+
+  /** Agent definition roots in pi-subagents' precedence order. */
+  subagentAgentRoots(): SubagentAgentRoot[] {
+    const roots: SubagentAgentRoot[] = [
+      { dir: `${this.io.cwd.replace(/[\\/]+$/, "")}/.pi/agents`, source: "project" },
+      { dir: `${agentDirPath(this.io.home, this.io.agentDirOverride)}/agents`, source: "user" },
+    ];
+    const packageDir = this.io.resolvePackageDir?.("pi-subagents");
+    if (packageDir) {
+      roots.push({ dir: `${packageDir.replace(/[\\/]+$/, "")}/agents`, source: "package" });
+    }
+    return roots;
+  }
+
+  /** Rows for the subagent model picker: the global default, then every agent. */
+  subagentRows(): SubagentRow[] {
+    const agents = listSubagentAgents(
+      {
+        existsSync: this.io.existsSync,
+        readdirSync: this.io.readdirSync as (path: string) => string[],
+        readFileSync: this.io.readFileSync as (path: string, encoding: "utf8") => string,
+      },
+      this.subagentAgentRoots(),
+    );
+    return planSubagentRows(agents, this.subagentSettings());
+  }
+
+  subagentSettings() {
+    return readSubagentSettings(this.fsLike(), piSettingsPath(this.io.home));
+  }
+
+  /** Write one `subagents` layer into the host settings.json (atomic + CAS). */
+  saveSubagentModel(target: SubagentTarget, model: string | null) {
+    return writeSubagentModel(
+      { fs: this.fsLike(), settingsPath: piSettingsPath(this.io.home), pid: process.pid },
+      target,
+      model,
+    );
+  }
+
+  /**
+   * Push the accumulated registrations into Pi's models.json so processes
+   * that never loaded this extension (pi-subagents' detached runner) can
+   * resolve the same `provider/id`. Best-effort: never throws.
+   */
+  syncPersistedProviders(): ProviderSyncResult {
+    const disabled: ProviderSyncResult = {
+      ok: true,
+      written: [],
+      removed: [],
+      conflicts: [],
+    };
+    if (!this.persistProvidersEnabled()) return disabled;
+    try {
+      return syncPersistedProviders(
+        {
+          fs: this.fsLike(),
+          modelsPath: piModelsPath(this.io.home, this.io.agentDirOverride),
+          statePath: piPersistedProvidersPath(this.io.home, this.io.agentDirOverride),
+          pid: process.pid,
+          digest: this.io.hashText,
+        },
+        this.providerMirror.entries(),
+      );
+    } catch (error) {
+      return {
+        ...disabled,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /**

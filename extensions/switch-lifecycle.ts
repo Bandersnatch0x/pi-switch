@@ -7,6 +7,11 @@ import {
   type PiSwitchCtx,
 } from "../src/pi-context.ts";
 import { registerProvider } from "../src/register.ts";
+import type { BuiltProviderConfig } from "../src/register.ts";
+import type {
+  ProviderMirror,
+  ProviderSyncResult,
+} from "../src/persistent-providers.ts";
 import type {
   CcProvider,
   PiSwitchConfig,
@@ -42,6 +47,9 @@ export interface SwitchLifecycleRuntime {
   registeredPsNames: string[];
   registration: RegistrationOperations;
   scheduleModelsDevRefresh(modelId: string): void;
+  /** Registration mirror persisted to models.json (optional: absent = process-local only). */
+  providerMirror?: ProviderMirror;
+  syncPersistedProviders?: () => ProviderSyncResult;
   state: LocalState;
   warnedMissingDbId: boolean;
 }
@@ -276,12 +284,48 @@ export function createSwitchLifecycle(
   rt: SwitchLifecycleRuntime,
 ): SwitchLifecycle {
   type RegistrationOutcome =
-    | { kind: "registered" }
+    | { kind: "registered"; providerName: string; config: BuiltProviderConfig }
     | { kind: "failed"; error: string };
+
+  /**
+   * Mirror the accumulated registrations into models.json.
+   * Best-effort: a failure here must not fail the switch.
+   */
+  let warnedMirrorConflict = false;
+  const syncMirror = (ctx?: PiSwitchCtx): void => {
+    if (!rt.providerMirror || !rt.syncPersistedProviders) return;
+    const result = rt.syncPersistedProviders();
+    if (!result.ok) {
+      console.warn(`[pi-switch] models.json mirror failed: ${result.error}`);
+      ctx?.ui?.notify?.(
+        `pi-switch: 写入 models.json 失败: ${result.error}`,
+        "warning",
+      );
+      return;
+    }
+    if (rt.config.debug && (result.written.length || result.removed.length)) {
+      console.warn(
+        `[pi-switch] models.json mirror: +${result.written.join(",")} -${result.removed.join(",")}`,
+      );
+    }
+    if (result.conflicts.length && !warnedMirrorConflict) {
+      warnedMirrorConflict = true;
+      // A same-named entry pi-switch does not own is left untouched: writing it
+      // would clobber user content, and Pi would keep loading the foreign one.
+      console.warn(
+        `[pi-switch] models.json not updated for: ${result.conflicts.join(", ")} (existing entry is not pi-switch's)`,
+      );
+      ctx?.ui?.notify?.(
+        `pi-switch: models.json 已有同名 Provider，未覆盖: ${result.conflicts.join(", ")}`,
+        "warning",
+      );
+    }
+  };
 
   const registerModels = (
     provider: CcProvider,
     modelIds: string[],
+    options?: { mirror?: boolean },
   ): RegistrationOutcome => {
     const ids = [...new Set(modelIds.map((id) => id.trim()).filter(Boolean))];
     if (!ids.length) return { kind: "failed", error: "no model ids" };
@@ -306,7 +350,14 @@ export function createSwitchLifecycle(
       }
       // Fire-and-forget models.dev refresh after successful registration (issue #39).
       for (const id of result.modelIds) rt.scheduleModelsDevRefresh(id);
-      return { kind: "registered" };
+      if (options?.mirror) {
+        rt.providerMirror?.record(result.providerName, result.config);
+      }
+      return {
+        kind: "registered",
+        providerName: result.providerName,
+        config: result.config,
+      };
     } catch (error) {
       return { kind: "failed", error: formatError(error) };
     }
@@ -316,7 +367,7 @@ export function createSwitchLifecycle(
     provider: CcProvider,
     modelIds: string[],
   ): RegistrationOutcome => {
-    const result = registerModels(provider, modelIds);
+    const result = registerModels(provider, modelIds, { mirror: true });
     if (result.kind === "registered") {
       if (!rt.registeredPsNames.includes(provider.piName)) {
         rt.registeredPsNames = [...rt.registeredPsNames, provider.piName];
@@ -481,6 +532,9 @@ export function createSwitchLifecycle(
         }
       }
     }
+    // Make the pre-registered set resolvable outside this process too (a
+    // detached subagent runner never inherits the parent model registry).
+    syncMirror();
     // Normalize selection model id if it still holds a filtered [1M] tag.
     if (selection) {
       const provider = matchProvider(providers, {
@@ -567,6 +621,7 @@ export function createSwitchLifecycle(
             "pi-switch",
             `${modelId} @ ${provider.appType}/${provider.displayName}`,
           );
+          syncMirror(ctx as PiSwitchCtx);
           return;
         }
         lastFailure = outcome.error;
@@ -585,7 +640,10 @@ export function createSwitchLifecycle(
     const stages = stageRecorder();
 
     const outcome = await ensureModelActive(provider, modelId, ctx, {
-      register: registerModels,
+      // Probe/repair targets (runtime-only) stay in-process; only a committed
+      // switch is worth persisting outside this process.
+      register: (target2, ids) =>
+        registerModels(target2, ids, { mirror: target.commit === "selection" }),
     });
     // Map the shared sequence's outcome onto the stage recorder.
     switch (outcome.kind) {
@@ -615,6 +673,7 @@ export function createSwitchLifecycle(
         if (name === provider.piName) continue;
         try {
           pi.unregisterProvider(name);
+          rt.providerMirror?.forget([name]);
         } catch (error) {
           retainedNames.push(name);
           cleanupErrors.push(`${name}: ${formatError(error)}`);
@@ -633,6 +692,9 @@ export function createSwitchLifecycle(
           ? skipped("unregisterProvider is unavailable; old registrations were retained")
           : SUCCEEDED,
     );
+    // Prune dropped providers from models.json (runtime-only activations still
+    // release whatever the switch unregistered).
+    syncMirror(ctx);
 
     if (target.commit === "runtime-only") {
       stages.set("selectionPersistence", skipped("runtime-only activation"));

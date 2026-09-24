@@ -56,7 +56,7 @@ describe("smoke harness isolation", () => {
     expect(() => sha256IfExists(root)).toThrow();
   });
 
-  test("tracks settings, config, DB, and SQLite sidecars", () => {
+  test("tracks settings, config, provider mirror, DB, and SQLite sidecars", () => {
     const home = tempDir();
     const db = path.join(home, ".cc-switch", "cc-switch.db");
     const paths = smokeStatePaths(home, db);
@@ -64,6 +64,8 @@ describe("smoke harness isolation", () => {
     expect(paths).toEqual([
       path.join(home, ".pi", "agent", "settings.json"),
       path.join(home, ".pi", "agent", "pi-switch.json"),
+      path.join(home, ".pi", "agent", "models.json"),
+      path.join(home, ".pi", "agent", "pi-switch-persisted-providers.json"),
       db,
       `${db}-wal`,
       `${db}-shm`,

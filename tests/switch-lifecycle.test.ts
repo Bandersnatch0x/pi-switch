@@ -18,6 +18,7 @@ import type {
   RecentEntry,
 } from "../src/types.ts";
 import { createLocalState } from "../src/local-state.ts";
+import { createProviderMirror } from "../src/persistent-providers.ts";
 import {
   resolveProviderWireCompat,
   type ResolvedProviderWireCompat,
@@ -340,6 +341,71 @@ describe("switch lifecycle interface", () => {
     );
     const calls = state.runtime.scheduleCalls;
     expect(calls).toEqual(["gpt-5"]);
+  });
+
+  test("a committed switch mirrors its provider and syncs models.json", async () => {
+    const state = setup();
+    const mirror = createProviderMirror();
+    const syncs: string[][] = [];
+    state.runtime.providerMirror = mirror;
+    state.runtime.syncPersistedProviders = () => {
+      syncs.push(mirror.entries().map((entry) => entry.name));
+      return { ok: true, written: [], removed: [], conflicts: [] };
+    };
+
+    await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "selection" },
+      state.ctx,
+    );
+
+    expect(mirror.entries().map((entry) => entry.name)).toEqual(["ps-codex-new"]);
+    expect(syncs.at(-1)).toEqual(["ps-codex-new"]);
+  });
+
+  test("a runtime-only activation is not mirrored (probe target stays in-process)", async () => {
+    const state = setup();
+    const mirror = createProviderMirror();
+    let syncs = 0;
+    state.runtime.providerMirror = mirror;
+    state.runtime.syncPersistedProviders = () => {
+      syncs += 1;
+      return { ok: true, written: [], removed: [], conflicts: [] };
+    };
+
+    await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "runtime-only" },
+      state.ctx,
+    );
+
+    expect(mirror.size()).toBe(0);
+    expect(syncs).toBe(1);
+  });
+
+  test("the replaced provider is dropped from the mirror so models.json prunes it", async () => {
+    const state = setup();
+    const mirror = createProviderMirror();
+    mirror.record("ps-claude-old", {
+      name: "ps-claude-old",
+      baseUrl: "https://old.example.com",
+      apiKey: "old-key",
+      api: "anthropic-messages",
+      authHeader: true,
+      models: [],
+    } as never);
+    state.runtime.providerMirror = mirror;
+    state.runtime.syncPersistedProviders = () => ({
+      ok: true,
+      written: [],
+      removed: [],
+      conflicts: [],
+    });
+
+    await state.lifecycle.activate(
+      { provider: provider(), modelId: "gpt-5", commit: "selection" },
+      state.ctx,
+    );
+
+    expect(mirror.entries().map((entry) => entry.name)).toEqual(["ps-codex-new"]);
   });
 
   test("activate forwards providerWireCompat into registered model compat (#62)", async () => {

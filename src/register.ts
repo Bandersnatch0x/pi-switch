@@ -236,7 +236,13 @@ export function buildProviderConfig(
 }
 
 export type RegisterProviderResult =
-  | { kind: "registered"; providerName: string; modelIds: string[] }
+  | {
+      kind: "registered";
+      providerName: string;
+      modelIds: string[];
+      /** Built config, reused by the models.json mirror (see persistent-providers). */
+      config: BuiltProviderConfig;
+    }
   | { kind: "skipped"; error: string };
 
 export function registerProvider(
@@ -257,5 +263,6 @@ export function registerProvider(
     kind: "registered",
     providerName: provider.piName,
     modelIds: config.models.map((model) => model.id),
+    config,
   };
 }

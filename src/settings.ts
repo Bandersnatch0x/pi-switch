@@ -337,6 +337,8 @@ export function readPiSwitchConfig(fs: FsLike, path: string): PiSwitchConfig {
   return {
     tabs: Array.isArray(raw.tabs) ? raw.tabs.filter((t): t is string => typeof t === "string") : undefined,
     aliasCcs: typeof raw.aliasCcs === "boolean" ? raw.aliasCcs : undefined,
+    persistProviders:
+      typeof raw.persistProviders === "boolean" ? raw.persistProviders : undefined,
     sqlitePath: typeof raw.sqlitePath === "string" ? raw.sqlitePath : raw.sqlitePath === null ? null : undefined,
     vars: varsRaw
       ? {

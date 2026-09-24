@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { findOwningPackageVersion } from "../src/host-package-version.ts";
+import { findOwningPackageDir, findOwningPackageVersion } from "../src/host-package-version.ts";
 import { resolveSqlitePath } from "../src/sqlite-path.ts";
 import { Runtime } from "./runtime.ts";
 import { registerCommands } from "./commands.ts";
@@ -75,6 +75,19 @@ export default async function (pi: ExtensionAPI) {
     renameSync: fs.renameSync,
     unlinkSync: fs.unlinkSync,
     randomUUID: cryptoMod.randomUUID,
+    hashText: (text: string) =>
+      cryptoMod.createHash("sha256").update(text).digest("hex"),
+    agentDirOverride: process.env.PI_CODING_AGENT_DIR,
+    cwd: process.cwd(),
+    readdirSync: fs.readdirSync,
+    resolvePackageDir: (name: string) => {
+      try {
+        const entry = urlMod.fileURLToPath(import.meta.resolve(name));
+        return findOwningPackageDir(entry, name, packageVersionDeps);
+      } catch {
+        return undefined;
+      }
+    },
     resolvePackageVersion,
     snapshotPath,
     probeHttp,

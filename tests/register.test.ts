@@ -46,7 +46,7 @@ describe("registerProvider", () => {
       { rules: [], modelMeta: TRUSTED_MAX },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "registered",
       providerName: "ps-codex-registered",
       modelIds: ["m1"],

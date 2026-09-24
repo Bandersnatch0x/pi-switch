@@ -200,6 +200,15 @@ export interface PiSwitchConfig {
   tabs?: string[];
   aliasCcs?: boolean;
   sqlitePath?: string | null;
+  /**
+   * Mirror every in-process provider registration into Pi's `models.json`
+   * (default `true`). `models.json` is Pi's cross-process provider layer, so a
+   * mirrored registration also resolves in processes that never loaded this
+   * extension (pi-subagents' detached subagent runner). Set `false` to keep
+   * provider definitions process-local — API keys then never leave
+   * cc-switch/pi-switch state, at the cost of subagent provider resolution.
+   */
+  persistProviders?: boolean;
   /** Override detected codex/claude/gemini CLI versions used in User-Agent. */
   vars?: PiSwitchVars;
   /**
