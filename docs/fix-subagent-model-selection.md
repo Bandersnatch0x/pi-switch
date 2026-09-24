@@ -1,5 +1,15 @@
 # 修复：Subagent 和 Resume 会话的模型选择问题
 
+> **适用范围（2026-09-25 起）**：本文只覆盖其中一条轴——`sessionModelStrategy` 决定的“子代理**继承**哪个模型”。子代理模型问题实际有三条独立的轴：
+>
+> | 轴 | 决定什么 | 在哪配 |
+> | --- | --- | --- |
+> | 1. Session Model Strategy | resume/fork 时用会话历史还是 ps-config 选择 | `pi-switch.json.sessionModelStrategy`（本文） |
+> | 2. Subagent Model Layer | 某个 agent 具体跑哪个模型（优先级最高） | `settings.json` 的 `subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`，用 picker 键 `s` 或 `/ps-subagents` 设置 → [README](../README.md#subagent-models) |
+> | 3. Provider 可用性 | 子进程能不能**解析**这个 provider | `pi-switch.json.persistProviders`（默认开启，把注册镜像进 `models.json`）(决策记录见仓库本地 ADR 0006,不随包发布) |
+>
+> 只调轴 1 而 provider 在子进程里解析不到时，子代理仍会静默失败。
+
 ## 问题描述
 
 ### 问题 1：Subagent 启动时使用错误的模型
@@ -357,21 +367,47 @@ npm run typecheck
 
 ### 问题：Subagent 使用了错误的模型
 
-**诊断步骤**：
-1. 检查父会话使用的模型
-2. 检查 ps-config 选择的模型
-3. 检查 `sessionModelStrategy` 配置
+**诊断步骤**（按 pi-subagents 的解析优先级，先看靠前的层）：
+
+1. 检查 `~/.pi/agent/settings.json` 的 `subagents.agentOverrides.<agent>.model`（单个 agent 覆写，优先级最高）
+2. 再检查 `subagents.defaultModel`（全局默认）
+3. 再检查该 agent 定义文件的 frontmatter `model:`（项目 `.pi/agents` → `~/.pi/agent/agents` → pi-subagents 包 `agents/`）
+4. 最后才是父会话模型 / `sessionModelStrategy`
+5. 检查 `~/.pi/agent/pi-switch.json` 中的 `sessionModelStrategy` 配置
 
 **常见原因**：
+
+- 该 agent 或全局被写了 `subagents.*` 覆写，盖过了会话模型（预期行为，但不好发现）
+- agent frontmatter 自带 `model:`，比 `sessionModelStrategy` 更靠前
 - `sessionModelStrategy` 设置为 `session-first`（继承父会话）
 - ps-config 选择的 provider 不可用（回退到会话历史）
 
 **解决方案**：
+
+- 想让子代理固定跑某个模型：用 picker 键 `s` 或 `/ps-subagents` 写 `subagents.*`（写入后下一个子代理启动即生效，不必重启 Pi）；想回到继承就选“清除”
+- 想只改继承来源：
+
 ```json
 {
   "sessionModelStrategy": "selection-first"
 }
 ```
+
+### 问题：Subagent 报 `Model "provider/model" not found`，或后台子代理“无输出地失败”
+
+**原因**：子代理跑在独立进程，只能解析“主会话之外也存在”的 provider。cc-switch Provider 平时只注册在当前进程的内存 registry 里，子进程看不到；detached runner 会表现为没有日志的死亡（`state=failed` / `not-started` / `writer-close-unverified`，runner stdout+stderr 为 0 字节），前台子代理则报具名的 `not found`。
+
+**诊断步骤**：
+
+1. 看 `~/.pi/agent/models.json` 里有没有该 provider 条目，以及 sidecar `~/.pi/agent/pi-switch-persisted-providers.json` 有没有登记它
+2. 检查 `pi-switch.json` 是否被设成 `persistProviders: false`
+3. 确认 `models.json` 是合法 JSON（非法时 pi-switch 只告警、不改写，子进程也加载不了任何 provider）
+4. 确认该条目不是被外部工具改过（内容与归属摘要不符时 pi-switch 会拒绝覆盖并上报 conflict）
+
+**解决方案**：
+
+- 保持 `persistProviders` 默认开启，并在主会话里重新用 `/ps` 或 `/ps-config` 切一次该 provider（切换会重建镜像）
+- 或者给子代理指定一个 Pi 自己能解析的模型（内置目录，如 `radius/…`、`opencode-go/…`）
 
 ### 问题：配置修改后没有生效
 
@@ -384,6 +420,7 @@ npm run typecheck
 ## 相关文档
 
 - [Session Model Strategy 配置指南](./session-model-strategy.md)
+- [README：Subagent 模型](../README.md#subagent-models)
 - [CHANGELOG v0.3.4](./CHANGELOG-v0.3.4.md)
 - [Pi Switch 用户文档](../README.md)
 
@@ -402,3 +439,4 @@ npm run typecheck
 
 - **2026-08-12**: 初始版本，修复 subagent 和 resume 模型选择问题
 - **v0.3.4**: 首次发布，包含 `sessionModelStrategy` 配置
+- **2026-09-25**: 补充三条轴的划分；新增 `subagents.*` 模型层 UI（picker `s` / `/ps-subagents`）与 `models.json` 镜像（`persistProviders`）对应的排查条目

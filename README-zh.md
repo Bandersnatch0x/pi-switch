@@ -11,7 +11,7 @@
 >
 > [CC Switch v3.20.0](https://github.com/farion1231/cc-switch/releases/tag/v3.20.0) 已将 Pi 作为第九个受管应用接入：供应商、提示词、Skills、会话浏览与用量统计。请改用 CC Switch 管理 Pi。
 >
-> 最后发布的包为 [`pi-ccs@0.3.5`](https://www.npmjs.com/package/pi-ccs)。已安装的版本仍可继续使用。本仓库不再接受新功能、修复或支持。
+> 最后发布的包为 [`pi-ccs@0.3.6`](https://www.npmjs.com/package/pi-ccs) —— 停止维护前的**最后一个例外**：让 cc-switch Provider 在 subagent 子进程里也能解析，并加上 Subagent 模型选择器（见下文 Provider 镜像一节）。此后不再计划新功能、修复或支持。已安装的版本仍可继续使用。
 
 ## 后继方案
 
@@ -49,6 +49,8 @@ pi-switch 不替代 cc-switch，也不会修改 cc-switch 数据库。它只会�
 - 自动解析并映射常见协议：Anthropic Messages、OpenAI Responses、OpenAI Chat Completions、Google Generative AI。
 - 默认注入类官方 CLI 指纹（Codex UA + `originator` + `X-Codex-Window-ID`、Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`、GeminiCLI UA + `x-goog-api-client`）。
 - 通过预设或原生弹窗覆写模型参数（`/ps-override` 或快捷键 `o`），例如 **中转兼容** 关闭被拒的 `reasoning`。
+- 给 Subagent 指定与主会话不同的模型：选择器快捷键 **`s`** 或 `/ps-subagents` 写入 `subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`，agent 定义从项目 / 用户 / 已安装包三个根目录发现。
+- 把每次 Provider 注册镜像进 Pi 的 `models.json`，让 cc-switch Provider 在“从未加载本扩展的进程”里也能解析——包括 pi-subagents 的 detached runner。
 - `/ps-doctor` 结构化体检（PASS/WARN/FAIL + 修复建议）。
 - `/ps-probe` 兼容性探针（只读）：对当前/指定 Target 跑 basic/reasoning/tool 三类契约，输出结构化证据（宽类别失败原因，模糊即 `unknown`），headless/CI 可输出 JSON。
 - `/ps-repair` 证据驱动修复（交互）：重新探针 → 白名单 Recipe → 计划确认 → 内存候选验证（同一契约连续两次通过）→ CAS 提交，不切换 Session Model。
@@ -201,6 +203,36 @@ Pi 包通常会安装到 `~/.pi/agent/npm/`；如果使用项目局部安装，�
 
 在三列选择器中，进入 **名称** 列后按 **`o`**，可对当前 Provider 打开同样的参数覆写弹窗；页脚会显示 `o override`。
 
+在同一个选择器里按 **`s`** 可给 Subagent 指定模型（见下），页脚会显示 `s subagent`。
+
+### Subagent 模型
+
+pi-subagents 按以下顺序为每个子代理解析模型：
+
+```text
+单次调用的 `model`  →  subagents.agentOverrides.<agent>.model  →
+agent frontmatter 的 `model`  →  subagents.defaultModel  →  父会话模型
+```
+
+pi-switch 负责其中两个 settings 层，让评审 / 调研子代理跑一个与当前会话不同的模型。
+
+```text
+/ps-subagents
+```
+
+或在 Provider 选择器里聚焦某个 Provider 后按 **`s`**——被聚焦的 provider/model 会成为下一步分配时的“一键选项”。
+
+列表包含一行“全部 Subagent 默认”与所有已发现的 agent（`<项目>/.pi/agents`、`~/.pi/agent/agents`、已安装 `pi-subagents` 包的 `agents/`；同名时先命中的根胜出）。每行会显示当前模型来自哪一层——`override` / `frontmatter` / `默认` / `继承会话模型`；可选值有：
+
+- 用当前聚焦的 provider/model（仅当通过快捷键 `s` 进入时有此项），
+- 清除该层，回退到下一层，
+- 选 cc-switch 里的 Provider/Model（只读，与 `/ps-probe` 同一个选择器），
+- 手输任意 model id，包括本 DB 里没有的。
+
+写入走宿主 `settings.json` 的原子路径（`subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`），其余键全部保留；清除时会顺手删掉空壳，不留 `{}` 残渣。
+
+> Subagent 跑在独立进程里，只能解析“主会话之外也存在”的 Provider。pi-switch 正是为此把注册镜像进 `models.json`——见 [Provider 镜像](#provider-镜像modelsjson)。只在 Pi 内置目录里的 Provider（例如 `radius/…`）不依赖这个镜像。
+
 ### 兼容性探针与修复
 
 切换 Provider/模型后，“模型能列出”不等于“请求真能用”。用带外（out-of-band）验证与修复：
@@ -311,9 +343,32 @@ Windows 用户如果没有全局安装 `sqlite3.exe`，建议显式配置 `SQLIT
 | `vars` | 可选覆盖 UA 模板版本号（缺省则自动探测） |
 | `providerOverrides` | 按 Provider 的 `label` / `fingerprint` / `headers` / `modelMeta` / 按模型 `modelOverrides` 覆写（以 **dbId** 为键） |
 | `aliasCcs` | 是否注册 `/ccs` 别名（默认 `true`） |
+| `persistProviders` | 是否把进程内注册镜像进 Pi 的 `models.json`（默认 `true`）；`false` = Provider 定义仅留在本进程 |
 | `debug` | 输出调试信息 |
 
 数据库路径**不在**此文件配置——用环境变量 `CC_SWITCH_DB` 或默认 `~/.cc-switch/cc-switch.db`。
+
+### Provider 镜像（`models.json`）
+
+`pi.registerProvider()` 只影响调用它的那个进程。Subagent 子会话会自建 model registry——pi-subagents 的 detached runner 不会继承父进程的——所以“只活在父会话内”的 `provider/model` 在子进程里解析失败，子代理在发出第一个请求前就挂掉。
+
+因此 `persistProviders: true`（默认）时，pi-switch 会把每次注册镜像到 Pi 的跨进程 Provider 文件：
+
+```text
+~/.pi/agent/models.json                           # providers.<pi-name>：baseUrl/apiKey/api/headers/models
+~/.pi/agent/pi-switch-persisted-providers.json    # pi-switch 拥有哪些条目
+```
+
+两个路径在宿主搬走 agent 目录时会跟随 `PI_CODING_AGENT_DIR`（以及 `~`）。为与用户和其他工具共用这个文件，规则如下：
+
+- 只动 `providers.<name>`；其余键与 Provider 原样保留。
+- 只有 pi-switch 自己写过的条目（在 sidecar 里按内容摘要登记）会被改写或删除；同名但内容是别人的条目只上报、不改。
+- 写入是原子 + compare-and-swap，外部并发编辑会中止而不是被覆盖。
+- 切换 Provider 会删掉上一条；探针 / 修复目标（`runtime-only` 激活）不会镜像。
+- `models.json` 不是合法 JSON 时只告警、不动它，不会“重建”成新文件。
+- `persistProviders: false` 可让 Provider 定义与 API Key 完全不落到 `models.json`；代价是 Subagent 只能用 Pi 自己就能解析的模型。
+
+**卸载时**：先把 `persistProviders` 设为 `false` 并重启 Pi，再切到一个非 cc-switch 模型让镜像被剪枝；或对照 sidecar 里登记的条目手动从 `models.json` 删掉。sidecar 本身不含密钥。
 
 ### 参数覆写（`providerOverrides`）
 
@@ -496,13 +551,14 @@ bun run prepublishOnly
 bun run smoke:tui
 ```
 
-该脚本在临时 HOME + 假 OpenAI relay 下，通过 Pi RPC 子进程驱动交互式斜杠命令，对**状态结果**（而非视觉渲染）断言。真实 `settings.json`、`pi-switch.json`、cc-switch DB 及 SQLite 侧文件均先做快照，并在流程失败时也校验未变。覆盖五条主流程：
+该脚本在临时 HOME + 假 OpenAI relay 下，通过 Pi RPC 子进程驱动交互式斜杠命令，对**状态结果**（而非视觉渲染）断言。真实 `settings.json`、`pi-switch.json`、`models.json`、pi-switch 归属记录、cc-switch DB 及 SQLite 侧文件均先做快照，并在流程失败时也校验未变。覆盖六条主流程：
 
 - `/ps-override` — provider 级 `modelMeta` 写入往返。
-- `/ps-config` — 三级选择、provider 注册、selection 落盘。
+- `/ps-config` — 三级选择、provider 注册、selection 落盘，以及 `models.json` 镜像（条目 + 归属记录）。
 - `/ps-info` — 有效配置摘要。
 - `/ps-doctor` — 诊断（离线时 models.dev / 路由项降级为 `warn`，不 fail）。
 - `/ps` — 基于 pin/recent 的快速切换。
+- `/ps-subagents` — 目标列表 → 取值列表 → 手输 model id，断言 `subagents.defaultModel` 写入 `settings.json`。
 
 使用 `--flow=<名称>` 单跑一条流程，或 `KEEP_SMOKE_TEMP=1` 保留临时 HOME 供排查。
 
@@ -519,6 +575,23 @@ bun run smoke:probe-repair
 3. **`gemini-tool-compat`** — 设置 `geminiToolCompat=true`；relay 校验 Gemini payload（`toolConfig.functionCallingConfig.mode=AUTO`、`parameters` 替代 `parametersJsonSchema`）。
 
 每条场景：在内存候选上连续验证两次、拒绝修复后的 Session Model 切换、断言真实 Pi 设置/配置与 cc-switch DB 状态未变、成功后删除全部临时状态。使用 `--recipe=<id>` 单跑一条场景，或 `--keep` / `KEEP_SMOKE_TEMP=1` 保留临时文件。
+
+### 端到端：detached 子代理能解析镜像后的 Provider
+
+```bash
+bun run smoke:subagent-mirror
+```
+
+需要 `pi`、`sqlite3`、`node`，以及装在 `~/.pi/agent/npm/node_modules/pi-subagents` 的 pi-subagents。这是唯一直接撞“镜像到底为了什么”的检查——真实的 **detached** 子代理进程去解析 cc-switch Provider：
+
+1. `/ps-config` 切到临时 DB 里的 Provider → 断言临时 HOME 的 `models.json` 里出现镜像条目（baseUrl、model）与归属 sidecar。
+2. `/run delegate[model=<provider>/<model>] … --bg` → detached runner 真的起来；pi-subagents 的 run status 记下解析出的 `provider/model`，子代请求打到假 relay，输出就是 relay 的文本。
+3. **负向对照**：删掉镜像条目后重发同一条命令 → 失败且**从未**碰到 relay（即静默死亡签名：workflow run 卡在 `running`、没有子步骤、没有解析出模型）。
+4. **恢复**：再切一次重建镜像，同一条命令重新成功。
+
+子代理侧关闭了 ambient 扩展（`subagents.defaultExtensions: []`），所以只有 `models.json` 能提供这个 Provider——不可能被父进程 registry “帮忙过关”。真实 `settings.json`、`pi-switch.json`、`models.json` 与 sidecar 均校验未变；真实 cc-switch DB 不在此列：CC Switch 桌面端会并发写它。
+
+> 这里的 Pi 子进程走 **Node** 启动：Bun 1.3.11 在 pi-subagents 的 detached runner 里会 panic（`cannot resolve DirInfo for non-absolute path`），把 Pi 一起弄挂。其余冒烟在 `bun run` 下跑没问题。
 
 ### 发布与 GitHub 自动发包
 

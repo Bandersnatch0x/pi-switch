@@ -1,5 +1,7 @@
 # Session Model Strategy 配置
 
+> 本文只覆盖**子代理继承哪个模型**（轴 1）。子代理实际跑什么模型由更靠前的层决定：`subagents.agentOverrides.<agent>.model` → agent frontmatter `model` → `subagents.defaultModel` → 本文的策略解析结果。前两层用 picker 键 `s` 或 `/ps-subagents` 设置（见 [README：Subagent 模型](../README.md#subagent-models)）；子进程能否解析该 provider 则由 `persistProviders` 镜像决定(派生镜像的边界见 SPEC §4.4)。
+
 ## 概述
 
 `sessionModelStrategy` 控制 Pi 在 resume/fork/reload 时如何选择模型：使用 ps-config 保存的选择，还是会话历史中的模型。
@@ -163,6 +165,11 @@ ps-config: xkool/gpt-5
 - Pi 原生切换通过 `model_select` 事件同步；`set`/`cycle` 会写入 selection，`restore` 不会覆盖 selection
 - 下次 resume 时，策略决定是否使用新的 selection
 
+### 与 Subagent 模型层（`subagents.*`）的关系
+- 两者不同层且可共存：本文的策略决定子代理**继承**哪个模型（父会话 or ps-config 选择），`subagents.agentOverrides.<agent>.model` / `subagents.defaultModel` 则**直接覆盖**某个 agent 的模型，优先级高于继承
+- 因此“子代理没按 `sessionModelStrategy` 走”往往不是策略失效，而是被 `subagents.*` 或 agent frontmatter 的 `model:` 盖过了
+- `subagents.*` 写在宿主 `settings.json`，由 pi-subagents 在每次启动子代理时读取；修改后**不必重启 Pi**，下一个子代理即生效
+
 ---
 
 ## 版本历史
@@ -172,6 +179,7 @@ ps-config: xkool/gpt-5
   - 兼容模式：`session-first`（旧行为）
   
 - **v0.3.3 及更早**: 固定使用 `session-first` 逻辑
+- **2026-09-25**: 补注与子代理模型层（`subagents.*`）、Provider 镜像（`persistProviders`）的分层关系与排查入口
 
 ---
 
@@ -203,6 +211,16 @@ ps-config: xkool/gpt-5
 
 重启 Pi 后生效。
 
+若策略已正确但仍不对，按优先级往上查：先看 `settings.json` 的 `subagents.agentOverrides.<agent>.model` 与 `subagents.defaultModel`，再看该 agent 定义文件的 frontmatter `model:`。
+
+---
+
+### 问题：Subagent 报 `Model "provider/model" not found`（或后台子代理无日志即失败）
+
+**原因**：cc-switch Provider 默认只注册在**主会话进程**的内存 registry 里，子代理进程解析不到。
+
+**解决方案**：保持 `pi-switch.json` 的 `persistProviders` 默认开启（把注册镜像进 `~/.pi/agent/models.json`），并在主会话重新切一次该 Provider；或给子代理指定内置目录里的模型（如 `radius/…`）。详见 [修复文档的排查一节](./fix-subagent-model-selection.md#故障排查)。
+
 ---
 
 ## 配置示例
@@ -212,6 +230,7 @@ ps-config: xkool/gpt-5
 ```json
 {
   "sessionModelStrategy": "selection-first",
+  "persistProviders": true,
   "tabs": ["claude", "codex", "gemini"],
   "providerOverrides": {
     "xkool-id": {
