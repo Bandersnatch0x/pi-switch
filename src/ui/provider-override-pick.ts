@@ -94,7 +94,7 @@ async function pickOverrideProviderCustom(
         lines.push(isSel ? `> ${body}` : `  ${body}`);
       }
       lines.push("");
-      lines.push(overridePickerFooter(theme, labels.length, idx));
+      lines.push(truncateToWidth(overridePickerFooter(theme, labels.length, idx), width, "…", false));
       return lines;
     }
 
