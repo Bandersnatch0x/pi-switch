@@ -18,6 +18,7 @@ import { quickSwitchPick } from "../src/ui/quick-switch-pick.ts";
 import { runModelMetaDialog } from "../src/ui/model-meta-dialog.ts";
 import { runModelMetaForm } from "../src/ui/model-meta-form.ts";
 import { pickOverrideProvider } from "../src/ui/provider-override-pick.ts";
+import { runSubagentModelFlow } from "../src/ui/subagent-model-pick.ts";
 import type { ModelMetaScope, ModelMetaDialogInput, ModelMetaDialogResult } from "../src/ui/model-meta-dialog.ts";
 import { summarizeModelMeta } from "../src/model-meta.ts";
 import { formatDoctorReport, runDoctor } from "../src/doctor.ts";
@@ -313,6 +314,58 @@ async function openProviderOverride(
   );
 }
 
+/**
+ * Subagent model settings (picker key `s`, or `/ps-subagents`).
+ *
+ * pi-subagents runs each child on `agentOverrides.<agent>.model` → frontmatter
+ * `model` → `defaultModel` → parent session model. This flow writes the two
+ * layers pi-switch owns, so a subagent can run a different model than the
+ * session (and, with `persistProviders`, a cc-switch Provider the child
+ * process can actually resolve).
+ */
+export async function runSubagentModelsCommand(
+  rt: Runtime,
+  ctx: PiSwitchCtx,
+  seed?: { provider: CcProvider; modelId?: string },
+): Promise<void> {
+  await runSubagentModelFlow(ctx, {
+    rows: () => rt.subagentRows(),
+    save: (target, model) => rt.saveSubagentModel(target, model),
+    ...(seed ? { seed } : {}),
+    async pickModel() {
+      rt.reloadConfig();
+      const { providers, error } = rt.refreshSnapshot();
+      if (error) ctx.ui?.notify?.(error, "warning");
+      const switchable = providers.filter(isSwitchable);
+      if (!switchable.length) {
+        ctx.ui?.notify?.(t("noSwitchableProviders"), "warning");
+        return undefined;
+      }
+      const selected = rt.state.readSelection();
+      const picked = await threeLevelPick(ctx, {
+        providers: switchable,
+        readOnly: true,
+        preferredTab: selected?.tab ?? selected?.appType,
+        lastDbId: selected?.dbId,
+        lastModel: selected?.model,
+        activePiName: activeProviderName(ctx),
+        tabOrder: rt.config.tabs,
+        pins: rt.config.pins,
+        recent: rt.config.recent,
+        remoteCache: new Map<string, string[]>(),
+        fetchRemote: async (provider) => {
+          const ua = rt.overridesFor(provider)?.headers?.["User-Agent"];
+          const result = await fetchRemoteModels(provider, { userAgent: ua });
+          if (result.error) throw new Error(result.error);
+          return result.models;
+        },
+      });
+      if (picked.kind !== "ok") return undefined;
+      return { provider: picked.provider, modelId: picked.modelId };
+    },
+  });
+}
+
 export async function runOverrideCommand(
   rt: Runtime,
   lifecycle: SwitchLifecycle,
@@ -520,6 +573,19 @@ export async function runCommand(
       };
       continue;
     }
+    // Subagent path: picker already closed; set subagent models, then resume.
+    if (picked.kind === "subagents") {
+      await runSubagentModelsCommand(rt, ctx, {
+        provider: picked.provider,
+        ...(picked.modelId ? { modelId: picked.modelId } : {}),
+      });
+      resume = {
+        appType: picked.provider.appType,
+        dbId: picked.provider.id,
+        model: picked.modelId,
+      };
+      continue;
+    }
     if (picked.kind !== "ok") return;
     const { provider, modelId } = picked;
 
@@ -698,6 +764,15 @@ export function registerCommands(
     description: t("cmdInfoDescription"),
     handler: async (_args, ctx) => {
       runEffectiveConfigCommand(rt, ctx);
+    },
+  });
+
+  // Non-TUI hosts cannot press the picker's `s` key, so the same flow is
+  // reachable as a command.
+  pi.registerCommand("ps-subagents", {
+    description: t("cmdSubagentsDescription"),
+    handler: async (_args, ctx) => {
+      await runSubagentModelsCommand(rt, ctx);
     },
   });
 }

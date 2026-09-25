@@ -44,6 +44,12 @@ export type ThreeLevelResult =
    * dialog can preselect model scope.
    */
   | { kind: "override"; provider: CcProvider; modelId?: string }
+  /**
+   * Subagent model settings (key `s`). Same H1 rule as `o`: the picker closes
+   * and the caller opens the subagent target list. The focused provider/model,
+   * when present, becomes the one-keystroke seed for a subagent override.
+   */
+  | { kind: "subagents"; provider: CcProvider; modelId?: string }
   | { kind: "cancel" };
 
 export interface ThreeLevelPickOpts {
@@ -238,6 +244,10 @@ export function formatFooterHints(
   // o closes custom TUI then opens override dialog outside (no nested UI).
   if (!opts?.readOnly && revealed > 0) {
     parts.push(formatKeyHint(theme, "o", t("override")));
+  }
+  // s assigns the focused provider/model to a subagent (same H1 rule as `o`).
+  if (!opts?.readOnly && revealed > 0) {
+    parts.push(formatKeyHint(theme, "s", t("subagent")));
   }
   // p toggles pin for current provider+model without closing the picker.
   if (!opts?.readOnly && revealed >= 2) {
@@ -1092,6 +1102,23 @@ async function threeLevelCustom(
         const mid = revealed >= 2 ? models[modelIdx] : undefined;
         const modelId = mid && mid !== MANUAL && mid !== FETCH ? mid : undefined;
         finish({ kind: "override", provider, modelId });
+        return;
+      }
+
+      // Subagent model settings: same close-then-open-outside rule as `o`.
+      if (!opts.readOnly && (data === "s" || data === "S")) {
+        if (revealed < 1) {
+          ctx.ui.notify(t("subagentNeedName"), "warning");
+          return;
+        }
+        const { provider, models } = current();
+        if (!provider || !isSwitchable(provider)) {
+          ctx.ui.notify(t("nameNotSwitchable"), "warning");
+          return;
+        }
+        const mid = revealed >= 2 ? models[modelIdx] : undefined;
+        const modelId = mid && mid !== MANUAL && mid !== FETCH ? mid : undefined;
+        finish({ kind: "subagents", provider, modelId });
         return;
       }
 

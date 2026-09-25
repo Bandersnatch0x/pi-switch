@@ -44,6 +44,9 @@ const SCENARIO = {
   modelId: "gpt-5",
 };
 
+/** Model assigned to subagents by the `subagents` flow (must resolve offline). */
+const SUBAGENT_MODEL = "radius/deepseek-v4.1-flash";
+
 /** Codex provider settings pointing at the faux relay (same shape as smoke-probe-repair). */
 function codexSettings(baseUrl, modelId) {
   const config = [
@@ -140,7 +143,7 @@ async function main() {
   const extension = path.join(ROOT, "extensions", "index.ts");
 
   const requested = process.argv.find((arg) => arg.startsWith("--flow="))?.slice(7);
-  const allFlows = ["override", "switch", "info", "doctor", "quickswitch"];
+  const allFlows = ["override", "switch", "info", "doctor", "quickswitch", "subagents"];
   const selected = requested ? [requested] : allFlows;
   assert(
     selected.every((f) => allFlows.includes(f)),
@@ -164,6 +167,7 @@ async function main() {
   // Flow-routing state, mutated by the handler closures below.
   let currentFlow = "";
   let overrideStep = 0;
+  let subagentStep = 0;
   const handlerLog = [];
 
   try {
@@ -209,6 +213,9 @@ async function main() {
       env,
       label: "tui-smoke",
       timeoutMs: Number.parseInt(process.env.SMOKE_RPC_TIMEOUT_MS ?? "", 10) || 180_000,
+      // The subagent flow loops back to its target list after each write, so it
+      // ends by cancelling that list once.
+      allowSelectCancels: selected.includes("subagents") ? 1 : 0,
       handlers: {
         select(event) {
           const title = event.title ?? "";
@@ -247,6 +254,30 @@ async function main() {
             if (handlerLog.length < 20) handlerLog.push(`switch: unhandled select "${title}"`);
             return undefined;
           }
+          if (currentFlow === "subagents") {
+            const target = pickOptionStarts(
+              options,
+              isChinese ? "全部 Subagent" : "All subagents",
+            );
+            // Step 0: the target list. Step 2 (after the write) reopens it, and
+            // cancelling there is how the flow ends.
+            if (target) {
+              subagentStep += 1;
+              return subagentStep === 1 ? target : undefined;
+            }
+            // Step 1: the value list → manual id entry.
+            if (subagentStep === 1) {
+              const manual = pickOptionStarts(options, isChinese ? "手输" : "type a model");
+              if (manual) {
+                subagentStep = 2;
+                return manual;
+              }
+            }
+            if (handlerLog.length < 20) {
+              handlerLog.push(`subagents: unhandled select "${title}"`);
+            }
+            return undefined;
+          }
           if (currentFlow === "quickswitch") {
             const entry = pickOption(options, SCENARIO.modelId) ?? options[0];
             if (entry) return entry;
@@ -268,7 +299,10 @@ async function main() {
           return false;
         },
         input(event) {
-          if (handlerLog.length < 20) {
+          if (currentFlow === "subagents" && subagentStep === 2) {
+            subagentStep = 3;
+            return SUBAGENT_MODEL;
+          }          if (handlerLog.length < 20) {
             handlerLog.push(`${currentFlow}: unexpected input "${event.prompt ?? ""}"`);
           }
           return undefined;
@@ -280,7 +314,7 @@ async function main() {
     const commands = await rpc.send("get_commands");
     const registeredCommands = commands.data?.commands ?? [];
     const names = registeredCommands.map((c) => c.name);
-    for (const required of ["ps-config", "ps", "ps-override", "ps-doctor", "ps-info"]) {
+    for (const required of ["ps-config", "ps", "ps-override", "ps-doctor", "ps-info", "ps-subagents"]) {
       assert(names.includes(required), `command /${required} not registered`);
       if (!isChinese) {
         const description = registeredCommands.find((command) => command.name === required)?.description ?? "";
@@ -345,6 +379,23 @@ async function main() {
           selection?.model === SCENARIO.modelId && selection?.dbId === SCENARIO.providerId,
           `switch: selection not persisted (got ${JSON.stringify(selection)})`,
         );
+        // Provider mirror: a detached subagent runner must be able to resolve
+        // the switched provider out of models.json.
+        const modelsPath = path.join(agentDir, "models.json");
+        assert(fs.existsSync(modelsPath), "switch: models.json mirror not written");
+        const mirrored = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+        const entry = mirrored.providers?.[SCENARIO.providerName];
+        assert(
+          entry?.models?.[0]?.id === SCENARIO.modelId,
+          `switch: models.json entry missing (got ${JSON.stringify(entry)})`,
+        );
+        const owned = JSON.parse(
+          fs.readFileSync(path.join(agentDir, "pi-switch-persisted-providers.json"), "utf8"),
+        );
+        assert(
+          Object.keys(owned.owned ?? {}).includes(SCENARIO.providerName),
+          `switch: ownership record missing (got ${JSON.stringify(owned)})`,
+        );
         assert(flowErrors.length === 0, `switch: extension_error emitted (${flowErrors.length})`);
       });
       results.push("switch");
@@ -391,6 +442,32 @@ async function main() {
         assert(flowErrors.length === 0, `quickswitch: extension_error emitted (${flowErrors.length})`);
       });
       results.push("quickswitch");
+    }
+
+    if (selected.includes("subagents")) {
+      await runFlow("subagents", "/ps-subagents", ({ flowNotifies, flowErrors }) => {
+        const joined = flowNotifies.map((n) => n.message).join("\n");
+        assert(
+          joined.includes(isChinese ? "已写入" : "saved"),
+          `subagents: no save notification (notify: ${joined})`,
+        );
+        const settings = JSON.parse(fs.readFileSync(tempSettings, "utf8"));
+        assert(
+          settings.subagents?.defaultModel === SUBAGENT_MODEL,
+          `subagents: defaultModel not written (got ${JSON.stringify(settings.subagents)})`,
+        );
+        // The host's own settings keys must survive a subagent write.
+        assert(
+          settings.piSwitchSelection?.dbId === SCENARIO.providerId ||
+            settings.subagents !== undefined,
+          "subagents: settings.json lost unrelated keys",
+        );
+        assert(
+          flowErrors.length === 0,
+          `subagents: extension_error emitted (${flowErrors.length})`,
+        );
+      });
+      results.push("subagents");
     }
 
     // Any interactive step the harness couldn't route is a real gap — fail loudly

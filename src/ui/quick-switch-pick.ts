@@ -127,7 +127,7 @@ async function quickSwitchCustom(
         lines.push(isSel ? `> ${body}` : `  ${body}`);
       }
       lines.push("");
-      lines.push(quickPickerFooter(theme));
+      lines.push(truncateToWidth(quickPickerFooter(theme), width, "…", false));
       return lines;
     }
 

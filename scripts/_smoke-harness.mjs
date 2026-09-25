@@ -29,6 +29,10 @@ export function smokeStatePaths(home, dbPath) {
   return [
     path.join(agentDir, "settings.json"),
     path.join(agentDir, "pi-switch.json"),
+    // Cross-process provider mirror (persistProviders) + its ownership record:
+    // a smoke run must never rewrite the real host's files.
+    path.join(agentDir, "models.json"),
+    path.join(agentDir, "pi-switch-persisted-providers.json"),
     dbPath,
     `${dbPath}-wal`,
     `${dbPath}-shm`,
@@ -142,14 +146,36 @@ export function buildTempEnv(
 export function createRpcClient({
   piCli,
   extension,
+  /**
+   * Extra `--extension` paths. Needed when a flow spawns real subagents: load
+   * pi-subagents' inner extension module (`src/extension/index.js`) rather than
+   * its `index.js` wrapper, whose top-level await does not survive Pi's
+   * extension loader ("Cannot access 'registerExtension' before initialization").
+   */
+  extraExtensions = [],
+  /**
+   * Runtime that executes `piCli`. Defaults to the current process (Bun when
+   * run through `bun run`). Pass `node` for flows that spawn detached runner
+   * processes: Bun 1.3.11 panics ("cannot resolve DirInfo for non-absolute
+   * path") in pi-subagents' detached runner, which kills the Pi subprocess.
+   */
+  piExecPath = process.execPath,
   env,
   label,
   handlers = {},
   timeoutMs = 180_000,
   cwd,
+  /**
+   * How many unanswered `select` prompts a flow may legitimately end with.
+   * An interactive flow that loops (the subagent picker returns to its target
+   * list after each write) ends when the user presses Esc, which an RPC host
+   * can only express by leaving the select unanswered. Anything beyond this
+   * declared budget is still reported as an unexpected UI request.
+   */
+  allowSelectCancels = 0,
 }) {
   const child = spawn(
-    process.execPath,
+    piExecPath,
     [
       piCli,
       "--mode",
@@ -162,6 +188,7 @@ export function createRpcClient({
       "--no-context-files",
       "--extension",
       extension,
+      ...extraExtensions.flatMap((extra) => ["--extension", extra]),
     ],
     { cwd, env, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -279,7 +306,12 @@ export function createRpcClient({
           return;
         }
         if (value === undefined) {
-          recordUnexpected({ kind: "select-unhandled", title: event.title, options: event.options });
+          if (allowSelectCancels > 0) {
+            allowSelectCancels -= 1;
+            console.log(`[${label}] expected select cancel: ${event.title ?? ""}`);
+          } else {
+            recordUnexpected({ kind: "select-unhandled", title: event.title, options: event.options });
+          }
           respond(event, { cancelled: true });
           return;
         }

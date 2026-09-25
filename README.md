@@ -11,7 +11,7 @@ English | [中文](./README-zh.md)
 >
 > [CC Switch v3.20.0](https://github.com/farion1231/cc-switch/releases/tag/v3.20.0) added first-class Pi support (ninth managed app): providers, prompts, skills, session browsing, and usage. Use CC Switch to manage Pi.
 >
-> The last published package is [`pi-ccs@0.3.5`](https://www.npmjs.com/package/pi-ccs). Existing installs keep working. This repo will not receive new features, fixes, or support.
+> The last published package is [`pi-ccs@0.3.6`](https://www.npmjs.com/package/pi-ccs) — a **final exception** carved out before the sunset: it makes cc-switch Providers resolvable in subagent child processes and adds the subagent model picker (see the Provider mirror section below). No further features, fixes, or support are planned after it. Existing installs keep working.
 
 ## Successor
 
@@ -49,6 +49,8 @@ The screenshots below are sample illustrations of the interaction flow. Actual p
 - Parse and map common API protocols: Anthropic Messages, OpenAI Responses, OpenAI Chat Completions, and Google Generative AI.
 - Inject CLI-like fingerprints by default (Codex UA + `originator` + `X-Codex-Window-ID`, Claude Code `claude-cli/... (external, cli)` + `anthropic-version`/`anthropic-beta`, GeminiCLI UA + `x-goog-api-client`).
 - Override model parameters via presets or a native dialog (`/ps-override` or picker key `o`) — e.g. **中转兼容** sets `reasoning=false` when a relay rejects thinking.
+- Give subagents a different model than the session: picker key **`s`** or `/ps-subagents` writes `subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`, discovering agent definitions from the project, user, and installed package roots.
+- Mirror every provider registration into Pi's `models.json` so a cc-switch Provider stays resolvable in processes that never loaded this extension — including pi-subagents' detached subagent runner.
 - For an exact model whose provider profile advertises `ultra`, `/ps-override` offers an explicit lossy `Pi max -> provider ultra` opt-in; it is never inferred globally.
 - Run structured health checks with `/ps-doctor` (PASS/WARN/FAIL + fix hints).
 - Run a read-only compatibility probe with `/ps-probe` (basic / reasoning / tool contracts, structured evidence, JSON in headless/CI).
@@ -204,6 +206,36 @@ To edit model parameter overrides (for example disable `reasoning` for a Claude-
 
 In the provider picker, after the **Name** column is revealed, press **`o`** to open the same override dialog for the focused provider. The footer shows `o override`.
 
+Press **`s`** in the same picker to assign a model to subagents (see below); the footer shows `s subagent`.
+
+### Subagent models
+
+pi-subagents resolves each child's model in this order:
+
+```text
+per-run `model`  →  subagents.agentOverrides.<agent>.model  →
+agent frontmatter `model`  →  subagents.defaultModel  →  parent session model
+```
+
+pi-switch owns the two settings layers, so a review or research subagent can run a different model than the session you are typing in.
+
+```text
+/ps-subagents
+```
+
+Or press **`s`** in the provider picker once a provider is focused — the focused provider/model becomes a one-keystroke choice for the subagent you pick next.
+
+The flow lists the global default row plus every discovered agent (`<project>/.pi/agents`, `~/.pi/agent/agents`, and the installed `pi-subagents` package's `agents/`; first root wins per name). Each row shows which layer currently supplies the model — `override` / `frontmatter` / `default` / `inherit session model` — and the value list offers:
+
+- use the focused provider/model (only when `s` came from the picker),
+- clear the layer so it falls back to the next one,
+- pick a cc-switch Provider/Model (read-only, same picker as `/ps-probe`),
+- type any model id, including one this DB does not list.
+
+Writes go into the host's `settings.json` atomically (`subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`), preserving every other key; clearing a value prunes the empty scaffolding instead of leaving `{}` behind.
+
+> A subagent runs in its own process, so it can only resolve a provider that exists outside the parent session. pi-switch mirrors its registrations into `models.json` for exactly that reason — see [Provider mirror](#provider-mirror-modelsjson). Providers that only exist in Pi's built-in catalog (for example `radius/…`) work without the mirror.
+
 ### Compatibility probe & repair
 
 Switching a provider/model means “the model is listed” ≠ “requests actually work”. Verify and repair out-of-band:
@@ -315,9 +347,32 @@ Example:
 | `vars` | Optional overrides for UA template versions (otherwise auto-detected) |
 | `providerOverrides` | Per-provider `label`, `fingerprint`, `headers`, `modelMeta`, and per-model `modelOverrides` (keyed by **dbId**) |
 | `aliasCcs` | Register `/ccs` alias (default `true`) |
+| `persistProviders` | Mirror in-process registrations into Pi's `models.json` (default `true`). `false` keeps provider definitions process-local |
 | `debug` | Enables debug output |
 
 Database path is **not** in this file — use env `CC_SWITCH_DB` or the default `~/.cc-switch/cc-switch.db`.
+
+### Provider mirror (`models.json`)
+
+`pi.registerProvider()` only affects the process that ran it. A subagent child builds its own model registry — pi-subagents' detached runner never inherits the parent's — so a `provider/model` that exists only inside the parent session fails to resolve there and the child dies before its first request.
+
+With `persistProviders: true` (default) pi-switch therefore mirrors each registration into Pi's cross-process provider file:
+
+```text
+~/.pi/agent/models.json                           # providers.<pi-name>: baseUrl/apiKey/api/headers/models
+~/.pi/agent/pi-switch-persisted-providers.json    # which entries pi-switch owns
+```
+
+Both follow `PI_CODING_AGENT_DIR` (and `~`) when the host moved its agent directory. Rules that keep the file safe to share with the user and other tools:
+
+- Only `providers.<name>` is touched; every other key and provider is preserved.
+- Only entries pi-switch wrote (recorded in the sidecar by content digest) are rewritten or pruned. A same-named entry with foreign content is reported and left untouched.
+- Writes are atomic with compare-and-swap, so a concurrent external edit aborts instead of being clobbered.
+- Switching providers prunes the previous entry; probe/repair targets (`runtime-only` activations) are never mirrored.
+- A `models.json` that is not valid JSON is left alone with a warning rather than rebuilt from scratch.
+- `persistProviders: false` keeps provider definitions and API keys out of `models.json`; subagents then need a model Pi can resolve without this extension.
+
+**Uninstalling**: set `persistProviders: false`, restart Pi, then switch to a non-cc-switch model so the mirror is pruned — or delete the `pi-switch-persisted-providers.json` sidecar's listed entries from `models.json` by hand. The sidecar never contains keys itself.
 
 ### Parameter overrides (`providerOverrides`)
 
@@ -544,13 +599,14 @@ Run the isolated TUI smoke (requires `pi` and `sqlite3` on `PATH`):
 bun run smoke:tui
 ```
 
-This drives the interactive slash commands through a Pi RPC subprocess under a temporary HOME with a faux OpenAI relay, asserting on state outcomes rather than visual rendering. Real `settings.json`, `pi-switch.json`, the cc-switch DB, and its SQLite sidecars are snapshotted and verified unchanged even when a flow fails. It covers the five main flows:
+This drives the interactive slash commands through a Pi RPC subprocess under a temporary HOME with a faux OpenAI relay, asserting on state outcomes rather than visual rendering. Real `settings.json`, `pi-switch.json`, `models.json`, the pi-switch ownership sidecar, the cc-switch DB, and its SQLite sidecars are snapshotted and verified unchanged even when a flow fails. It covers the six main flows:
 
 - `/ps-override` — provider-scope `modelMeta` write round-trip.
-- `/ps-config` — 3-level pick, provider registration, and selection persistence.
+- `/ps-config` — 3-level pick, provider registration, selection persistence, and the `models.json` provider mirror (entry + ownership record).
 - `/ps-info` — effective-config summary.
 - `/ps-doctor` — diagnostics (offline models.dev/routing items degrade to `warn`, not fail).
 - `/ps` — quick switch off a pinned/recent entry.
+- `/ps-subagents` — target list → value list → manual id entry, asserting `subagents.defaultModel` lands in `settings.json`.
 
 Use `--flow=<name>` to run one flow, or `KEEP_SMOKE_TEMP=1` to retain the temp HOME for inspection.
 
@@ -567,6 +623,23 @@ This starts a local faux OpenAI relay and a Pi RPC subprocess under a temporary 
 3. **`gemini-tool-compat`** — Sets `geminiToolCompat=true`; the relay validates Gemini-style payload (`toolConfig.functionCallingConfig.mode=AUTO`, `parameters` instead of `parametersJsonSchema`).
 
 Each scenario: verifies the candidate twice, declines the post-repair Session Model switch, asserts real Pi settings/config and cc-switch DB state remain unchanged, and deletes temporary state after success. Use `--recipe=<id>` to run a single scenario, or `--keep` / `KEEP_SMOKE_TEMP=1` to retain temp files.
+
+### End-to-end: detached subagent resolves a mirrored provider
+
+```bash
+bun run smoke:subagent-mirror
+```
+
+Requires `pi`, `sqlite3`, `node`, and pi-subagents installed under `~/.pi/agent/npm/node_modules/pi-subagents`. It is the only check that exercises the real thing the mirror exists for — a **detached** subagent child process resolving a cc-switch Provider:
+
+1. `/ps-config` switches to the temp DB's provider → asserts the mirrored entry (base URL, model) and the ownership sidecar in the temp HOME's `models.json`.
+2. `/run delegate[model=<provider>/<model>] … --bg` → the detached runner starts; pi-subagents' run status records the resolved `provider/model`, the child's request reaches the faux relay, and the child output is the relay's text.
+3. **Negative control**: the mirror entry is deleted, the same run is dispatched again, and it fails without ever reaching the relay (the silent-death signature: workflow run stuck `running`, no child step, no resolved model).
+4. **Recovery**: switching again rebuilds the mirror and the same run succeeds.
+
+Ambient extensions are disabled for the children (`subagents.defaultExtensions: []`), so only `models.json` can supply the provider — the check cannot be satisfied by the parent process registry. Real `settings.json`, `pi-switch.json`, `models.json` and the sidecar are verified unchanged; the real cc-switch DB is excluded because the CC Switch desktop app writes it concurrently.
+
+> The Pi subprocess is spawned through Node here: Bun 1.3.11 panics (`cannot resolve DirInfo for non-absolute path`) inside pi-subagents' detached runner, which kills Pi. The other smokes run fine under `bun run`.
 
 ### Release and GitHub auto-publish
 

@@ -239,6 +239,27 @@ interface CcProvider {
 
 **迁移：** 若无 `piSwitchSelection` 且存在 `ccSwitchSelection`：按旧 `provider` 名称反查；**必须唯一命中** 才写入新 key；否则丢弃并 debug 日志。
 
+### 4.4 Provider 镜像 `models.json`（跨进程可用性）
+
+`pi.registerProvider()` 只改变**当前进程**的 ModelRuntime。Subagent 子会话自建 registry，pi-subagents 的 detached runner 不继承父 registry（`parentProviderRegistry` 仅前台 in-process 子代理传入），因此仅存在于父会话的 `provider/model` 在子进程解析失败 → 子代理在首个请求前死亡。
+
+`persistProviders`（默认 `true`）时，每次成功注册都镜像到 Pi 的跨进程 Provider 文件（路径跟随 `PI_CODING_AGENT_DIR` 与 `~`）：
+
+```text
+~/.pi/agent/models.json                           # providers.<piName> = baseUrl/apiKey/api/headers/models
+~/.pi/agent/pi-switch-persisted-providers.json    # 归属记录：piName → 写入内容的摘要
+```
+
+写入约定（`src/persistent-providers.ts`）：
+
+1. **只动 `providers.<name>`**，其余顶层键与外部 Provider 原样保留。
+2. 只改写/删除**归属记录里摘要匹配**的条目；内容不符则报 conflict 并保留外部内容。
+3. 原子写 + CAS（`json-file.ts`）；并发外部编辑中止本次写入。
+4. 切换成功后删除上一条目；`commit: "runtime-only"`（探针 / 修复目标）**不镜像**。
+5. `models.json` 非法 JSON / 根非对象 → 只告警，不改写。
+6. 条目按 `ModelDefinitionSchema` / `ProviderConfigSchema` 白名单投影（未知键丢弃），避免 Pi 因 schema 失败而丢弃整个文件的全部 Provider。
+7. 卸载路径：`persistProviders: false` + 重启后切换到非 cc-switch 模型完成剪枝；或按 sidecar 登记条目手动删除。sidecar 不含密钥。
+
 ---
 
 ## 5. 解析规范
@@ -362,6 +383,7 @@ v0.1 **不包含**：
 | `/ccs` | 可选 alias（`pi-switch.json.aliasCcs`，默认 true） |
 | `/ps-override` | 为 Provider 设置 modelMeta 覆写（TUI SettingsList 表单；非交互退到串接弹窗）；预设：中转兼容 / 完整推理；默认编辑当前选中模型，可在子菜单切 provider 级 / 其他模型 / glob；仅当 exact-model 的共享 profile 广告 `ultra` 时提供有损 `Pi max -> provider ultra` opt-in |
 | `/ps-doctor` | 结构化体检：PASS/WARN/FAIL + 修复建议 |
+| `/ps-subagents` | 为 Subagent 设置不同模型（`subagents.defaultModel` / `subagents.agentOverrides.<agent>.model`）；非 TUI 宿主的入口（TUI 内可用 picker 快捷键 `s`） |
 
 ### 8.2 渐进三级选择（类型 → 名称 → 模型）
 
@@ -378,7 +400,7 @@ v0.1 **不包含**：
 | **名称** | 显示名 · host；当前 `model.provider` **黄色高亮** |
 | **模型** | `configModels` + 远端缓存 + `✎ 手动输入` / `↻ 刷新模型` |
 
-快捷键：`↑↓` 导航 · `enter` 下一级/确认 · `←→` 列切换 · `/` **picker 内联搜索**（不弹嵌套 input；Enter 确认过滤，Esc 取消搜索） · `m` / 模型列「手动输入」**内联录入 model id**（Enter 切换，Esc 取消；禁止嵌套 `ui.input`） · `f` 刷新 · `p` pin · `o` 参数覆写（名称列起） · `esc` **返回上一展开层**（有搜索词时先清过滤；仅类型列且无过滤时退出命令）。
+快捷键：`↑↓` 导航 · `enter` 下一级/确认 · `←→` 列切换 · `/` **picker 内联搜索**（不弹嵌套 input；Enter 确认过滤，Esc 取消搜索） · `m` / 模型列「手动输入」**内联录入 model id**（Enter 切换，Esc 取消；禁止嵌套 `ui.input`） · `f` 刷新 · `p` pin · `o` 参数覆写（名称列起） · `s` Subagent 模型（名称列起） · `esc` **返回上一展开层**（有搜索词时先清过滤；仅类型列且无过滤时退出命令）。
 
 从 picker 按 `o` 打开参数覆写后（无论保存/取消）**回到 picker**，不结束 `/ps-config`。独立命令 `/ps-override` 结束后退出（无 picker 可回）。
 
@@ -456,6 +478,7 @@ session_start(startup | resume | fork | reload)
 {
   "tabs": ["claude", "codex", "gemini", "grokbuild", "opencode", "hermes"],
   "aliasCcs": true,
+  "persistProviders": true,
   "sqlitePath": null,
   "vars": {
     "codexVersion": "0.144.0",
@@ -542,6 +565,7 @@ session_start(startup | resume | fork | reload)
 ## 12. 安全
 
 - DB / settings 含密钥：**永不** log 完整 key（debug 最多末 4 位）
+- `persistProviders: true` 会把 provider apiKey 写入 `~/.pi/agent/models.json`（与用户自建 Provider 同文件、Pi 设计上就允许存 key）。不想落盘则设 `false`；代价是 Subagent 只能用 Pi 自己就能解析的模型
 - 不向第三方上传供应商列表
 - 不执行 usage_script（功能已取消）
 - README 标明依赖本机 cc-switch + 系统 sqlite3
@@ -557,6 +581,10 @@ session_start(startup | resume | fork | reload)
 | unit: tabs / labels / three-level | 空 tab、搜索过滤、列宽/快捷键 |
 | unit: headers | 白名单过滤、大小写合并、认证字段拒绝 |
 | unit: models-fetch candidates | 候选 URL 构建与 404/405 回退策略（可 mock） |
+| unit: persistent-providers | models.json 合并/剪枝/归属摘要/外部内容冲突/非法 JSON 不改写 |
+| unit: subagent-models | frontmatter 解析、agent 发现优先级、四层来源判定、settings 写入与空壳清理 |
+| unit: subagent-pick | 目标列表与取值列表（seed/清除/选择器/手输）、取消不写入 |
+| smoke: subagent-mirror | 真实 Pi + 真实 detached 子代理：镜像后子进程能解析 cc-switch Provider 并打到 relay；删掉镜像则静默失败（负向对照）；重建镜像后恢复 |
 | unit: piName / model trim | 稳定 id；仅 trim |
 | integration（可选） | 真实 DB 只读统计可切换比例 |
 
